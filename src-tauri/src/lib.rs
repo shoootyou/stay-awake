@@ -265,10 +265,6 @@ pub fn run() {
     // Initialize logging as early as possible.
     let _ = env_logger::try_init();
 
-    // On macOS, hide from Dock and remove default menu bar.
-    #[cfg(target_os = "macos")]
-    configure_macos_app();
-
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -516,10 +512,21 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, event| {
-            // Prevent the app from exiting when all windows are closed.
-            // This is essential for a tray-only app.
-            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
-                api.prevent_exit();
+            match &event {
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    // Only prevent exit when triggered by all windows closing (code = None).
+                    // Allow explicit app.exit() calls (code = Some) so Quit works.
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Ready => {
+                    // Set Accessory policy AFTER Tauri finishes setup,
+                    // otherwise Tauri overrides it during initialization.
+                    configure_macos_app();
+                }
+                _ => {}
             }
         });
 }
