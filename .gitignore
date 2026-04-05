@@ -27,3 +27,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Research artifacts (local only)
+.requests/
+.research/

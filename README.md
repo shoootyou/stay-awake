@@ -38,11 +38,13 @@ winget install Rodolfo.NonSleep
 
 ## Usage
 
-1. Launch Non-Sleep — it appears in your system tray
-2. Click the tray icon to open the settings window
-3. Toggle **Active** to start keeping your computer awake
-4. Adjust the interval and movement settings to your preference
-5. Close the settings window — Non-Sleep continues running in the tray
+1. Launch Non-Sleep — it appears in your system tray (macOS menu bar or Windows notification area)
+2. Click the tray icon to open the context menu
+3. Select **Toggle Active** to start keeping your computer awake
+4. Choose a **Mode** (Power Only is the default and needs no extra permissions)
+5. Open **Settings** to adjust the interval, autostart, and other preferences
+
+For a full walkthrough of every feature, see the [User Guide](docs/user-guide.md).
 
 ## Development
 
@@ -57,8 +59,8 @@ winget install Rodolfo.NonSleep
 ### Setup
 
 ```bash
-git clone https://github.com/rodolfo/non-sleep.git
-cd non-sleep
+git clone https://github.com/shoootyou/non-sleep-please.git
+cd non-sleep-please
 npm install
 ```
 
