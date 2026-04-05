@@ -6,7 +6,7 @@ Non-Sleep is a lightweight desktop utility that prevents your computer from goin
 
 ---
 
-## ✨ Features
+## Features
 
 - **Dual mechanism** — combines mouse jiggling with OS-level sleep prevention for maximum reliability
 - **Cross-platform** — native builds for macOS and Windows
@@ -16,7 +16,7 @@ Non-Sleep is a lightweight desktop utility that prevents your computer from goin
 - **Auto-start** — optionally launch at login
 - **Tiny footprint** — built with Rust and Tauri for minimal resource usage
 
-## 📦 Installation
+## Installation
 
 ### macOS
 
@@ -36,7 +36,7 @@ winget install Rodolfo.NonSleep
 
 **Direct download** — grab the `.exe` installer from the [latest release](../../releases/latest).
 
-## 🚀 Usage
+## Usage
 
 1. Launch Non-Sleep — it appears in your system tray
 2. Click the tray icon to open the settings window
@@ -44,7 +44,7 @@ winget install Rodolfo.NonSleep
 4. Adjust the interval and movement settings to your preference
 5. Close the settings window — Non-Sleep continues running in the tray
 
-## 🛠 Development
+## Development
 
 ### Prerequisites
 
@@ -78,7 +78,7 @@ cd src-tauri && cargo test
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 ```
 
-## 🗺 Roadmap
+## Roadmap
 
 - [ ] Homebrew cask distribution
 - [ ] winget package submission
@@ -87,6 +87,6 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings
 - [ ] Idle-time detection (auto-activate after N minutes of inactivity)
 - [ ] Localization (i18n)
 
-## 📄 License
+## License
 
 [MIT](LICENSE) © 2026 Rodolfo
