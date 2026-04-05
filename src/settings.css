@@ -277,3 +277,103 @@ button:active {
 .secondary:hover {
   background: var(--bg);
 }
+
+/* ── Group header ── */
+.group-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 10px 16px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Schedule section ── */
+.schedule-times {
+  display: flex;
+  gap: 12px;
+  flex-direction: row !important;
+}
+
+.time-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label-sm {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+input[type="time"] {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+input[type="time"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
+}
+
+.day-checkboxes {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.day-checkboxes label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.day-checkboxes input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── Profile section ── */
+.profile-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-row select {
+  flex: 1;
+}
+
+button.small {
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  cursor: pointer;
+}
+
+button.small.secondary {
+  background: var(--bg-group);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+button.small:hover {
+  opacity: 0.85;
+}

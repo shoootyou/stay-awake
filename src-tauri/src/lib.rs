@@ -7,10 +7,12 @@
 
 mod config;
 mod engine;
+mod i18n;
 mod platform;
 
-use config::{AppConfig, JiggleMode};
+use config::{AppConfig, JiggleMode, Profile};
 use engine::Engine;
+use i18n::Bundle as I18nBundle;
 use platform::PermissionChecker;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -114,6 +116,105 @@ fn close_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         win.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Return a translated string for the given message key.
+#[tauri::command]
+fn get_translation(
+    key: String,
+    bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
+) -> Result<String, String> {
+    let b = bundle
+        .lock()
+        .map_err(|e| format!("I18n lock poisoned: {}", e))?;
+    Ok(i18n::t(&b, &key))
+}
+
+/// Return all saved profiles.
+#[tauri::command]
+fn list_profiles(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Profile>, String> {
+    let cfg = config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    Ok(cfg.profiles.clone())
+}
+
+/// Save the current settings as a named profile.
+#[tauri::command]
+fn save_profile(
+    name: String,
+    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+) -> Result<(), String> {
+    let mut cfg = config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+
+    let profile = Profile {
+        name: name.clone(),
+        jiggle_mode: cfg.jiggle_mode.clone(),
+        interval_secs: cfg.interval_secs,
+        schedule_enabled: cfg.schedule_enabled,
+        schedule_start_hour: cfg.schedule_start_hour,
+        schedule_start_minute: cfg.schedule_start_minute,
+        schedule_end_hour: cfg.schedule_end_hour,
+        schedule_end_minute: cfg.schedule_end_minute,
+        schedule_days: cfg.schedule_days.clone(),
+    };
+
+    // Replace if a profile with the same name exists, otherwise append.
+    if let Some(existing) = cfg.profiles.iter_mut().find(|p| p.name == name) {
+        *existing = profile;
+    } else {
+        cfg.profiles.push(profile);
+    }
+    cfg.active_profile = name;
+    cfg.save()
+}
+
+/// Load a named profile into the current settings.
+#[tauri::command]
+fn load_profile(
+    name: String,
+    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+) -> Result<(), String> {
+    let mut cfg = config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+
+    let profile = cfg
+        .profiles
+        .iter()
+        .find(|p| p.name == name)
+        .cloned()
+        .ok_or_else(|| format!("Profile '{}' not found", name))?;
+
+    cfg.jiggle_mode = profile.jiggle_mode;
+    cfg.interval_secs = profile.interval_secs;
+    cfg.schedule_enabled = profile.schedule_enabled;
+    cfg.schedule_start_hour = profile.schedule_start_hour;
+    cfg.schedule_start_minute = profile.schedule_start_minute;
+    cfg.schedule_end_hour = profile.schedule_end_hour;
+    cfg.schedule_end_minute = profile.schedule_end_minute;
+    cfg.schedule_days = profile.schedule_days;
+    cfg.active_profile = name;
+    cfg.save()
+}
+
+/// Delete a named profile.
+#[tauri::command]
+fn delete_profile(
+    name: String,
+    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+) -> Result<(), String> {
+    let mut cfg = config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+
+    cfg.profiles.retain(|p| p.name != name);
+    if cfg.active_profile == name {
+        cfg.active_profile = String::from("Default");
+    }
+    cfg.save()
 }
 
 // ───────────────────────── Hotkey string parser ────────────────────────────
@@ -233,7 +334,7 @@ fn show_settings_window(app: &tauri::AppHandle) {
             WebviewUrl::App("settings.html".into()),
         )
         .title("Non-Sleep Settings")
-        .inner_size(480.0, 580.0)
+        .inner_size(480.0, 720.0)
         .resizable(false)
         .center()
         .build();
@@ -276,6 +377,11 @@ pub fn run() {
             get_autostart_enabled,
             set_autostart_enabled,
             close_settings_window,
+            get_translation,
+            list_profiles,
+            save_profile,
+            load_profile,
+            delete_profile,
         ])
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -287,6 +393,10 @@ pub fn run() {
                 cfg
             });
             let shared_config: Arc<Mutex<AppConfig>> = Arc::new(Mutex::new(loaded_config.clone()));
+
+            // ── i18n bundle ────────────────────────────────────────────
+            let bundle = i18n::create_bundle(&loaded_config.language);
+            let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
 
             // ── Platform implementations ───────────────────────────────
             let mouse_driver = platform::create_mouse_driver();
@@ -312,6 +422,7 @@ pub fn run() {
             app.manage(Arc::clone(&shared_config));
             app.manage(Arc::clone(&shared_engine));
             app.manage(Arc::clone(&perm_checker));
+            app.manage(Arc::clone(&shared_bundle));
 
             // ── System tray ────────────────────────────────────────────
             #[cfg(desktop)]
@@ -321,36 +432,39 @@ pub fn run() {
                 };
                 use tauri::tray::TrayIconBuilder;
 
+                // Resolve tray labels from the i18n bundle.
+                let tray_bundle = i18n::create_bundle(&loaded_config.language);
+                let tr = |id: &str| i18n::t(&tray_bundle, id);
+
                 let toggle_item = CheckMenuItem::with_id(
                     app,
                     "toggle_active",
-                    "Toggle Active",
+                    tr("tray-toggle-active"),
                     true,
                     false,
                     None::<&str>,
                 )?;
 
                 let mode_power =
-                    MenuItem::with_id(app, "mode_power", "Power Only", true, None::<&str>)?;
+                    MenuItem::with_id(app, "mode_power", tr("tray-mode-power"), true, None::<&str>)?;
                 let mode_subtle =
-                    MenuItem::with_id(app, "mode_subtle", "Mouse Subtle", true, None::<&str>)?;
+                    MenuItem::with_id(app, "mode_subtle", tr("tray-mode-subtle"), true, None::<&str>)?;
                 let mode_zen =
-                    MenuItem::with_id(app, "mode_zen", "Mouse Zen", true, None::<&str>)?;
+                    MenuItem::with_id(app, "mode_zen", tr("tray-mode-zen"), true, None::<&str>)?;
 
                 let mode_submenu = Submenu::with_id_and_items(
                     app,
                     "mode",
-                    "Mode",
+                    tr("tray-mode"),
                     true,
                     &[&mode_power, &mode_subtle, &mode_zen],
                 )?;
 
-                // Accessibility permission indicator (always present;
-                // shows ✅ and disabled on Windows / when already granted).
+                // Accessibility permission indicator.
                 let (acc_text, acc_enabled) = if has_accessibility {
-                    ("✅ Accessibility OK", false)
+                    (tr("tray-accessibility-ok"), false)
                 } else {
-                    ("⚠️ Grant Accessibility", true)
+                    (tr("tray-grant-accessibility"), true)
                 };
                 let accessibility_item = MenuItem::with_id(
                     app,
@@ -364,9 +478,9 @@ pub fn run() {
                 let sep2 = PredefinedMenuItem::separator(app)?;
                 let sep3 = PredefinedMenuItem::separator(app)?;
                 let settings_item =
-                    MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+                    MenuItem::with_id(app, "settings", tr("tray-settings"), true, None::<&str>)?;
                 let quit_item =
-                    MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                    MenuItem::with_id(app, "quit", tr("tray-quit"), true, None::<&str>)?;
 
                 let menu = Menu::with_items(
                     app,
@@ -382,6 +496,11 @@ pub fn run() {
                     ],
                 )?;
 
+                // Translated tooltip strings for the tray-menu event closure.
+                let tip_active = tr("tray-tooltip-active");
+                let tip_inactive = tr("tray-tooltip-inactive");
+                let acc_ok_text = tr("tray-accessibility-ok");
+
                 // Clones for the tray-menu closure.
                 let engine_for_tray = Arc::clone(&shared_engine);
                 let config_for_tray = Arc::clone(&shared_config);
@@ -391,7 +510,7 @@ pub fn run() {
 
                 TrayIconBuilder::with_id("main")
                     .icon(app.default_window_icon().unwrap().clone())
-                    .tooltip("Non-Sleep — Inactive")
+                    .tooltip(&tip_inactive)
                     .menu(&menu)
                     .show_menu_on_left_click(true)
                     .on_menu_event(move |app, event| {
@@ -403,11 +522,11 @@ pub fn run() {
                                     let _ = toggle_clone.set_checked(active);
                                     if let Some(tray) = app.tray_by_id("main") {
                                         let tip = if active {
-                                            "Non-Sleep — Active"
+                                            &tip_active
                                         } else {
-                                            "Non-Sleep — Inactive"
+                                            &tip_inactive
                                         };
-                                        let _ = tray.set_tooltip(Some(tip));
+                                        let _ = tray.set_tooltip(Some(tip.as_str()));
                                     }
                                 }
                             }
@@ -435,7 +554,7 @@ pub fn run() {
                                 }
                                 // Re-check after the user (potentially) grants access.
                                 if perm_for_tray.check_accessibility() {
-                                    let _ = accessibility_clone.set_text("✅ Accessibility OK");
+                                    let _ = accessibility_clone.set_text(&acc_ok_text);
                                     let _ = accessibility_clone.set_enabled(false);
                                 }
                             }

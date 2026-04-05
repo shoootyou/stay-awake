@@ -31,6 +31,20 @@ pub enum AppMode {
     Scheduled,
 }
 
+/// A named settings profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Profile {
+    pub name: String,
+    pub jiggle_mode: JiggleMode,
+    pub interval_secs: u64,
+    pub schedule_enabled: bool,
+    pub schedule_start_hour: u8,
+    pub schedule_start_minute: u8,
+    pub schedule_end_hour: u8,
+    pub schedule_end_minute: u8,
+    pub schedule_days: Vec<String>,
+}
+
 /// Main application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -46,6 +60,16 @@ pub struct AppConfig {
     pub language: String,
     /// Global keyboard shortcut string.
     pub global_hotkey: String,
+    // ── Schedule ──
+    pub schedule_enabled: bool,
+    pub schedule_start_hour: u8,
+    pub schedule_start_minute: u8,
+    pub schedule_end_hour: u8,
+    pub schedule_end_minute: u8,
+    pub schedule_days: Vec<String>,
+    // ── Profiles ──
+    pub profiles: Vec<Profile>,
+    pub active_profile: String,
 }
 
 impl Default for AppConfig {
@@ -57,6 +81,20 @@ impl Default for AppConfig {
             autostart: false,
             language: String::from("en"),
             global_hotkey: String::from("CmdOrCtrl+Shift+J"),
+            schedule_enabled: false,
+            schedule_start_hour: 9,
+            schedule_start_minute: 0,
+            schedule_end_hour: 17,
+            schedule_end_minute: 0,
+            schedule_days: vec![
+                "mon".into(),
+                "tue".into(),
+                "wed".into(),
+                "thu".into(),
+                "fri".into(),
+            ],
+            profiles: vec![],
+            active_profile: String::from("Default"),
         }
     }
 }

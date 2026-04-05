@@ -9,6 +9,9 @@ pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 /// Driver for controlling mouse cursor position and generating movement events.
 pub trait MouseDriver: Send + Sync {
     /// Move the mouse cursor by a relative offset.
@@ -55,6 +58,11 @@ pub fn create_mouse_driver() -> Box<dyn MouseDriver> {
     {
         Box::new(windows::WinMouseDriver)
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(linux::LinuxMouseDriver)
+    }
 }
 
 /// Creates the platform-specific power inhibitor.
@@ -68,6 +76,11 @@ pub fn create_power_inhibitor() -> Box<dyn PowerInhibitor> {
     {
         Box::new(windows::WinPowerInhibitor::new())
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(linux::LinuxPowerInhibitor::new())
+    }
 }
 
 /// Creates the platform-specific permission checker.
@@ -80,5 +93,10 @@ pub fn create_permission_checker() -> Box<dyn PermissionChecker> {
     #[cfg(target_os = "windows")]
     {
         Box::new(windows::WinPermissionChecker)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(linux::LinuxPermissionChecker)
     }
 }

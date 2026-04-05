@@ -6,10 +6,52 @@
 
 use crate::config::{AppConfig, JiggleMode};
 use crate::platform::{MouseDriver, PowerInhibitor};
+use chrono::Local;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+/// Returns `true` when the current local time falls within the configured schedule.
+pub fn is_within_schedule(config: &AppConfig) -> bool {
+    if !config.schedule_enabled {
+        return true;
+    }
+
+    let now = Local::now();
+
+    // Check day of week
+    let day_abbr = match now.format("%a").to_string().to_lowercase().as_str() {
+        "mon" => "mon",
+        "tue" => "tue",
+        "wed" => "wed",
+        "thu" => "thu",
+        "fri" => "fri",
+        "sat" => "sat",
+        "sun" => "sun",
+        _ => return false,
+    }
+    .to_string();
+
+    if !config.schedule_days.iter().any(|d| d.to_lowercase() == day_abbr) {
+        return false;
+    }
+
+    let hour = now.format("%H").to_string().parse::<u8>().unwrap_or(0);
+    let minute = now.format("%M").to_string().parse::<u8>().unwrap_or(0);
+    let current_minutes = (hour as u16) * 60 + (minute as u16);
+    let start_minutes =
+        (config.schedule_start_hour as u16) * 60 + (config.schedule_start_minute as u16);
+    let end_minutes =
+        (config.schedule_end_hour as u16) * 60 + (config.schedule_end_minute as u16);
+
+    if start_minutes <= end_minutes {
+        current_minutes >= start_minutes && current_minutes < end_minutes
+    } else {
+        // Overnight schedule (e.g. 22:00-06:00)
+        current_minutes >= start_minutes || current_minutes < end_minutes
+    }
+}
 
 /// Engine operational state.
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +138,12 @@ impl Engine {
                 }
                 if !running.load(Ordering::Relaxed) {
                     break;
+                }
+
+                // Check schedule — skip jiggle if outside the configured window.
+                if cfg.schedule_enabled && !is_within_schedule(&cfg) {
+                    log::debug!("Outside schedule window — skipping jiggle");
+                    continue;
                 }
 
                 // PowerOnly mode relies solely on the IOKit / SetThreadExecutionState
