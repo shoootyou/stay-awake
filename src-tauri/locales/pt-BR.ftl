@@ -11,17 +11,19 @@ tray-accessibility-ok = Acessibilidade OK
 tray-grant-accessibility = Conceder acessibilidade
 tray-settings = Configuracoes…
 tray-quit = Sair
-tray-tooltip-active = Non-Sleep — Ativo
-tray-tooltip-inactive = Non-Sleep — Inativo
+tray-tooltip-active = No Sleep Please! — Ativo
+tray-tooltip-inactive = No Sleep Please! — Inativo
 
 # Janela de configuracoes
-settings-title = Configuracoes do Non-Sleep
+settings-title = Configuracoes do No Sleep Please!
 settings-mode-label = Modo
 settings-interval-label = Intervalo
 settings-app-mode-label = Modo do aplicativo
 settings-autostart-label = Iniciar com o sistema
 settings-language-label = Idioma
 settings-hotkey-label = Atalho
+settings-hotkey-hint = Clique para gravar
+settings-hotkey-recording = Pressione teclas...
 settings-save = Salvar
 settings-cancel = Cancelar
 settings-accessibility-banner = Os modos de mouse requerem permissao de acessibilidade.

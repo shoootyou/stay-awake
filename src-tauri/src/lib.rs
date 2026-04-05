@@ -1,4 +1,4 @@
-//! Non-Sleep — a cross-platform tray-only mouse jiggler / anti-inactivity tool.
+//! No Sleep Please! — a cross-platform tray-only mouse jiggler / anti-inactivity tool.
 //!
 //! This is the main Tauri application entry point. It wires together the
 //! platform layer, configuration, engine, system tray, global shortcut,
@@ -231,6 +231,36 @@ fn delete_profile(
     cfg.save()
 }
 
+/// Update the global hotkey at runtime: unregister the old shortcut, register
+/// the new one, and persist the change.
+#[tauri::command]
+fn update_global_hotkey(
+    app: tauri::AppHandle,
+    hotkey: String,
+    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Parse the new shortcut string.
+    let new_shortcut = parse_shortcut_string(&hotkey)
+        .ok_or_else(|| format!("Invalid shortcut: {}", hotkey))?;
+
+    // Unregister all existing shortcuts, then register the new one.
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+
+    gs.register(new_shortcut)
+        .map_err(|e| format!("Failed to register shortcut: {}", e))?;
+
+    // Persist to config.
+    if let Ok(mut cfg) = config.lock() {
+        cfg.global_hotkey = hotkey;
+        cfg.save()?;
+    }
+
+    Ok(())
+}
+
 // ───────────────────────── Hotkey string parser ────────────────────────────
 
 /// Parse a human-readable shortcut string like `"CmdOrCtrl+Shift+J"` into a
@@ -347,7 +377,7 @@ fn show_settings_window(app: &tauri::AppHandle) {
             "settings",
             WebviewUrl::App("settings.html".into()),
         )
-        .title("Non-Sleep Settings")
+        .title("No Sleep Please! Settings")
         .inner_size(480.0, 720.0)
         .resizable(false)
         .center()
@@ -370,6 +400,17 @@ fn configure_macos_app() {
         let empty_menu = NSMenu::new(mtm);
         app.setMainMenu(Some(&empty_menu));
     }
+}
+
+/// Create a dimmed version of an RGBA icon by reducing opacity.
+fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
+    let rgba = icon.rgba().to_vec();
+    let mut dimmed = rgba.clone();
+    // Reduce alpha channel to ~40% for a "greyed out" look
+    for i in (3..dimmed.len()).step_by(4) {
+        dimmed[i] = (dimmed[i] as f32 * 0.4) as u8;
+    }
+    tauri::image::Image::new_owned(dimmed, icon.width(), icon.height())
 }
 
 // ──────────────────────────── Application entry ────────────────────────────
@@ -397,7 +438,11 @@ pub fn run() {
             save_profile,
             load_profile,
             delete_profile,
+            update_global_hotkey,
         ])
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
+            log::info!("Another instance attempted to start -- focusing existing instance");
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // ── Configuration ──────────────────────────────────────────
@@ -534,9 +579,25 @@ pub fn run() {
                 let accessibility_clone = accessibility_item.clone();
                 let text_active_clone = text_active.clone();
                 let text_inactive_clone = text_inactive.clone();
+                // Extra clones for the global shortcut handler.
+                let tip_active_for_sc = tip_active.clone();
+                let tip_inactive_for_sc = tip_inactive.clone();
+
+                let default_icon = app.default_window_icon().unwrap();
+                let active_icon = tauri::image::Image::new_owned(
+                    default_icon.rgba().to_vec(),
+                    default_icon.width(),
+                    default_icon.height(),
+                );
+                let inactive_icon = create_dimmed_icon(default_icon);
+                let active_icon_clone = active_icon.clone();
+                let inactive_icon_clone = inactive_icon.clone();
+                // Extra clones for the global shortcut handler closure.
+                let active_icon_for_sc = active_icon.clone();
+                let inactive_icon_for_sc = inactive_icon.clone();
 
                 TrayIconBuilder::with_id("main")
-                    .icon(app.default_window_icon().unwrap().clone())
+                    .icon(active_icon)
                     .tooltip(&tip_active)
                     .menu(&menu)
                     .show_menu_on_left_click(true)
@@ -559,6 +620,12 @@ pub fn run() {
                                             &tip_inactive
                                         };
                                         let _ = tray.set_tooltip(Some(tip.as_str()));
+                                        let icon = if active {
+                                            active_icon_clone.clone()
+                                        } else {
+                                            inactive_icon_clone.clone()
+                                        };
+                                        let _ = tray.set_icon(Some(icon));
                                     }
                                 }
                             }
@@ -610,49 +677,79 @@ pub fn run() {
                         }
                     })
                     .build(app)?;
-            }
 
-            // ── Global shortcut (configurable from config.global_hotkey) ──
-            #[cfg(desktop)]
-            {
-                use tauri_plugin_global_shortcut::{
-                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-                };
+                // ── Global shortcut (configurable from config.global_hotkey) ──
+                {
+                    use tauri_plugin_global_shortcut::{
+                        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                    };
 
-                // Try parsing the user-configured hotkey; fall back to default.
-                let shortcut = parse_shortcut_string(&loaded_config.global_hotkey)
-                    .unwrap_or_else(|| {
-                        log::warn!(
-                            "Could not parse hotkey \"{}\"; using default CmdOrCtrl+Shift+J",
-                            loaded_config.global_hotkey
-                        );
-                        #[cfg(target_os = "macos")]
-                        let modifier = Modifiers::META;
-                        #[cfg(not(target_os = "macos"))]
-                        let modifier = Modifiers::CONTROL;
+                    // Try parsing the user-configured hotkey; fall back to default.
+                    let shortcut = parse_shortcut_string(&loaded_config.global_hotkey)
+                        .unwrap_or_else(|| {
+                            log::warn!(
+                                "Could not parse hotkey \"{}\"; using default CmdOrCtrl+Shift+J",
+                                loaded_config.global_hotkey
+                            );
+                            #[cfg(target_os = "macos")]
+                            let modifier = Modifiers::META;
+                            #[cfg(not(target_os = "macos"))]
+                            let modifier = Modifiers::CONTROL;
 
-                        Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
-                    });
+                            Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
+                        });
 
-                let engine_for_shortcut = Arc::clone(&shared_engine);
+                    // Clones for the shortcut handler closure (tray UI feedback).
+                    let engine_for_shortcut = Arc::clone(&shared_engine);
+                    let sc_text_active = text_active;
+                    let sc_text_inactive = text_inactive;
+                    let sc_tip_active = tip_active_for_sc;
+                    let sc_tip_inactive = tip_inactive_for_sc;
+                    let sc_active_icon = active_icon_for_sc;
+                    let sc_inactive_icon = inactive_icon_for_sc;
+                    let toggle_for_shortcut = toggle_item;
 
-                app.handle().plugin(
-                    tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(move |_app, _shortcut, event| {
-                            if matches!(event.state(), ShortcutState::Pressed) {
-                                if let Ok(mut eng) = engine_for_shortcut.lock() {
-                                    let _ = eng.toggle();
-                                    log::info!(
-                                        "Global shortcut toggled engine → {}",
-                                        eng.state_name()
-                                    );
+                    app.handle().plugin(
+                        tauri_plugin_global_shortcut::Builder::new()
+                            .with_handler(move |app, _shortcut, event| {
+                                if matches!(event.state(), ShortcutState::Pressed) {
+                                    if let Ok(mut eng) = engine_for_shortcut.lock() {
+                                        let _ = eng.toggle();
+                                        let active = eng.is_active();
+                                        // Update toggle menu item text.
+                                        let label = if active {
+                                            &sc_text_active
+                                        } else {
+                                            &sc_text_inactive
+                                        };
+                                        let _ = toggle_for_shortcut.set_text(label);
+                                        // Update tray icon and tooltip.
+                                        if let Some(tray) = app.tray_by_id("main") {
+                                            let tip = if active {
+                                                &sc_tip_active
+                                            } else {
+                                                &sc_tip_inactive
+                                            };
+                                            let _ = tray.set_tooltip(Some(tip.as_str()));
+                                            let icon = if active {
+                                                sc_active_icon.clone()
+                                            } else {
+                                                sc_inactive_icon.clone()
+                                            };
+                                            let _ = tray.set_icon(Some(icon));
+                                        }
+                                        log::info!(
+                                            "Global shortcut toggled engine → {}",
+                                            eng.state_name()
+                                        );
+                                    }
                                 }
-                            }
-                        })
-                        .build(),
-                )?;
+                            })
+                            .build(),
+                    )?;
 
-                app.global_shortcut().register(shortcut)?;
+                    app.global_shortcut().register(shortcut)?;
+                }
             }
 
             // ── Autostart plugin ───────────────────────────────────────
@@ -664,7 +761,7 @@ pub fn run() {
                 ))?;
             }
 
-            log::info!("Non-Sleep initialised");
+            log::info!("No Sleep Please! initialised");
             Ok(())
         })
         .build(tauri::generate_context!())

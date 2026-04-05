@@ -11,17 +11,19 @@ tray-accessibility-ok = アクセシビリティ OK
 tray-grant-accessibility = アクセシビリティを許可
 tray-settings = 設定…
 tray-quit = 終了
-tray-tooltip-active = Non-Sleep — アクティブ
-tray-tooltip-inactive = Non-Sleep — 非アクティブ
+tray-tooltip-active = No Sleep Please! — アクティブ
+tray-tooltip-inactive = No Sleep Please! — 非アクティブ
 
 # 設定ウィンドウ
-settings-title = Non-Sleep 設定
+settings-title = No Sleep Please! 設定
 settings-mode-label = モード
 settings-interval-label = 間隔
 settings-app-mode-label = アプリモード
 settings-autostart-label = ログイン時に起動
 settings-language-label = 言語
 settings-hotkey-label = ショートカット
+settings-hotkey-hint = クリックして記録
+settings-hotkey-recording = キーを押してください...
 settings-save = 保存
 settings-cancel = キャンセル
 settings-accessibility-banner = マウスモードにはアクセシビリティの許可が必要です。

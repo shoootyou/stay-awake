@@ -1,4 +1,4 @@
-//! Platform abstraction layer for Non-Sleep.
+//! Platform abstraction layer for No Sleep Please!
 //!
 //! Provides cross-platform traits for mouse control, power management,
 //! and permission checking, with platform-specific implementations.

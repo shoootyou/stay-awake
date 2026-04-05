@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Non-Sleep — Settings</title>
+    <title>No Sleep Please! — Settings</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -81,7 +81,10 @@
 
         <div class="field">
           <span class="label"><i class="ph ph-keyboard"></i> <span data-i18n="settings-hotkey-label">Global Hotkey</span></span>
-          <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
+          <button id="hotkey-recorder" class="hotkey-btn">
+            <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
+            <span class="hotkey-hint" data-i18n="settings-hotkey-hint">Click to record</span>
+          </button>
         </div>
       </section>
 

@@ -11,17 +11,19 @@ tray-accessibility-ok = 辅助功能 OK
 tray-grant-accessibility = 授予辅助功能权限
 tray-settings = 设置…
 tray-quit = 退出
-tray-tooltip-active = Non-Sleep — 已激活
-tray-tooltip-inactive = Non-Sleep — 未激活
+tray-tooltip-active = No Sleep Please! — 已激活
+tray-tooltip-inactive = No Sleep Please! — 未激活
 
 # 设置窗口
-settings-title = Non-Sleep 设置
+settings-title = No Sleep Please! 设置
 settings-mode-label = 模式
 settings-interval-label = 间隔
 settings-app-mode-label = 应用模式
 settings-autostart-label = 登录时启动
 settings-language-label = 语言
 settings-hotkey-label = 快捷键
+settings-hotkey-hint = 点击录制
+settings-hotkey-recording = 按下按键...
 settings-save = 保存
 settings-cancel = 取消
 settings-accessibility-banner = 鼠标模式需要辅助功能权限。

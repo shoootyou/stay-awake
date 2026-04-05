@@ -178,8 +178,90 @@ async function onProfileChange() {
   }
 }
 
+// Hotkey recorder
+let isRecording = false;
+
+function setupHotkeyRecorder() {
+  const btn = document.getElementById("hotkey-recorder");
+  const kbd = document.getElementById("hotkey");
+  const hint = document.querySelector(".hotkey-hint");
+
+  btn.addEventListener("click", () => {
+    if (isRecording) return;
+    isRecording = true;
+    btn.classList.add("recording");
+    kbd.textContent = "...";
+    hint.setAttribute("data-i18n", "settings-hotkey-recording");
+    hint.textContent = "Press keys...";
+  });
+
+  btn.addEventListener("keydown", async (e) => {
+    if (!isRecording) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Ignore lone modifier keys
+    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
+
+    const parts = [];
+    if (e.metaKey) parts.push("Cmd");
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+
+    // Need at least one modifier
+    if (parts.length === 0) return;
+
+    // Map the key
+    let keyName = e.key.toUpperCase();
+    if (keyName === " ") keyName = "Space";
+    if (keyName === "ESCAPE" || keyName === "ESC") {
+      // Cancel recording on Escape
+      isRecording = false;
+      btn.classList.remove("recording");
+      kbd.textContent = originalConfig.global_hotkey;
+      hint.textContent = "Click to record";
+      hint.setAttribute("data-i18n", "settings-hotkey-hint");
+      return;
+    }
+
+    // Build the shortcut string (cross-platform: CmdOrCtrl)
+    const normalized = [];
+    if (e.metaKey || e.ctrlKey) normalized.push("CmdOrCtrl");
+    if (e.altKey) normalized.push("Alt");
+    if (e.shiftKey) normalized.push("Shift");
+    normalized.push(keyName);
+
+    const shortcutStr = normalized.join("+");
+
+    // Display user-friendly version
+    const displayParts = [];
+    if (e.metaKey) displayParts.push("\u2318");
+    if (e.ctrlKey && !e.metaKey) displayParts.push("Ctrl");
+    if (e.altKey) displayParts.push("\u2325");
+    if (e.shiftKey) displayParts.push("\u21e7");
+    displayParts.push(keyName);
+
+    kbd.textContent = displayParts.join("+");
+    isRecording = false;
+    btn.classList.remove("recording");
+    hint.textContent = "Click to record";
+    hint.setAttribute("data-i18n", "settings-hotkey-hint");
+
+    // Save the new shortcut
+    try {
+      await invoke("update_global_hotkey", { hotkey: shortcutStr });
+      originalConfig.global_hotkey = shortcutStr;
+    } catch (err) {
+      console.error("Failed to update hotkey:", err);
+      kbd.textContent = originalConfig.global_hotkey;
+    }
+  });
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   loadConfig();
+  setupHotkeyRecorder();
 
   document.getElementById("interval").addEventListener("input", (e) => {
     document.getElementById("interval-value").textContent = e.target.value + "s";

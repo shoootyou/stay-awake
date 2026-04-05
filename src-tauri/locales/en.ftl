@@ -11,17 +11,19 @@ tray-accessibility-ok = Accessibility OK
 tray-grant-accessibility = Grant Accessibility
 tray-settings = Settings…
 tray-quit = Quit
-tray-tooltip-active = Non-Sleep — Active
-tray-tooltip-inactive = Non-Sleep — Inactive
+tray-tooltip-active = No Sleep Please! — Active
+tray-tooltip-inactive = No Sleep Please! — Inactive
 
 # Settings window
-settings-title = Non-Sleep Settings
+settings-title = No Sleep Please! Settings
 settings-mode-label = Mode
 settings-interval-label = Interval
 settings-app-mode-label = App Mode
 settings-autostart-label = Launch at login
 settings-language-label = Language
 settings-hotkey-label = Shortcut
+settings-hotkey-hint = Click to record
+settings-hotkey-recording = Press keys...
 settings-save = Save
 settings-cancel = Cancel
 settings-accessibility-banner = Mouse modes require Accessibility permission.

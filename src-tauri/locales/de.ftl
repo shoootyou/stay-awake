@@ -11,17 +11,19 @@ tray-accessibility-ok = Barrierefreiheit OK
 tray-grant-accessibility = Barrierefreiheit gewahren
 tray-settings = Einstellungen…
 tray-quit = Beenden
-tray-tooltip-active = Non-Sleep — Aktiv
-tray-tooltip-inactive = Non-Sleep — Inaktiv
+tray-tooltip-active = No Sleep Please! — Aktiv
+tray-tooltip-inactive = No Sleep Please! — Inaktiv
 
 # Einstellungsfenster
-settings-title = Non-Sleep Einstellungen
+settings-title = No Sleep Please! Einstellungen
 settings-mode-label = Modus
 settings-interval-label = Intervall
 settings-app-mode-label = App-Modus
 settings-autostart-label = Beim Anmelden starten
 settings-language-label = Sprache
 settings-hotkey-label = Tastenkombination
+settings-hotkey-hint = Klicken zum Aufnehmen
+settings-hotkey-recording = Tasten druecken...
 settings-save = Speichern
 settings-cancel = Abbrechen
 settings-accessibility-banner = Mausmodi erfordern eine Barrierefreiheit-Berechtigung.

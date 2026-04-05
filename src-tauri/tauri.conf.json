@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Non-Sleep",
+  "productName": "No Sleep Please!",
   "version": "0.1.0",
-  "identifier": "com.rodolfo.non-sleep",
+  "identifier": "com.shoootyou.no-sleep-please",
   "build": {
     "frontendDist": "../src"
   },
@@ -25,7 +25,8 @@
     ],
     "category": "Utility",
     "shortDescription": "Keep your computer awake and active",
-    "copyright": "Copyright © 2026 Rodolfo. MIT License.",
+    "publisher": "Rodolfo Castelo",
+    "copyright": "Copyright (c) 2025 Rodolfo Castelo. MIT License.",
     "createUpdaterArtifacts": true,
     "macOS": {
       "minimumSystemVersion": "10.15"

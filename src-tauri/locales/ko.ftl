@@ -11,17 +11,19 @@ tray-accessibility-ok = 접근성 OK
 tray-grant-accessibility = 접근성 허용
 tray-settings = 설정…
 tray-quit = 종료
-tray-tooltip-active = Non-Sleep — 활성
-tray-tooltip-inactive = Non-Sleep — 비활성
+tray-tooltip-active = No Sleep Please! — 활성
+tray-tooltip-inactive = No Sleep Please! — 비활성
 
 # 설정 창
-settings-title = Non-Sleep 설정
+settings-title = No Sleep Please! 설정
 settings-mode-label = 모드
 settings-interval-label = 간격
 settings-app-mode-label = 앱 모드
 settings-autostart-label = 로그인 시 시작
 settings-language-label = 언어
 settings-hotkey-label = 단축키
+settings-hotkey-hint = 클릭하여 녹화
+settings-hotkey-recording = 키를 누르세요...
 settings-save = 저장
 settings-cancel = 취소
 settings-accessibility-banner = 마우스 모드에는 접근성 권한이 필요합니다.
