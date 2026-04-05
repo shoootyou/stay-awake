@@ -186,8 +186,19 @@ function setupHotkeyRecorder() {
   const kbd = document.getElementById("hotkey");
   const hint = document.querySelector(".hotkey-hint");
 
+  function stopRecording() {
+    isRecording = false;
+    btn.classList.remove("recording");
+    hint.textContent = "Click to record";
+    hint.setAttribute("data-i18n", "settings-hotkey-hint");
+  }
+
   btn.addEventListener("click", () => {
-    if (isRecording) return;
+    if (isRecording) {
+      kbd.textContent = originalConfig.global_hotkey;
+      stopRecording();
+      return;
+    }
     isRecording = true;
     btn.classList.add("recording");
     kbd.textContent = "...";
@@ -195,7 +206,8 @@ function setupHotkeyRecorder() {
     hint.textContent = "Press keys...";
   });
 
-  btn.addEventListener("keydown", async (e) => {
+  // Listen on document so keydown is captured regardless of focus
+  document.addEventListener("keydown", async (e) => {
     if (!isRecording) return;
     e.preventDefault();
     e.stopPropagation();
@@ -203,27 +215,16 @@ function setupHotkeyRecorder() {
     // Ignore lone modifier keys
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
 
-    const parts = [];
-    if (e.metaKey) parts.push("Cmd");
-    if (e.ctrlKey) parts.push("Ctrl");
-    if (e.altKey) parts.push("Alt");
-    if (e.shiftKey) parts.push("Shift");
-
-    // Need at least one modifier
-    if (parts.length === 0) return;
-
-    // Map the key
     let keyName = e.key.toUpperCase();
     if (keyName === " ") keyName = "Space";
     if (keyName === "ESCAPE" || keyName === "ESC") {
-      // Cancel recording on Escape
-      isRecording = false;
-      btn.classList.remove("recording");
       kbd.textContent = originalConfig.global_hotkey;
-      hint.textContent = "Click to record";
-      hint.setAttribute("data-i18n", "settings-hotkey-hint");
+      stopRecording();
       return;
     }
+
+    const hasMod = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
+    if (!hasMod) return;
 
     // Build the shortcut string (cross-platform: CmdOrCtrl)
     const normalized = [];
@@ -243,10 +244,7 @@ function setupHotkeyRecorder() {
     displayParts.push(keyName);
 
     kbd.textContent = displayParts.join("+");
-    isRecording = false;
-    btn.classList.remove("recording");
-    hint.textContent = "Click to record";
-    hint.setAttribute("data-i18n", "settings-hotkey-hint");
+    stopRecording();
 
     // Save the new shortcut
     try {
