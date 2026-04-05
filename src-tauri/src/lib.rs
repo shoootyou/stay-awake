@@ -240,6 +240,23 @@ fn show_settings_window(app: &tauri::AppHandle) {
     }
 }
 
+// ──────────────────────── macOS app configuration ──────────────────────────
+
+/// Configure the macOS app as an Accessory (no Dock icon, no menu bar).
+/// Must be called before the Tauri builder runs.
+#[cfg(target_os = "macos")]
+fn configure_macos_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSMenu};
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let empty_menu = NSMenu::new(mtm);
+        app.setMainMenu(Some(&empty_menu));
+    }
+}
+
 // ──────────────────────────── Application entry ────────────────────────────
 
 /// Build and run the Tauri application (called from `main.rs`).
@@ -247,6 +264,10 @@ fn show_settings_window(app: &tauri::AppHandle) {
 pub fn run() {
     // Initialize logging as early as possible.
     let _ = env_logger::try_init();
+
+    // On macOS, hide from Dock and remove default menu bar.
+    #[cfg(target_os = "macos")]
+    configure_macos_app();
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
