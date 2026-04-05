@@ -1,8 +1,8 @@
-# Non-Sleep
+# No Sleep Please!
 
 **Keep your computer awake and active.**
 
-Non-Sleep is a lightweight desktop utility that prevents your computer from going idle — no admin privileges required. It simulates subtle mouse movements and system-level activity to keep your machine awake.
+No Sleep Please! is a lightweight desktop utility that prevents your computer from going idle — no admin privileges required. It simulates subtle mouse movements and system-level activity to keep your machine awake.
 
 ---
 
@@ -38,7 +38,7 @@ winget install Rodolfo.NonSleep
 
 ## Usage
 
-1. Launch Non-Sleep — it appears in your system tray (macOS menu bar or Windows notification area)
+1. Launch No Sleep Please! — it appears in your system tray (macOS menu bar or Windows notification area)
 2. Click the tray icon to open the context menu
 3. Select **Toggle Active** to start keeping your computer awake
 4. Choose a **Mode** (Power Only is the default and needs no extra permissions)
@@ -91,4 +91,4 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings
 
 ## License
 
-[MIT](LICENSE) © 2026 Rodolfo
+[MIT](LICENSE) © 2025 Rodolfo Castelo

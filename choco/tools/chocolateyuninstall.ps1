@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
-$packageName = 'non-sleep'
-$softwareName = 'Non-Sleep*'
+$packageName = 'no-sleep-please'
+$softwareName = 'No Sleep Please!*'
 
 [array]$key = Get-UninstallRegistryKey -SoftwareName $softwareName
 

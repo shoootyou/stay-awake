@@ -99,7 +99,7 @@ jobs:
           # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Non-Sleep ${{ github.ref_name }}"
+          releaseName: "No Sleep Please! ${{ github.ref_name }}"
           releaseBody: "See the assets below for download links."
           releaseDraft: true
           prerelease: false
