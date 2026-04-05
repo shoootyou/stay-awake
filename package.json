@@ -1,12 +1,16 @@
 {
-  "name": "non-sleep",
+  "name": "no-sleep-please",
   "private": true,
   "version": "0.1.0",
+  "description": "Cross-platform mouse jiggler and anti-inactivity tool",
+  "author": "Rodolfo Castelo",
   "type": "module",
   "scripts": {
     "tauri": "tauri"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.0",
+    "@commitlint/config-conventional": "^20.5.0",
     "@tauri-apps/cli": "^2"
   }
 }

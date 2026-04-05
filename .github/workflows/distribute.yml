@@ -18,9 +18,9 @@ jobs:
 
       - name: Download DMG and compute SHA256
         run: |
-          DMG_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Non-Sleep_${{ steps.version.outputs.tag }}_aarch64.dmg"
-          curl -fSL "$DMG_URL" -o non-sleep.dmg
-          SHA256=$(shasum -a 256 non-sleep.dmg | awk '{print $1}')
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/No-Sleep-Please!_${{ steps.version.outputs.tag }}_aarch64.dmg"
+          curl -fSL "$DMG_URL" -o no-sleep-please.dmg
+          SHA256=$(shasum -a 256 no-sleep-please.dmg | awk '{print $1}')
           echo "SHA256=$SHA256" >> "$GITHUB_ENV"
           echo "Computed SHA256: $SHA256"
 
@@ -36,21 +36,21 @@ jobs:
         working-directory: homebrew-tap
         run: |
           VERSION="${{ steps.version.outputs.tag }}"
-          cat > Casks/non-sleep.rb << EOF
-          cask "non-sleep" do
+          cat > Casks/no-sleep-please.rb << EOF
+          cask "no-sleep-please" do
             version "$VERSION"
             sha256 "$SHA256"
 
-            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/Non-Sleep_#{version}_aarch64.dmg"
-            name "Non-Sleep"
+            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/No-Sleep-Please!_#{version}_aarch64.dmg"
+            name "No Sleep Please!"
             desc "Keep your computer awake and active"
             homepage "https://github.com/${{ github.repository }}"
 
-            app "Non-Sleep.app"
+            app "No Sleep Please!.app"
 
             zap trash: [
-              "~/Library/Application Support/com.rodolfo.non-sleep",
-              "~/Library/Preferences/com.rodolfo.non-sleep.plist",
+              "~/Library/Application Support/com.shoootyou.no-sleep-please",
+              "~/Library/Preferences/com.shoootyou.no-sleep-please.plist",
             ]
           end
           EOF
@@ -60,39 +60,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/non-sleep.rb
-          git commit -m "non-sleep ${{ steps.version.outputs.tag }}"
+          git add Casks/no-sleep-please.rb
+          git commit -m "no-sleep-please ${{ steps.version.outputs.tag }}"
           git push
 
   update-winget:
     name: Update winget manifest
     runs-on: windows-latest
     steps:
-      - name: Extract version
-        id: version
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}" -replace '^v', ''
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
-
-      - name: Install wingetcreate
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-
-      # TODO: Replace the package ID and installer URL pattern with actual values
-      # once the winget manifest is accepted into the winget-pkgs repository.
-      - name: Update and submit manifest
-        shell: pwsh
-        env:
-          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
-        run: |
-          $version = "${{ steps.version.outputs.tag }}"
-          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Non-Sleep_${version}_x64-setup.exe"
-
-          .\wingetcreate.exe update `
-            --submit `
-            --token "$env:WINGET_GITHUB_TOKEN" `
-            --urls "$installerUrl" `
-            --version "$version" `
-            Rodolfo.NonSleep
+      - uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: shoootyou.NoSleepPlease
+          installers-regex: '\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}
