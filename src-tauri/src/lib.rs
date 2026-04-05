@@ -277,6 +277,7 @@ pub fn run() {
             set_autostart_enabled,
             close_settings_window,
         ])
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // ── Configuration ──────────────────────────────────────────
             let loaded_config = AppConfig::load().unwrap_or_else(|_| {

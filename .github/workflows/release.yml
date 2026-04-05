@@ -103,6 +103,7 @@ jobs:
           releaseBody: "See the assets below for download links."
           releaseDraft: true
           prerelease: false
+          args: --verbose
 
       # ── macOS: clean up temporary keychain ──
       - name: Clean up keychain
