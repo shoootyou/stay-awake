@@ -4,28 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Non-Sleep — Settings</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="settings.css" />
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
     <script type="module" src="/settings.js" defer></script>
   </head>
   <body>
     <div class="settings">
       <header>
-        <h1 data-i18n="settings-title">Settings</h1>
+        <h1><i class="ph ph-gear"></i> <span data-i18n="settings-title">Settings</span></h1>
       </header>
 
       <section class="group">
-        <label class="field">
-          <span class="label" data-i18n="settings-mode-label">Jiggle Mode</span>
+        <div class="field">
+          <div class="label-row">
+            <span class="label"><i class="ph ph-cursor-click"></i> <span data-i18n="settings-mode-label">Jiggle Mode</span></span>
+            <button id="mode-info-btn" class="icon-btn" title="Info"><i class="ph ph-info"></i></button>
+          </div>
           <select id="jiggle-mode">
             <option value="PowerOnly" data-i18n="tray-mode-power">Power Only</option>
             <option value="MouseSubtle" data-i18n="tray-mode-subtle">Mouse Subtle</option>
             <option value="MouseZen" data-i18n="tray-mode-zen">Mouse Zen</option>
             <option value="MouseCircle" data-i18n="tray-mode-circle">Mouse Circle</option>
           </select>
-        </label>
+          <div id="mode-info-panel" class="info-panel hidden">
+            <ul class="mode-list">
+              <li><strong data-i18n="tray-mode-power">Power Only</strong> — <span data-i18n="mode-desc-power">Prevents sleep using system power API. No mouse movement, no permissions needed.</span></li>
+              <li><strong data-i18n="tray-mode-subtle">Mouse Subtle</strong> — <span data-i18n="mode-desc-subtle">Moves the mouse 1 pixel right then back. Barely visible.</span></li>
+              <li><strong data-i18n="tray-mode-zen">Mouse Zen</strong> — <span data-i18n="mode-desc-zen">Sends a zero-delta mouse event. Resets idle timer without any visible cursor movement.</span></li>
+              <li><strong data-i18n="tray-mode-circle">Mouse Circle</strong> — <span data-i18n="mode-desc-circle">Moves the mouse in a small circular pattern. Most visible but effective everywhere.</span></li>
+            </ul>
+          </div>
+        </div>
 
         <label class="field">
-          <span class="label" data-i18n="settings-interval-label">Interval <span class="badge" id="interval-value">30s</span></span>
+          <span class="label"><i class="ph ph-timer"></i> <span data-i18n="settings-interval-label">Interval</span> <span class="badge" id="interval-value">30s</span></span>
           <input type="range" id="interval" min="10" max="300" step="5" value="30" />
           <span class="range-labels">
             <span>10s</span>
@@ -36,7 +51,7 @@
 
       <section class="group">
         <label class="field">
-          <span class="label" data-i18n="settings-app-mode-label">App Mode</span>
+          <span class="label"><i class="ph ph-app-window"></i> <span data-i18n="settings-app-mode-label">App Mode</span></span>
           <select id="app-mode">
             <option value="Manual">Manual</option>
             <option value="AlwaysOn">Always On</option>
@@ -45,13 +60,13 @@
 
         <label class="field row">
           <input type="checkbox" id="autostart" />
-          <span class="label" data-i18n="settings-autostart-label">Launch at Login</span>
+          <span class="label"><i class="ph ph-power"></i> <span data-i18n="settings-autostart-label">Launch at Login</span></span>
         </label>
       </section>
 
       <section class="group">
         <label class="field">
-          <span class="label" data-i18n="settings-language-label">Language</span>
+          <span class="label"><i class="ph ph-translate"></i> <span data-i18n="settings-language-label">Language</span></span>
           <select id="language">
             <option value="en">English</option>
             <option value="es">Espanol</option>
@@ -65,13 +80,13 @@
         </label>
 
         <div class="field">
-          <span class="label" data-i18n="settings-hotkey-label">Global Hotkey</span>
+          <span class="label"><i class="ph ph-keyboard"></i> <span data-i18n="settings-hotkey-label">Global Hotkey</span></span>
           <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
         </div>
       </section>
 
       <section class="group" id="schedule-section">
-        <div class="group-header" data-i18n="schedule-label">Schedule</div>
+        <div class="group-header"><i class="ph ph-calendar-blank"></i> <span data-i18n="schedule-label">Schedule</span></div>
         <label class="field row">
           <input type="checkbox" id="schedule-enabled" />
           <span class="label" data-i18n="schedule-enabled">Enable schedule</span>
@@ -101,7 +116,7 @@
       </section>
 
       <section class="group" id="profile-section">
-        <div class="group-header" data-i18n="profile-label">Profile</div>
+        <div class="group-header"><i class="ph ph-user-circle"></i> <span data-i18n="profile-label">Profile</span></div>
         <div class="field profile-row">
           <select id="profile-select">
             <option value="Default" data-i18n="profile-default">Default</option>
@@ -116,10 +131,7 @@
         <button id="grant-btn" class="link" data-i18n="settings-grant-btn">Grant Access</button>
       </div>
 
-      <footer>
-        <button id="cancel-btn" class="secondary" data-i18n="settings-cancel">Cancel</button>
-        <button id="save-btn" class="primary" data-i18n="settings-save">Save</button>
-      </footer>
+
     </div>
   </body>
 </html>

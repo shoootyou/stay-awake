@@ -1,5 +1,7 @@
 # トレイメニュー
 tray-toggle-active = アクティブ切替
+tray-start = 開始
+tray-running = アクティブ
 tray-mode = モード
 tray-mode-power = 電源のみ
 tray-mode-subtle = マウス微動
@@ -44,3 +46,9 @@ profile-label = プロファイル
 profile-save-as = 名前を付けて保存…
 profile-delete = 削除
 profile-default = デフォルト
+
+# モード説明
+mode-desc-power = システム電源APIを使用してスリープを防止します。マウス移動なし、権限不要。
+mode-desc-subtle = マウスを1ピクセル右に動かして戻します。ほぼ見えません。
+mode-desc-zen = 移動量ゼロのマウスイベントを送信します。カーソルを動かさずにアイドルタイマーをリセットします。
+mode-desc-circle = マウスを小さな円形パターンで動かします。最も目立ちますがどこでも効果的です。

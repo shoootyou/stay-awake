@@ -52,7 +52,7 @@ pub fn create_bundle(locale: &str) -> Bundle {
 
     // Always add English as fallback so every key resolves.
     if let Ok(resource) = FluentResource::try_new(LOCALE_EN.to_string()) {
-        let _ = bundle.add_resource_overriding(resource);
+        let _ = bundle.add_resource(resource);
     }
 
     bundle

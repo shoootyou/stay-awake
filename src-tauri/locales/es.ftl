@@ -1,5 +1,7 @@
 # Menu de bandeja
 tray-toggle-active = Alternar activo
+tray-start = Iniciar
+tray-running = Activo
 tray-mode = Modo
 tray-mode-power = Solo energia
 tray-mode-subtle = Raton sutil
@@ -44,3 +46,9 @@ profile-label = Perfil
 profile-save-as = Guardar como…
 profile-delete = Eliminar
 profile-default = Predeterminado
+
+# Descripciones de modos
+mode-desc-power = Evita la suspension usando la API de energia del sistema. Sin movimiento de raton, sin permisos necesarios.
+mode-desc-subtle = Mueve el raton 1 pixel a la derecha y regresa. Apenas visible.
+mode-desc-zen = Envia un evento de raton sin desplazamiento. Reinicia el temporizador de inactividad sin mover el cursor.
+mode-desc-circle = Mueve el raton en un pequeno patron circular. Mas visible pero efectivo en todas partes.

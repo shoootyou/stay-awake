@@ -130,6 +130,20 @@ fn get_translation(
     Ok(i18n::t(&b, &key))
 }
 
+/// Replace the shared i18n bundle so the frontend can switch languages at runtime.
+#[tauri::command]
+fn set_language(
+    language: String,
+    bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
+) -> Result<(), String> {
+    let new_bundle = i18n::create_bundle(&language);
+    let mut b = bundle
+        .lock()
+        .map_err(|e| format!("I18n lock poisoned: {}", e))?;
+    *b = new_bundle;
+    Ok(())
+}
+
 /// Return all saved profiles.
 #[tauri::command]
 fn list_profiles(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Profile>, String> {
@@ -378,6 +392,7 @@ pub fn run() {
             set_autostart_enabled,
             close_settings_window,
             get_translation,
+            set_language,
             list_profiles,
             save_profile,
             load_profile,
@@ -418,6 +433,13 @@ pub fn run() {
             let engine = Engine::new(mouse_driver, power_inhibitor, Arc::clone(&shared_config));
             let shared_engine: Arc<Mutex<Engine>> = Arc::new(Mutex::new(engine));
 
+            // Auto-start the engine on launch.
+            if let Ok(mut eng) = shared_engine.lock() {
+                if let Err(e) = eng.start() {
+                    log::warn!("Engine auto-start failed: {}", e);
+                }
+            }
+
             // Manage state so Tauri commands can access it.
             app.manage(Arc::clone(&shared_config));
             app.manage(Arc::clone(&shared_engine));
@@ -427,21 +449,21 @@ pub fn run() {
             // ── System tray ────────────────────────────────────────────
             #[cfg(desktop)]
             {
-                use tauri::menu::{
-                    CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
-                };
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
                 use tauri::tray::TrayIconBuilder;
 
                 // Resolve tray labels from the i18n bundle.
                 let tray_bundle = i18n::create_bundle(&loaded_config.language);
                 let tr = |id: &str| i18n::t(&tray_bundle, id);
 
-                let toggle_item = CheckMenuItem::with_id(
+                let text_inactive = format!("\u{25b6}\u{fe0f} {}", tr("tray-start"));
+                let text_active = format!("\u{1f7e2} {}", tr("tray-running"));
+
+                let toggle_item = MenuItem::with_id(
                     app,
                     "toggle_active",
-                    tr("tray-toggle-active"),
+                    &text_active,
                     true,
-                    false,
                     None::<&str>,
                 )?;
 
@@ -452,19 +474,22 @@ pub fn run() {
                 let mode_zen =
                     MenuItem::with_id(app, "mode_zen", tr("tray-mode-zen"), true, None::<&str>)?;
 
+                let mode_circle =
+                    MenuItem::with_id(app, "mode_circle", tr("tray-mode-circle"), true, None::<&str>)?;
+
                 let mode_submenu = Submenu::with_id_and_items(
                     app,
                     "mode",
                     tr("tray-mode"),
                     true,
-                    &[&mode_power, &mode_subtle, &mode_zen],
+                    &[&mode_power, &mode_subtle, &mode_zen, &mode_circle],
                 )?;
 
                 // Accessibility permission indicator.
                 let (acc_text, acc_enabled) = if has_accessibility {
-                    (tr("tray-accessibility-ok"), false)
+                    (format!("\u{1f7e2} {}", tr("tray-accessibility-ok")), false)
                 } else {
-                    (tr("tray-grant-accessibility"), true)
+                    (format!("\u{26a0}\u{fe0f} {}", tr("tray-grant-accessibility")), true)
                 };
                 let accessibility_item = MenuItem::with_id(
                     app,
@@ -499,7 +524,7 @@ pub fn run() {
                 // Translated tooltip strings for the tray-menu event closure.
                 let tip_active = tr("tray-tooltip-active");
                 let tip_inactive = tr("tray-tooltip-inactive");
-                let acc_ok_text = tr("tray-accessibility-ok");
+                let acc_ok_text = format!("\u{1f7e2} {}", tr("tray-accessibility-ok"));
 
                 // Clones for the tray-menu closure.
                 let engine_for_tray = Arc::clone(&shared_engine);
@@ -507,10 +532,12 @@ pub fn run() {
                 let perm_for_tray = Arc::clone(&perm_checker);
                 let toggle_clone = toggle_item.clone();
                 let accessibility_clone = accessibility_item.clone();
+                let text_active_clone = text_active.clone();
+                let text_inactive_clone = text_inactive.clone();
 
                 TrayIconBuilder::with_id("main")
                     .icon(app.default_window_icon().unwrap().clone())
-                    .tooltip(&tip_inactive)
+                    .tooltip(&tip_active)
                     .menu(&menu)
                     .show_menu_on_left_click(true)
                     .on_menu_event(move |app, event| {
@@ -519,7 +546,12 @@ pub fn run() {
                                 if let Ok(mut eng) = engine_for_tray.lock() {
                                     let _ = eng.toggle();
                                     let active = eng.is_active();
-                                    let _ = toggle_clone.set_checked(active);
+                                    let label = if active {
+                                        &text_active_clone
+                                    } else {
+                                        &text_inactive_clone
+                                    };
+                                    let _ = toggle_clone.set_text(label);
                                     if let Some(tray) = app.tray_by_id("main") {
                                         let tip = if active {
                                             &tip_active
@@ -545,6 +577,12 @@ pub fn run() {
                             "mode_zen" => {
                                 if let Ok(mut cfg) = config_for_tray.lock() {
                                     cfg.jiggle_mode = JiggleMode::MouseZen;
+                                    let _ = cfg.save();
+                                }
+                            }
+                            "mode_circle" => {
+                                if let Ok(mut cfg) = config_for_tray.lock() {
+                                    cfg.jiggle_mode = JiggleMode::MouseCircle;
                                     let _ = cfg.save();
                                 }
                             }

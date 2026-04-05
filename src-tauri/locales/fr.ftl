@@ -1,5 +1,7 @@
 # Menu de la barre
 tray-toggle-active = Basculer actif
+tray-start = Demarrer
+tray-running = Actif
 tray-mode = Mode
 tray-mode-power = Energie seule
 tray-mode-subtle = Souris subtile
@@ -44,3 +46,9 @@ profile-label = Profil
 profile-save-as = Enregistrer sous…
 profile-delete = Supprimer
 profile-default = Par defaut
+
+# Descriptions des modes
+mode-desc-power = Empeche la mise en veille via l'API systeme. Aucun mouvement de souris, aucune permission requise.
+mode-desc-subtle = Deplace la souris de 1 pixel a droite puis revient. A peine visible.
+mode-desc-zen = Envoie un evenement souris sans deplacement. Reinitialise le minuteur d'inactivite sans mouvement visible du curseur.
+mode-desc-circle = Deplace la souris en petit cercle. Plus visible mais efficace partout.

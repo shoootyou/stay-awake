@@ -1,5 +1,7 @@
 # Menu da bandeja
 tray-toggle-active = Alternar ativo
+tray-start = Iniciar
+tray-running = Ativo
 tray-mode = Modo
 tray-mode-power = Somente energia
 tray-mode-subtle = Mouse sutil
@@ -44,3 +46,9 @@ profile-label = Perfil
 profile-save-as = Salvar como…
 profile-delete = Excluir
 profile-default = Padrao
+
+# Descricoes dos modos
+mode-desc-power = Impede a suspensao usando a API de energia do sistema. Sem movimento do mouse, sem permissoes necessarias.
+mode-desc-subtle = Move o mouse 1 pixel para a direita e volta. Quase invisivel.
+mode-desc-zen = Envia um evento de mouse sem deslocamento. Reinicia o temporizador de inatividade sem movimento visivel do cursor.
+mode-desc-circle = Move o mouse em um pequeno padrao circular. Mais visivel, mas eficaz em qualquer lugar.

@@ -1,5 +1,7 @@
 # 托盘菜单
 tray-toggle-active = 切换激活
+tray-start = 启动
+tray-running = 运行中
 tray-mode = 模式
 tray-mode-power = 仅供电
 tray-mode-subtle = 鼠标微动
@@ -44,3 +46,9 @@ profile-label = 配置文件
 profile-save-as = 另存为…
 profile-delete = 删除
 profile-default = 默认
+
+# 模式说明
+mode-desc-power = 使用系统电源API防止睡眠。无鼠标移动，无需权限。
+mode-desc-subtle = 将鼠标向右移动1像素然后返回。几乎不可见。
+mode-desc-zen = 发送零位移鼠标事件。在不移动光标的情况下重置空闲计时器。
+mode-desc-circle = 以小圆形模式移动鼠标。最明显但在任何地方都有效。

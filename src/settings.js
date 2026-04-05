@@ -13,13 +13,7 @@ async function applyTranslations() {
       if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
         el.placeholder = text;
       } else {
-        // Preserve child elements (like the badge inside interval label).
-        const badge = el.querySelector(".badge");
-        if (badge) {
-          el.childNodes[0].textContent = text + " ";
-        } else {
-          el.textContent = text;
-        }
+        el.textContent = text;
       }
     } catch (_) {
       // Keep original text on failure.
@@ -101,7 +95,7 @@ async function checkAccessibility() {
   }
 }
 
-async function saveConfig() {
+async function autoSave() {
   const startParts = document.getElementById("schedule-start").value.split(":");
   const endParts = document.getElementById("schedule-end").value.split(":");
 
@@ -129,16 +123,16 @@ async function saveConfig() {
 
   try {
     await invoke("save_config", { newConfig: cfg });
-    await invoke("close_settings_window");
-  } catch (e) {
-    console.error("Failed to save config:", e);
-  }
-}
 
-async function cancel() {
-  try {
-    await invoke("close_settings_window");
-  } catch (_) {}
+    const newLang = cfg.language;
+    if (newLang !== originalConfig.language) {
+      await invoke("set_language", { language: newLang });
+      await applyTranslations();
+      originalConfig.language = newLang;
+    }
+  } catch (e) {
+    console.error("Failed to auto-save config:", e);
+  }
 }
 
 async function grantAccessibility() {
@@ -191,9 +185,26 @@ window.addEventListener("DOMContentLoaded", () => {
     document.getElementById("interval-value").textContent = e.target.value + "s";
   });
 
-  document.getElementById("jiggle-mode").addEventListener("change", checkAccessibility);
-  document.getElementById("save-btn").addEventListener("click", saveConfig);
-  document.getElementById("cancel-btn").addEventListener("click", cancel);
+  document.getElementById("jiggle-mode").addEventListener("change", () => {
+    checkAccessibility();
+    autoSave();
+  });
+  document.getElementById("interval").addEventListener("change", autoSave);
+  document.getElementById("app-mode").addEventListener("change", autoSave);
+  document.getElementById("autostart").addEventListener("change", autoSave);
+  document.getElementById("language").addEventListener("change", autoSave);
+  document.getElementById("schedule-enabled").addEventListener("change", autoSave);
+  document.getElementById("schedule-start").addEventListener("change", autoSave);
+  document.getElementById("schedule-end").addEventListener("change", autoSave);
+  document.querySelectorAll(".day-checkboxes input").forEach((cb) => {
+    cb.addEventListener("change", autoSave);
+  });
+
+  document.getElementById("mode-info-btn").addEventListener("click", () => {
+    const panel = document.getElementById("mode-info-panel");
+    panel.classList.toggle("hidden");
+  });
+
   document.getElementById("grant-btn").addEventListener("click", grantAccessibility);
   document.getElementById("profile-save-btn").addEventListener("click", saveProfileAs);
   document.getElementById("profile-delete-btn").addEventListener("click", deleteProfile);
