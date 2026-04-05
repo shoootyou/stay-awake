@@ -27,7 +27,7 @@ jobs:
 
       # TODO: Replace with your actual homebrew-tap repository
       - name: Checkout Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: shoootyou/homebrew-tap
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
@@ -70,7 +70,7 @@ jobs:
     runs-on: windows-latest
     environment: public
     steps:
-      - uses: vedantmgoyal9/winget-releaser@v2
+      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: shoootyou.NoSleepPlease
           installers-regex: '\.exe$'
