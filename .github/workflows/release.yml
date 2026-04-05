@@ -5,7 +5,8 @@ on:
     tags:
       - "v*"
 
-# Required repository secrets (Settings → Secrets and variables → Actions):
+# Required secrets in the "public" GitHub environment
+# (Settings → Environments → public → Environment secrets):
 #
 # macOS code signing & notarization:
 #   APPLE_CERTIFICATE            — Base64-encoded .p12 Developer ID Application certificate
@@ -15,13 +16,15 @@ on:
 #   APPLE_PASSWORD               — App-specific password (appleid.apple.com → Security)
 #   APPLE_TEAM_ID                — 10-character Apple Developer Team ID
 #
-# Windows code signing (optional, uncomment env vars below when ready):
-#   TAURI_SIGNING_PRIVATE_KEY    — Private key for signing Windows updater bundles
+# Windows code signing / updater signing:
+#   TAURI_SIGNING_PRIVATE_KEY          — Ed25519 private key for signing updater bundles
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — Password for the signing key
 
 jobs:
   build-and-release:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    environment: public
     permissions:
       contents: write
     strategy:
@@ -95,8 +98,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows signing (uncomment when certificates are obtained)
-          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Windows / updater signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "No Sleep Please! ${{ github.ref_name }}"

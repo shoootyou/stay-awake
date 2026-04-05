@@ -11,6 +11,7 @@ jobs:
   update-homebrew:
     name: Update Homebrew Cask
     runs-on: macos-latest
+    environment: public
     steps:
       - name: Extract version
         id: version
@@ -67,6 +68,7 @@ jobs:
   update-winget:
     name: Update winget manifest
     runs-on: windows-latest
+    environment: public
     steps:
       - uses: vedantmgoyal9/winget-releaser@v2
         with:
