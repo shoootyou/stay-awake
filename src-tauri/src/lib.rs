@@ -372,6 +372,7 @@ pub fn run() {
                 let accessibility_clone = accessibility_item.clone();
 
                 TrayIconBuilder::with_id("main")
+                    .icon(app.default_window_icon().unwrap().clone())
                     .tooltip("Non-Sleep — Inactive")
                     .menu(&menu)
                     .show_menu_on_left_click(true)

@@ -18,9 +18,11 @@ pub enum EngineState {
     Idle,
     /// Engine is actively preventing inactivity.
     Active,
-    /// Engine is temporarily paused.
+    /// Engine is temporarily paused (reserved for future use).
+    #[allow(dead_code)]
     Paused,
-    /// Engine encountered an error.
+    /// Engine encountered an error (reserved for future use).
+    #[allow(dead_code)]
     Error(String),
 }
 

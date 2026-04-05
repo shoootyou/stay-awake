@@ -31,6 +31,7 @@ pub trait PowerInhibitor: Send + Sync {
     fn release(&mut self) -> Result<(), String>;
 
     /// Returns true if sleep inhibition is currently active.
+    #[allow(dead_code)]
     fn is_active(&self) -> bool;
 }
 

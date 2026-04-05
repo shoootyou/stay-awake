@@ -8,24 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "settings",
-        "title": "Non-Sleep Settings",
-        "url": "settings.html",
-        "width": 480,
-        "height": 580,
-        "resizable": false,
-        "visible": false,
-        "center": true,
-        "decorations": true
-      }
-    ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "Non-Sleep — Inactive"
-    },
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -42,6 +25,9 @@
     ],
     "category": "Utility",
     "shortDescription": "Keep your computer awake and active",
-    "copyright": "Copyright © 2026 Rodolfo. MIT License."
+    "copyright": "Copyright © 2026 Rodolfo. MIT License.",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

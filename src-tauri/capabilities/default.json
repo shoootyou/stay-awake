@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capabilities for all windows",
-  "windows": ["main", "settings"],
+  "windows": ["settings"],
   "permissions": [
     "core:default",
     "global-shortcut:default",
