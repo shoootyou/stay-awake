@@ -193,6 +193,15 @@ function setupHotkeyRecorder() {
     hint.setAttribute("data-i18n", "settings-hotkey-hint");
   }
 
+  function buildDisplay(e) {
+    const parts = [];
+    if (e.metaKey) parts.push("\u2318");
+    if (e.ctrlKey && !e.metaKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("\u2325");
+    if (e.shiftKey) parts.push("\u21e7");
+    return parts;
+  }
+
   btn.addEventListener("click", () => {
     if (isRecording) {
       kbd.textContent = originalConfig.global_hotkey;
@@ -206,47 +215,45 @@ function setupHotkeyRecorder() {
     hint.textContent = "Press keys...";
   });
 
-  // Listen on document so keydown is captured regardless of focus
+  // Show modifiers in real-time as user presses them
   document.addEventListener("keydown", async (e) => {
     if (!isRecording) return;
     e.preventDefault();
     e.stopPropagation();
 
-    // Ignore lone modifier keys
-    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
-
-    let keyName = e.key.toUpperCase();
-    if (keyName === " ") keyName = "Space";
-    if (keyName === "ESCAPE" || keyName === "ESC") {
+    if (e.key === "Escape") {
       kbd.textContent = originalConfig.global_hotkey;
       stopRecording();
       return;
     }
 
-    const hasMod = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
-    if (!hasMod) return;
+    const displayParts = buildDisplay(e);
 
-    // Build the shortcut string (cross-platform: CmdOrCtrl)
+    // If it's just a modifier key, show it but don't finalize
+    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) {
+      kbd.textContent = displayParts.length > 0 ? displayParts.join("+") + "+" : "...";
+      return;
+    }
+
+    // Non-modifier key pressed — need at least one modifier
+    if (displayParts.length === 0) return;
+
+    let keyName = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    if (keyName === " ") keyName = "Space";
+
+    // Show final combo
+    displayParts.push(keyName);
+    kbd.textContent = displayParts.join("+");
+    stopRecording();
+
+    // Build backend-compatible string
     const normalized = [];
     if (e.metaKey || e.ctrlKey) normalized.push("CmdOrCtrl");
     if (e.altKey) normalized.push("Alt");
     if (e.shiftKey) normalized.push("Shift");
-    normalized.push(keyName);
-
+    normalized.push(keyName.toUpperCase());
     const shortcutStr = normalized.join("+");
 
-    // Display user-friendly version
-    const displayParts = [];
-    if (e.metaKey) displayParts.push("\u2318");
-    if (e.ctrlKey && !e.metaKey) displayParts.push("Ctrl");
-    if (e.altKey) displayParts.push("\u2325");
-    if (e.shiftKey) displayParts.push("\u21e7");
-    displayParts.push(keyName);
-
-    kbd.textContent = displayParts.join("+");
-    stopRecording();
-
-    // Save the new shortcut
     try {
       await invoke("update_global_hotkey", { hotkey: shortcutStr });
       originalConfig.global_hotkey = shortcutStr;
@@ -254,6 +261,15 @@ function setupHotkeyRecorder() {
       console.error("Failed to update hotkey:", err);
       kbd.textContent = originalConfig.global_hotkey;
     }
+  });
+
+  // Handle modifier key release to update display
+  document.addEventListener("keyup", (e) => {
+    if (!isRecording) return;
+    e.preventDefault();
+
+    const displayParts = buildDisplay(e);
+    kbd.textContent = displayParts.length > 0 ? displayParts.join("+") + "+" : "...";
   });
 }
 
