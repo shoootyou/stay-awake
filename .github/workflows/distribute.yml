@@ -1,0 +1,98 @@
+name: Distribute
+
+on:
+  release:
+    types: [published]
+
+# Runs after a draft release is manually published.
+# Updates package-manager manifests so users get the new version.
+
+jobs:
+  update-homebrew:
+    name: Update Homebrew Cask
+    runs-on: macos-latest
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download DMG and compute SHA256
+        run: |
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Non-Sleep_${{ steps.version.outputs.tag }}_aarch64.dmg"
+          curl -fSL "$DMG_URL" -o non-sleep.dmg
+          SHA256=$(shasum -a 256 non-sleep.dmg | awk '{print $1}')
+          echo "SHA256=$SHA256" >> "$GITHUB_ENV"
+          echo "Computed SHA256: $SHA256"
+
+      # TODO: Replace with your actual homebrew-tap repository
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: rodolfo/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update cask formula
+        working-directory: homebrew-tap
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          cat > Casks/non-sleep.rb << EOF
+          cask "non-sleep" do
+            version "$VERSION"
+            sha256 "$SHA256"
+
+            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/Non-Sleep_#{version}_aarch64.dmg"
+            name "Non-Sleep"
+            desc "Keep your computer awake and active"
+            homepage "https://github.com/${{ github.repository }}"
+
+            app "Non-Sleep.app"
+
+            zap trash: [
+              "~/Library/Application Support/com.rodolfo.non-sleep",
+              "~/Library/Preferences/com.rodolfo.non-sleep.plist",
+            ]
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/non-sleep.rb
+          git commit -m "non-sleep ${{ steps.version.outputs.tag }}"
+          git push
+
+  update-winget:
+    name: Update winget manifest
+    runs-on: windows-latest
+    steps:
+      - name: Extract version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Install wingetcreate
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      # TODO: Replace the package ID and installer URL pattern with actual values
+      # once the winget manifest is accepted into the winget-pkgs repository.
+      - name: Update and submit manifest
+        shell: pwsh
+        env:
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+        run: |
+          $version = "${{ steps.version.outputs.tag }}"
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Non-Sleep_${version}_x64-setup.exe"
+
+          .\wingetcreate.exe update `
+            --submit `
+            --token "$env:WINGET_GITHUB_TOKEN" `
+            --urls "$installerUrl" `
+            --version "$version" `
+            Rodolfo.NonSleep
