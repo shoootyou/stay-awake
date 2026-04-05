@@ -31,3 +31,10 @@ Thumbs.db
 # Research artifacts (local only)
 .requests/
 .research/
+
+# Keys
+*.key
+*.csr
+*.cer
+*.pem
+*.p12
