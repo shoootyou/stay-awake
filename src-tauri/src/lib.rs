@@ -840,36 +840,39 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            match &event {
-                tauri::RunEvent::ExitRequested { api, code, .. } => {
-                    // Only prevent exit when triggered by all windows closing (code = None).
-                    // Allow explicit app.exit() calls (code = Some) so Quit works.
-                    if code.is_none() {
-                        api.prevent_exit();
+        .run(
+            #[allow(unused_variables)]
+            |app, event| {
+                match &event {
+                    tauri::RunEvent::ExitRequested { api, code, .. } => {
+                        // Only prevent exit when triggered by all windows closing (code = None).
+                        // Allow explicit app.exit() calls (code = Some) so Quit works.
+                        if code.is_none() {
+                            api.prevent_exit();
+                        }
                     }
-                }
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Ready => {
-                    // Set Accessory policy AFTER Tauri finishes setup,
-                    // otherwise Tauri overrides it during initialization.
-                    configure_macos_app();
-                }
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::WindowEvent {
-                    event: tauri::WindowEvent::Destroyed,
-                    ..
-                } => {
-                    // When all windows are closed, revert to Accessory (hide from Dock).
-                    let has_visible_windows = app
-                        .webview_windows()
-                        .values()
-                        .any(|w| w.is_visible().unwrap_or(false));
-                    if !has_visible_windows {
-                        set_macos_accessory_app();
+                    #[cfg(target_os = "macos")]
+                    tauri::RunEvent::Ready => {
+                        // Set Accessory policy AFTER Tauri finishes setup,
+                        // otherwise Tauri overrides it during initialization.
+                        configure_macos_app();
                     }
+                    #[cfg(target_os = "macos")]
+                    tauri::RunEvent::WindowEvent {
+                        event: tauri::WindowEvent::Destroyed,
+                        ..
+                    } => {
+                        // When all windows are closed, revert to Accessory (hide from Dock).
+                        let has_visible_windows = app
+                            .webview_windows()
+                            .values()
+                            .any(|w| w.is_visible().unwrap_or(false));
+                        if !has_visible_windows {
+                            set_macos_accessory_app();
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-        });
+            },
+        );
 }
