@@ -54,3 +54,4 @@ mode-desc-power = Prevents sleep using system power API. No mouse movement, no p
 mode-desc-subtle = Moves the mouse 1 pixel right then back. Barely visible.
 mode-desc-zen = Sends a zero-delta mouse event. Resets idle timer without any visible cursor movement.
 mode-desc-circle = Moves the mouse in a small circular pattern. Most visible but effective everywhere.
+tray-about = About

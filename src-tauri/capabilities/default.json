@@ -2,11 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capabilities for all windows",
-  "windows": ["settings"],
+  "windows": ["settings", "about"],
   "permissions": [
     "core:default",
     "global-shortcut:default",
     "autostart:default",
-    "updater:default"
+    "updater:default",
+    "shell:allow-open"
   ]
 }

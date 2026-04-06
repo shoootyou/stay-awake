@@ -54,3 +54,4 @@ mode-desc-power = Verhindert den Ruhezustand ueber die System-API. Keine Mausbew
 mode-desc-subtle = Bewegt die Maus 1 Pixel nach rechts und zurueck. Kaum sichtbar.
 mode-desc-zen = Sendet ein Maus-Ereignis ohne Verschiebung. Setzt den Inaktivitaetstimer zurueck, ohne den Cursor sichtbar zu bewegen.
 mode-desc-circle = Bewegt die Maus in einem kleinen Kreismuster. Am sichtbarsten, aber ueberall wirksam.
+tray-about = Über

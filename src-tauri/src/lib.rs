@@ -261,6 +261,11 @@ fn update_global_hotkey(
     Ok(())
 }
 
+#[tauri::command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 // ───────────────────────── Hotkey string parser ────────────────────────────
 
 /// Parse a human-readable shortcut string like `"CmdOrCtrl+Shift+J"` into a
@@ -385,6 +390,28 @@ fn show_settings_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Show the About window with version and author information.
+#[cfg(desktop)]
+fn show_about_window(app: &tauri::AppHandle) {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if let Some(win) = app.get_webview_window("about") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    } else {
+        let _ = WebviewWindowBuilder::new(
+            app,
+            "about",
+            WebviewUrl::App("about.html".into()),
+        )
+        .title("About No Sleep Please!")
+        .inner_size(360.0, 340.0)
+        .resizable(false)
+        .center()
+        .build();
+    }
+}
+
 // ──────────────────────── macOS app configuration ──────────────────────────
 
 /// Configure the macOS app as an Accessory (no Dock icon, no menu bar).
@@ -439,11 +466,13 @@ pub fn run() {
             load_profile,
             delete_profile,
             update_global_hotkey,
+            get_app_version,
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
             log::info!("Another instance attempted to start -- focusing existing instance");
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // ── Configuration ──────────────────────────────────────────
             let loaded_config = AppConfig::load().unwrap_or_else(|_| {
@@ -547,8 +576,11 @@ pub fn run() {
                 let sep1 = PredefinedMenuItem::separator(app)?;
                 let sep2 = PredefinedMenuItem::separator(app)?;
                 let sep3 = PredefinedMenuItem::separator(app)?;
+                let sep4 = PredefinedMenuItem::separator(app)?;
                 let settings_item =
                     MenuItem::with_id(app, "settings", tr("tray-settings"), true, None::<&str>)?;
+                let about_item =
+                    MenuItem::with_id(app, "about", tr("tray-about"), true, None::<&str>)?;
                 let quit_item =
                     MenuItem::with_id(app, "quit", tr("tray-quit"), true, None::<&str>)?;
 
@@ -562,6 +594,8 @@ pub fn run() {
                         &accessibility_item,
                         &sep3,
                         &settings_item,
+                        &about_item,
+                        &sep4,
                         &quit_item,
                     ],
                 )?;
@@ -666,6 +700,9 @@ pub fn run() {
                             }
                             "settings" => {
                                 show_settings_window(app);
+                            }
+                            "about" => {
+                                show_about_window(app);
                             }
                             "quit" => {
                                 // Ensure the engine is stopped before exiting.
