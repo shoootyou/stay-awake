@@ -54,13 +54,9 @@ impl MacMouseDriver {
 
     fn post_mouse_moved(dest: CGPoint) -> Result<(), String> {
         let source = Self::create_source()?;
-        let event = CGEvent::new_mouse_event(
-            source,
-            CGEventType::MouseMoved,
-            dest,
-            CGMouseButton::Left,
-        )
-        .map_err(|_| "Failed to create mouse-moved event".to_string())?;
+        let event =
+            CGEvent::new_mouse_event(source, CGEventType::MouseMoved, dest, CGMouseButton::Left)
+                .map_err(|_| "Failed to create mouse-moved event".to_string())?;
         event.post(CGEventTapLocation::HID);
         Ok(())
     }
@@ -144,10 +140,7 @@ impl PowerInhibitor for MacPowerInhibitor {
         if let Some(id) = self.assertion_id.take() {
             let result = unsafe { IOPMAssertionRelease(id) };
             if result != K_IO_RETURN_SUCCESS {
-                return Err(format!(
-                    "IOPMAssertionRelease failed with code: {}",
-                    result
-                ));
+                return Err(format!("IOPMAssertionRelease failed with code: {}", result));
             }
             log::info!("Sleep inhibition released");
         }

@@ -26,8 +26,7 @@ impl WinMouseDriver {
         let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: unsafe {
-                let mut u: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 =
-                    mem::zeroed();
+                let mut u: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 = mem::zeroed();
                 *u.Mouse_mut() = MOUSEINPUT {
                     dx,
                     dy,

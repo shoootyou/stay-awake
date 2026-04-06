@@ -65,7 +65,9 @@ pub fn t(bundle: &Bundle, id: &str) -> String {
         .and_then(|msg| msg.value())
         .map(|pattern| {
             let mut errors = vec![];
-            bundle.format_pattern(pattern, None, &mut errors).to_string()
+            bundle
+                .format_pattern(pattern, None, &mut errors)
+                .to_string()
         })
         .unwrap_or_else(|| id.to_string())
 }

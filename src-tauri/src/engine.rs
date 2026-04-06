@@ -33,7 +33,11 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
     }
     .to_string();
 
-    if !config.schedule_days.iter().any(|d| d.to_lowercase() == day_abbr) {
+    if !config
+        .schedule_days
+        .iter()
+        .any(|d| d.to_lowercase() == day_abbr)
+    {
         return false;
     }
 
@@ -42,8 +46,7 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
     let current_minutes = (hour as u16) * 60 + (minute as u16);
     let start_minutes =
         (config.schedule_start_hour as u16) * 60 + (config.schedule_start_minute as u16);
-    let end_minutes =
-        (config.schedule_end_hour as u16) * 60 + (config.schedule_end_minute as u16);
+    let end_minutes = (config.schedule_end_hour as u16) * 60 + (config.schedule_end_minute as u16);
 
     if start_minutes <= end_minutes {
         current_minutes >= start_minutes && current_minutes < end_minutes

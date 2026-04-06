@@ -35,7 +35,10 @@ impl MouseDriver for LinuxMouseDriver {
             .map_err(|e| format!("Failed to run xdotool: {}", e))?;
 
         if !output.status.success() {
-            return Err(format!("xdotool getmouselocation exited with {}", output.status));
+            return Err(format!(
+                "xdotool getmouselocation exited with {}",
+                output.status
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

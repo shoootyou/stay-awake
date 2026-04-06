@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   commitlint:
-    name: Lint commit messages
+    name: "Commit Style (conventional commits)"
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -31,7 +31,7 @@ jobs:
         run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
 
   lint-and-check:
-    name: Lint & Check
+    name: "Rust: Fmt & Clippy"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -72,7 +72,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   cargo-audit:
-    name: Security Audit
+    name: "Rust: Security Audit (CVE)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -82,7 +82,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    name: Build (${{ matrix.os }})
+    name: "Build: ${{ matrix.os }}"
     needs: [lint-and-check, cargo-audit]
     runs-on: ${{ matrix.os }}
     strategy:

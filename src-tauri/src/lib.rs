@@ -92,9 +92,7 @@ fn request_accessibility(
 #[tauri::command]
 fn get_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch()
-        .is_enabled()
-        .map_err(|e| e.to_string())
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
 /// Enable or disable launch-at-login via the OS autostart manager.
@@ -242,8 +240,8 @@ fn update_global_hotkey(
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     // Parse the new shortcut string.
-    let new_shortcut = parse_shortcut_string(&hotkey)
-        .ok_or_else(|| format!("Invalid shortcut: {}", hotkey))?;
+    let new_shortcut =
+        parse_shortcut_string(&hotkey).ok_or_else(|| format!("Invalid shortcut: {}", hotkey))?;
 
     // Unregister all existing shortcuts, then register the new one.
     let gs = app.global_shortcut();
@@ -271,9 +269,7 @@ fn get_app_version() -> String {
 /// Parse a human-readable shortcut string like `"CmdOrCtrl+Shift+J"` into a
 /// [`Shortcut`] that can be registered with the global-shortcut plugin.
 #[cfg(desktop)]
-fn parse_shortcut_string(
-    s: &str,
-) -> Option<tauri_plugin_global_shortcut::Shortcut> {
+fn parse_shortcut_string(s: &str) -> Option<tauri_plugin_global_shortcut::Shortcut> {
     use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
     let parts: Vec<&str> = s.split('+').map(|p| p.trim()).collect();
@@ -380,16 +376,12 @@ fn show_settings_window(app: &tauri::AppHandle) {
         let _ = win.show();
         let _ = win.set_focus();
     } else {
-        let _ = WebviewWindowBuilder::new(
-            app,
-            "settings",
-            WebviewUrl::App("settings.html".into()),
-        )
-        .title("No Sleep Please! Settings")
-        .inner_size(480.0, 720.0)
-        .resizable(false)
-        .center()
-        .build();
+        let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+            .title("No Sleep Please! Settings")
+            .inner_size(480.0, 720.0)
+            .resizable(false)
+            .center()
+            .build();
     }
 }
 
@@ -405,16 +397,12 @@ fn show_about_window(app: &tauri::AppHandle) {
         let _ = win.show();
         let _ = win.set_focus();
     } else {
-        let _ = WebviewWindowBuilder::new(
-            app,
-            "about",
-            WebviewUrl::App("about.html".into()),
-        )
-        .title("About No Sleep Please!")
-        .inner_size(360.0, 340.0)
-        .resizable(false)
-        .center()
-        .build();
+        let _ = WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
+            .title("About No Sleep Please!")
+            .inner_size(360.0, 340.0)
+            .resizable(false)
+            .center()
+            .build();
     }
 }
 
@@ -448,7 +436,8 @@ fn set_macos_regular_app() {
 
         // Set the app icon programmatically (works even in dev mode without a bundle).
         let icon_bytes = include_bytes!("../icons/icon.png");
-        let data = unsafe { NSData::dataWithBytes_length(icon_bytes.as_ptr().cast(), icon_bytes.len()) };
+        let data =
+            unsafe { NSData::dataWithBytes_length(icon_bytes.as_ptr().cast(), icon_bytes.len()) };
         if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
             unsafe { app.setApplicationIconImage(Some(&image)) };
         }
@@ -571,23 +560,33 @@ pub fn run() {
                 let text_inactive = format!("\u{25b6}\u{fe0f} {}", tr("tray-start"));
                 let text_active = format!("\u{1f7e2} {}", tr("tray-running"));
 
-                let toggle_item = MenuItem::with_id(
+                let toggle_item =
+                    MenuItem::with_id(app, "toggle_active", &text_active, true, None::<&str>)?;
+
+                let mode_power = MenuItem::with_id(
                     app,
-                    "toggle_active",
-                    &text_active,
+                    "mode_power",
+                    tr("tray-mode-power"),
                     true,
                     None::<&str>,
                 )?;
-
-                let mode_power =
-                    MenuItem::with_id(app, "mode_power", tr("tray-mode-power"), true, None::<&str>)?;
-                let mode_subtle =
-                    MenuItem::with_id(app, "mode_subtle", tr("tray-mode-subtle"), true, None::<&str>)?;
+                let mode_subtle = MenuItem::with_id(
+                    app,
+                    "mode_subtle",
+                    tr("tray-mode-subtle"),
+                    true,
+                    None::<&str>,
+                )?;
                 let mode_zen =
                     MenuItem::with_id(app, "mode_zen", tr("tray-mode-zen"), true, None::<&str>)?;
 
-                let mode_circle =
-                    MenuItem::with_id(app, "mode_circle", tr("tray-mode-circle"), true, None::<&str>)?;
+                let mode_circle = MenuItem::with_id(
+                    app,
+                    "mode_circle",
+                    tr("tray-mode-circle"),
+                    true,
+                    None::<&str>,
+                )?;
 
                 let mode_submenu = Submenu::with_id_and_items(
                     app,
@@ -601,7 +600,10 @@ pub fn run() {
                 let (acc_text, acc_enabled) = if has_accessibility {
                     (format!("\u{1f7e2} {}", tr("tray-accessibility-ok")), false)
                 } else {
-                    (format!("\u{26a0}\u{fe0f} {}", tr("tray-grant-accessibility")), true)
+                    (
+                        format!("\u{26a0}\u{fe0f} {}", tr("tray-grant-accessibility")),
+                        true,
+                    )
                 };
                 let accessibility_item = MenuItem::with_id(
                     app,
@@ -687,11 +689,7 @@ pub fn run() {
                                     };
                                     let _ = toggle_clone.set_text(label);
                                     if let Some(tray) = app.tray_by_id("main") {
-                                        let tip = if active {
-                                            &tip_active
-                                        } else {
-                                            &tip_inactive
-                                        };
+                                        let tip = if active { &tip_active } else { &tip_inactive };
                                         let _ = tray.set_tooltip(Some(tip.as_str()));
                                         let icon = if active {
                                             active_icon_clone.clone()
