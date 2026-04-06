@@ -373,6 +373,9 @@ fn parse_shortcut_string(
 fn show_settings_window(app: &tauri::AppHandle) {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
+    #[cfg(target_os = "macos")]
+    set_macos_regular_app();
+
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -394,6 +397,9 @@ fn show_settings_window(app: &tauri::AppHandle) {
 #[cfg(desktop)]
 fn show_about_window(app: &tauri::AppHandle) {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[cfg(target_os = "macos")]
+    set_macos_regular_app();
 
     if let Some(win) = app.get_webview_window("about") {
         let _ = win.show();
@@ -426,6 +432,30 @@ fn configure_macos_app() {
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let empty_menu = NSMenu::new(mtm);
         app.setMainMenu(Some(&empty_menu));
+    }
+}
+
+/// Temporarily promote to Regular app (shows in Dock + Cmd-Tab with proper icon).
+#[cfg(target_os = "macos")]
+fn set_macos_regular_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    }
+}
+
+/// Demote back to Accessory (hides from Dock + Cmd-Tab).
+#[cfg(target_os = "macos")]
+fn set_macos_accessory_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     }
 }
 
@@ -804,7 +834,7 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
             match &event {
                 tauri::RunEvent::ExitRequested { api, code, .. } => {
                     // Only prevent exit when triggered by all windows closing (code = None).
@@ -818,6 +848,20 @@ pub fn run() {
                     // Set Accessory policy AFTER Tauri finishes setup,
                     // otherwise Tauri overrides it during initialization.
                     configure_macos_app();
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::Destroyed,
+                    ..
+                } => {
+                    // When all windows are closed, revert to Accessory (hide from Dock).
+                    let has_visible_windows = app
+                        .webview_windows()
+                        .values()
+                        .any(|w| w.is_visible().unwrap_or(false));
+                    if !has_visible_windows {
+                        set_macos_accessory_app();
+                    }
                 }
                 _ => {}
             }
