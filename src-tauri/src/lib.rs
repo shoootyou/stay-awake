@@ -599,6 +599,7 @@ pub fn run() {
 
                 TrayIconBuilder::with_id("main")
                     .icon(active_icon)
+                    .icon_as_template(true)
                     .tooltip(&tip_active)
                     .menu(&menu)
                     .show_menu_on_left_click(true)
