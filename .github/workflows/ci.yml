@@ -83,7 +83,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.os }})
-    needs: lint-and-check
+    needs: [lint-and-check, cargo-audit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
