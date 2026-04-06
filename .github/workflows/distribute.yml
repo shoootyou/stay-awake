@@ -1,11 +1,18 @@
 name: Distribute
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to distribute (e.g. 0.1.0)"
+        required: true
 
-# Runs after a draft release is manually published.
-# Updates package-manager manifests so users get the new version.
+# Disabled until macOS release is validated.
+# Re-enable by changing 'on:' back to:
+#   release:
+#     types: [published]
+#
+# Also update package manager manifests with the correct version/sha256.
 
 jobs:
   update-homebrew:
@@ -15,17 +22,17 @@ jobs:
     steps:
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Download DMG and compute SHA256
         run: |
-          DMG_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/No-Sleep-Please!_${{ steps.version.outputs.tag }}_aarch64.dmg"
+          VERSION="${{ steps.version.outputs.tag }}"
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/No.Sleep.Please_${VERSION}_aarch64.dmg"
           curl -fSL "$DMG_URL" -o no-sleep-please.dmg
           SHA256=$(shasum -a 256 no-sleep-please.dmg | awk '{print $1}')
           echo "SHA256=$SHA256" >> "$GITHUB_ENV"
           echo "Computed SHA256: $SHA256"
 
-      # TODO: Replace with your actual homebrew-tap repository
       - name: Checkout Homebrew tap
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -42,12 +49,12 @@ jobs:
             version "$VERSION"
             sha256 "$SHA256"
 
-            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/No-Sleep-Please!_#{version}_aarch64.dmg"
-            name "No Sleep Please!"
+            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/No.Sleep.Please_#{version}_aarch64.dmg"
+            name "No Sleep Please"
             desc "Keep your computer awake and active"
             homepage "https://github.com/${{ github.repository }}"
 
-            app "No Sleep Please!.app"
+            app "No Sleep Please.app"
 
             zap trash: [
               "~/Library/Application Support/com.shoootyou.no-sleep-please",
