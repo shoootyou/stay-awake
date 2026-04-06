@@ -31,6 +31,7 @@ Thumbs.db
 # Research artifacts (local only)
 .requests/
 .research/
+.github/conversations
 
 # Keys
 *.key

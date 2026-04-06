@@ -3,6 +3,15 @@ const { invoke } = window.__TAURI__.core;
 
 let originalConfig = {};
 
+const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+
+function formatHotkeyDisplay(hotkey) {
+  return hotkey
+    .replace("CmdOrCtrl", isMac ? "\u2318 Cmd" : "Ctrl")
+    .replace("Shift", "\u21e7 Shift")
+    .replace("Alt", "\u2325 Alt");
+}
+
 // Translate all elements with data-i18n attributes.
 async function applyTranslations() {
   const elements = document.querySelectorAll("[data-i18n]");
@@ -32,7 +41,7 @@ async function loadConfig() {
     document.getElementById("app-mode").value = cfg.mode;
     document.getElementById("autostart").checked = cfg.autostart;
     document.getElementById("language").value = cfg.language;
-    document.getElementById("hotkey").textContent = cfg.global_hotkey;
+    document.getElementById("hotkey").textContent = formatHotkeyDisplay(cfg.global_hotkey);
 
     // Schedule fields
     document.getElementById("schedule-enabled").checked = cfg.schedule_enabled || false;
@@ -195,16 +204,16 @@ function setupHotkeyRecorder() {
 
   function buildDisplay(e) {
     const parts = [];
-    if (e.metaKey) parts.push("\u2318");
+    if (e.metaKey) parts.push("\u2318 Cmd");
     if (e.ctrlKey && !e.metaKey) parts.push("Ctrl");
-    if (e.altKey) parts.push("\u2325");
-    if (e.shiftKey) parts.push("\u21e7");
+    if (e.altKey) parts.push("\u2325 Alt");
+    if (e.shiftKey) parts.push("\u21e7 Shift");
     return parts;
   }
 
   btn.addEventListener("click", () => {
     if (isRecording) {
-      kbd.textContent = originalConfig.global_hotkey;
+      kbd.textContent = formatHotkeyDisplay(originalConfig.global_hotkey);
       stopRecording();
       return;
     }
@@ -222,7 +231,7 @@ function setupHotkeyRecorder() {
     e.stopPropagation();
 
     if (e.key === "Escape") {
-      kbd.textContent = originalConfig.global_hotkey;
+      kbd.textContent = formatHotkeyDisplay(originalConfig.global_hotkey);
       stopRecording();
       return;
     }
@@ -259,7 +268,7 @@ function setupHotkeyRecorder() {
       originalConfig.global_hotkey = shortcutStr;
     } catch (err) {
       console.error("Failed to update hotkey:", err);
-      kbd.textContent = originalConfig.global_hotkey;
+      kbd.textContent = formatHotkeyDisplay(originalConfig.global_hotkey);
     }
   });
 
