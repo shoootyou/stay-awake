@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Rust build output
+target/
+
+# Tauri build output
+dist/
+
+# macOS installer artifacts
+*.dmg
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Research artifacts (local only)
+.requests/
+.research/
+.github/conversations
+
+# Keys
+*.key
+*.csr
+*.cer
+*.pem
+*.p12

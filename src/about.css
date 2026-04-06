@@ -1,0 +1,107 @@
+@font-face {
+  font-family: "Inter";
+  src: url("./fonts/Inter.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("./fonts/Geist.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --bg: #f5f5f7;
+  --text: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --accent: #6366f1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --text: #f5f5f7;
+    --text-secondary: #98989d;
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.about {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.app-icon {
+  border-radius: 22px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+}
+
+.app-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.app-version {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.app-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 16px;
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+.meta {
+  margin-top: 20px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.links {
+  margin-top: 6px;
+}
+
+.links a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.links a:hover {
+  text-decoration: underline;
+}
+
+.credit {
+  margin-top: 20px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.heart {
+  color: #ef4444;
+}

@@ -1,0 +1,84 @@
+name: Distribute
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to distribute (e.g. 0.1.0)"
+        required: true
+
+# Disabled until macOS release is validated.
+# Re-enable by changing 'on:' back to:
+#   release:
+#     types: [published]
+#
+# Also update package manager manifests with the correct version/sha256.
+
+jobs:
+  update-homebrew:
+    name: Update Homebrew Cask
+    runs-on: macos-latest
+    environment: public
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Download DMG and compute SHA256
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/No.Sleep.Please_${VERSION}_aarch64.dmg"
+          curl -fSL "$DMG_URL" -o no-sleep-please.dmg
+          SHA256=$(shasum -a 256 no-sleep-please.dmg | awk '{print $1}')
+          echo "SHA256=$SHA256" >> "$GITHUB_ENV"
+          echo "Computed SHA256: $SHA256"
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: shoootyou/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update cask formula
+        working-directory: homebrew-tap
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          cat > Casks/no-sleep-please.rb << EOF
+          cask "no-sleep-please" do
+            version "$VERSION"
+            sha256 "$SHA256"
+
+            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/No.Sleep.Please_#{version}_aarch64.dmg"
+            name "No Sleep Please"
+            desc "Keep your computer awake and active"
+            homepage "https://github.com/${{ github.repository }}"
+
+            app "No Sleep Please.app"
+
+            zap trash: [
+              "~/Library/Application Support/com.shoootyou.no-sleep-please",
+              "~/Library/Preferences/com.shoootyou.no-sleep-please.plist",
+            ]
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/no-sleep-please.rb
+          git commit -m "no-sleep-please ${{ steps.version.outputs.tag }}"
+          git push
+
+  update-winget:
+    name: Update winget manifest
+    runs-on: windows-latest
+    environment: public
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: shoootyou.NoSleepPlease
+          installers-regex: '\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}

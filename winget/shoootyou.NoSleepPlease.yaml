@@ -1,0 +1,32 @@
+# Automatically generated -- do not edit manually.
+# Submit to https://github.com/microsoft/winget-pkgs
+PackageIdentifier: shoootyou.NoSleepPlease
+PackageVersion: 0.1.0
+PackageName: No Sleep Please!
+Publisher: Rodolfo Castelo
+License: MIT
+LicenseUrl: https://github.com/shoootyou/non-sleep-please/blob/main/LICENSE
+ShortDescription: Cross-platform mouse jiggler and anti-inactivity tool
+Description: >-
+  No Sleep Please! prevents your computer from sleeping or appearing inactive.
+  It uses system power assertions by default and optionally moves the mouse
+  in configurable patterns. Features include scheduling, profiles, i18n
+  (8 languages), and a system tray interface.
+Tags:
+  - mouse-jiggler
+  - anti-sleep
+  - keep-awake
+  - productivity
+  - tray-app
+Moniker: no-sleep-please
+PackageUrl: https://github.com/shoootyou/non-sleep-please
+InstallerType: nsis
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/shoootyou/non-sleep-please/releases/download/v0.1.0/No-Sleep-Please!_0.1.0_x64-setup.nsis.exe
+    InstallerSha256: REPLACE_WITH_SHA256
+  - Architecture: arm64
+    InstallerUrl: https://github.com/shoootyou/non-sleep-please/releases/download/v0.1.0/No-Sleep-Please!_0.1.0_arm64-setup.nsis.exe
+    InstallerSha256: REPLACE_WITH_SHA256
+ManifestType: singleton
+ManifestVersion: 1.6.0
