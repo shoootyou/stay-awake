@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/shoootyou/non-sleep-please/compare/non-sleep-v0.2.0...non-sleep-v0.3.0) (2026-04-06)
+
+
+### Features
+
+* initial implementation — No Sleep Please v0.1.0 ([#1](https://github.com/shoootyou/non-sleep-please/issues/1)) ([aabdf0f](https://github.com/shoootyou/non-sleep-please/commit/aabdf0fd5ab2e6089a1d14f071a24335e2817b27))
+* update version to 0.2.0 and enhance CI/CD workflows ([f7d0f25](https://github.com/shoootyou/non-sleep-please/commit/f7d0f251fc6bf3bfae965bea1e0c6e81a8c393ca))
+
 ## [0.2.0](https://github.com/shoootyou/non-sleep-please/compare/non-sleep-v0.1.0...non-sleep-v0.2.0) (2026-04-06)
 
 
