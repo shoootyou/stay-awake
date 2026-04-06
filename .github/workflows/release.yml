@@ -2,11 +2,10 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
-# Required secrets in the "public" GitHub environment
-# (Settings → Environments → public → Environment secrets):
+# Required secrets in the "public" GitHub environment:
 #
 # macOS code signing & notarization:
 #   APPLE_CERTIFICATE            — Base64-encoded .p12 Developer ID Application certificate
@@ -16,24 +15,41 @@ on:
 #   APPLE_PASSWORD               — App-specific password (appleid.apple.com → Security)
 #   APPLE_TEAM_ID                — 10-character Apple Developer Team ID
 #
-# Windows code signing / updater signing:
+# Updater signing:
 #   TAURI_SIGNING_PRIVATE_KEY          — Ed25519 private key for signing updater bundles
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — Password for the signing key
 
 jobs:
-  build-and-release:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  # ── Job 1: Create/update the release PR via release-please ──────────────────
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@7987652d64b4581673a76e33ad5e98e3dd56832f # v4.1.3
+        id: release
+        with:
+          release-type: rust
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Job 2: Build macOS DMG — only when a new release was created ────────────
+  build-macos:
+    name: Build macOS
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: macos-latest
     environment: public
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest]
-        # os: [macos-latest, windows-latest]  # add windows-latest after macOS is validated
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
@@ -54,13 +70,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: release-cargo-${{ matrix.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: release-cargo-macos-latest-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            release-cargo-${{ matrix.os }}-
+            release-cargo-macos-latest-
 
-      # ── macOS: import signing certificate into a temporary keychain ──
       - name: Import Apple certificate
-        if: runner.os == 'macOS'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -87,31 +101,27 @@ jobs:
 
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
-      # ── Build, bundle, and upload release assets via tauri-action ──
-      - name: Build and release with Tauri
+      - name: Build and upload release assets
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS signing & notarization
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows / updater signing
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "No Sleep Please ${{ github.ref_name }}"
+          tagName: ${{ needs.release-please.outputs.tag_name }}
+          releaseName: "No Sleep Please ${{ needs.release-please.outputs.tag_name }}"
           releaseBody: "See the assets below for download links."
           releaseDraft: false
           prerelease: false
           args: --verbose
 
-      # ── macOS: clean up temporary keychain ──
       - name: Clean up keychain
-        if: runner.os == 'macOS' && always()
+        if: always()
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
