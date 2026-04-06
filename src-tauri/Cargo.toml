@@ -1,6 +1,6 @@
 [package]
 name = "non-sleep"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cross-platform mouse jiggler and anti-inactivity tool"
 authors = ["Rodolfo Castelo <shoootyou>"]
 edition = "2021"
