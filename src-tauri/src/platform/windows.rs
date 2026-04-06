@@ -25,17 +25,15 @@ impl WinMouseDriver {
     fn send_mouse_input(dx: i32, dy: i32) -> Result<(), String> {
         let input = INPUT {
             r#type: INPUT_MOUSE,
-            Anonymous: unsafe {
-                let mut u: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 = mem::zeroed();
-                *u.Mouse_mut() = MOUSEINPUT {
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                mi: MOUSEINPUT {
                     dx,
                     dy,
                     mouseData: 0,
                     dwFlags: MOUSEEVENTF_MOVE,
                     time: 0,
                     dwExtraInfo: 0,
-                };
-                u
+                },
             },
         };
 
