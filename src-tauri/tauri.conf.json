@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "No Sleep Please!",
+  "productName": "No Sleep Please",
   "version": "0.1.0",
   "identifier": "com.shoootyou.no-sleep-please",
   "build": {
@@ -29,7 +29,10 @@
     "copyright": "Copyright (c) 2025 Rodolfo Castelo. MIT License.",
     "createUpdaterArtifacts": true,
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "infoPlist": {
+        "LSRequiresCarbon": false
+      }
     }
   },
   "plugins": {
