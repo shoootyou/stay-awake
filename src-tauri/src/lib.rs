@@ -438,12 +438,20 @@ fn configure_macos_app() {
 /// Temporarily promote to Regular app (shows in Dock + Cmd-Tab with proper icon).
 #[cfg(target_os = "macos")]
 fn set_macos_regular_app() {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage};
+    use objc2_foundation::NSData;
 
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+
+        // Set the app icon programmatically (works even in dev mode without a bundle).
+        let icon_bytes = include_bytes!("../icons/icon.png");
+        let data = unsafe { NSData::dataWithBytes_length(icon_bytes.as_ptr().cast(), icon_bytes.len()) };
+        if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+            unsafe { app.setApplicationIconImage(Some(&image)) };
+        }
     }
 }
 
