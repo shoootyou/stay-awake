@@ -583,13 +583,14 @@ pub fn run() {
                 let tip_active_for_sc = tip_active.clone();
                 let tip_inactive_for_sc = tip_inactive.clone();
 
-                let default_icon = app.default_window_icon().unwrap();
+                let tray_icon_bytes = include_bytes!("../icons/tray-icon@2x.png");
+                let tray_img = tauri::image::Image::from_bytes(tray_icon_bytes).expect("tray icon");
                 let active_icon = tauri::image::Image::new_owned(
-                    default_icon.rgba().to_vec(),
-                    default_icon.width(),
-                    default_icon.height(),
+                    tray_img.rgba().to_vec(),
+                    tray_img.width(),
+                    tray_img.height(),
                 );
-                let inactive_icon = create_dimmed_icon(default_icon);
+                let inactive_icon = create_dimmed_icon(&tray_img);
                 let active_icon_clone = active_icon.clone();
                 let inactive_icon_clone = inactive_icon.clone();
                 // Extra clones for the global shortcut handler closure.
