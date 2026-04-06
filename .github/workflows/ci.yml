@@ -74,16 +74,23 @@ jobs:
   cargo-audit:
     name: "Rust: Security Audit (CVE)"
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Run cargo audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          toolchain: stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
 
   build:
     name: "Build: ${{ matrix.os }}"
-    needs: [lint-and-check, cargo-audit]
+    needs: [commitlint, lint-and-check, cargo-audit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

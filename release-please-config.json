@@ -6,7 +6,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "src-tauri/tauri.conf.json",
+          "path": "tauri.conf.json",
           "jsonpath": "$.version"
         }
       ]
