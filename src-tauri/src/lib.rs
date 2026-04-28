@@ -35,14 +35,29 @@ fn save_config(
     new_config: AppConfig,
     state: tauri::State<'_, Arc<Mutex<AppConfig>>>,
 ) -> Result<(), String> {
+    // Validate config fields.
+    if new_config.interval_secs == 0 {
+        return Err("Interval must be at least 1 second".to_string());
+    }
+    if new_config.schedule_start_hour > 23 || new_config.schedule_start_minute > 59 {
+        return Err("Invalid schedule start time".to_string());
+    }
+    if new_config.schedule_end_hour > 23 || new_config.schedule_end_minute > 59 {
+        return Err("Invalid schedule end time".to_string());
+    }
+
     // Sync autostart with the new config value.
     {
         use tauri_plugin_autostart::ManagerExt;
         let manager = app.autolaunch();
         if new_config.autostart {
-            let _ = manager.enable();
+            if let Err(e) = manager.enable() {
+                log::warn!("Failed to enable autostart: {}", e);
+            }
         } else {
-            let _ = manager.disable();
+            if let Err(e) = manager.disable() {
+                log::warn!("Failed to disable autostart: {}", e);
+            }
         }
     }
 
@@ -161,6 +176,17 @@ fn save_profile(
         .lock()
         .map_err(|e| format!("Config lock poisoned: {}", e))?;
 
+    // Reject empty or excessively long names.
+    let name = name.trim().to_string();
+    if name.is_empty() || name.len() > 64 {
+        return Err("Profile name must be 1–64 characters".to_string());
+    }
+
+    // Cap total profiles.
+    if cfg.profiles.len() >= 50 && !cfg.profiles.iter().any(|p| p.name == name) {
+        return Err("Maximum of 50 profiles reached".to_string());
+    }
+
     let profile = Profile {
         name: name.clone(),
         jiggle_mode: cfg.jiggle_mode.clone(),
@@ -251,7 +277,10 @@ fn update_global_hotkey(
         .map_err(|e| format!("Failed to register shortcut: {}", e))?;
 
     // Persist to config.
-    if let Ok(mut cfg) = config.lock() {
+    {
+        let mut cfg = config
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
         cfg.global_hotkey = hotkey;
         cfg.save()?;
     }
@@ -375,13 +404,15 @@ fn show_settings_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
-    } else {
-        let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    } else if let Err(e) =
+        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
             .title("No Sleep Please! Settings")
             .inner_size(480.0, 720.0)
             .resizable(false)
             .center()
-            .build();
+            .build()
+    {
+        log::error!("Failed to create settings window: {}", e);
     }
 }
 
@@ -396,13 +427,15 @@ fn show_about_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("about") {
         let _ = win.show();
         let _ = win.set_focus();
-    } else {
-        let _ = WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
+    } else if let Err(e) =
+        WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
             .title("About No Sleep Please!")
             .inner_size(360.0, 340.0)
             .resizable(false)
             .center()
-            .build();
+            .build()
+    {
+        log::error!("Failed to create about window: {}", e);
     }
 }
 
@@ -680,7 +713,10 @@ pub fn run() {
                         match event.id().as_ref() {
                             "toggle_active" => {
                                 if let Ok(mut eng) = engine_for_tray.lock() {
-                                    let _ = eng.toggle();
+                                    if let Err(e) = eng.toggle() {
+                                        log::error!("Engine toggle failed: {}", e);
+                                        return;
+                                    }
                                     let active = eng.is_active();
                                     let label = if active {
                                         &text_active_clone
@@ -788,7 +824,10 @@ pub fn run() {
                             .with_handler(move |app, _shortcut, event| {
                                 if matches!(event.state(), ShortcutState::Pressed) {
                                     if let Ok(mut eng) = engine_for_shortcut.lock() {
-                                        let _ = eng.toggle();
+                                        if let Err(e) = eng.toggle() {
+                                            log::error!("Engine toggle via shortcut failed: {}", e);
+                                            return;
+                                        }
                                         let active = eng.is_active();
                                         // Update toggle menu item text.
                                         let label = if active {
