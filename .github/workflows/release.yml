@@ -23,10 +23,12 @@ concurrency:
 # macOS code signing & notarization:
 #   APPLE_CERTIFICATE            — Base64-encoded .p12 Developer ID Application certificate
 #   APPLE_CERTIFICATE_PASSWORD   — Password for the .p12 file
-#   APPLE_SIGNING_IDENTITY       — e.g. "Developer ID Application: Your Name (TEAM_ID)"
 #   APPLE_ID                     — Apple ID email for notarization
 #   APPLE_PASSWORD               — App-specific password (appleid.apple.com → Security)
 #   APPLE_TEAM_ID                — 10-character Apple Developer Team ID
+#
+# Required variables in the "public" GitHub environment:
+#   APPLE_SIGNING_IDENTITY       — e.g. "Developer ID Application: Your Name (TEAM_ID)"
 #
 # Updater signing:
 #   TAURI_SIGNING_PRIVATE_KEY          — Ed25519 private key for signing updater bundles
@@ -49,6 +51,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
         with:
           toolchain: stable
+          cache-workspaces: src-tauri
 
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
@@ -95,13 +98,14 @@ jobs:
             -k "$KEYCHAIN_PASSWORD" \
             "$KEYCHAIN_PATH"
 
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          # Prepend new keychain to search list (don't replace existing ones)
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -135,6 +139,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
         with:
           toolchain: stable
+          cache-workspaces: src-tauri
 
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
