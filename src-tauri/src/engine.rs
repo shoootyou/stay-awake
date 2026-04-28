@@ -132,7 +132,7 @@ impl Engine {
                 let cfg = config.lock().map(|c| c.clone()).unwrap_or_default();
 
                 // Sleep in small increments so we can honour a stop request quickly.
-                let total = Duration::from_secs(cfg.interval_secs);
+                let total = Duration::from_secs(cfg.interval_secs.max(1));
                 let step = Duration::from_millis(250);
                 let mut elapsed = Duration::ZERO;
                 while elapsed < total && running.load(Ordering::Relaxed) {

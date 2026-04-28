@@ -33,7 +33,7 @@ extern "C" {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrusted() -> u8;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ pub struct MacPermissionChecker;
 
 impl PermissionChecker for MacPermissionChecker {
     fn check_accessibility(&self) -> bool {
-        unsafe { AXIsProcessTrusted() }
+        unsafe { AXIsProcessTrusted() != 0 }
     }
 
     fn request_accessibility(&self) -> Result<(), String> {

@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; img-src 'self' asset: https://asset.localhost; connect-src ipc: http://ipc.localhost https://github.com https://api.github.com"
+      "csp": "default-src 'self'; style-src 'self'; font-src 'self'; script-src 'self'; img-src 'self' asset: https://asset.localhost; connect-src ipc: http://ipc.localhost https://github.com https://api.github.com"
     }
   },
   "bundle": {
@@ -33,6 +33,9 @@
     }
   },
   "plugins": {
+    "shell": {
+      "open": "^https://github\\.com/shoootyou/non-sleep-please"
+    },
     "updater": {
       "endpoints": [
         "https://github.com/shoootyou/non-sleep-please/releases/latest/download/latest.json"

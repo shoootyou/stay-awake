@@ -121,6 +121,8 @@ impl AppConfig {
     }
 
     /// Save the current configuration to disk, creating the directory if needed.
+    ///
+    /// Uses atomic write-then-rename to prevent data loss on crash.
     pub fn save(&self) -> Result<(), String> {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
@@ -129,6 +131,8 @@ impl AppConfig {
         }
         let contents = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        fs::write(&path, contents).map_err(|e| format!("Failed to write config: {}", e))
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, contents).map_err(|e| format!("Failed to write config: {}", e))?;
+        fs::rename(&tmp, &path).map_err(|e| format!("Failed to commit config: {}", e))
     }
 }

@@ -7,6 +7,12 @@ on:
         description: "Version to distribute (e.g. 0.1.0)"
         required: true
 
+permissions: {}
+
+concurrency:
+  group: distribute-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
 # Disabled until macOS release is validated.
 # Re-enable by changing 'on:' back to:
 #   release:

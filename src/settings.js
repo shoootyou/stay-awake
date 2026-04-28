@@ -105,8 +105,10 @@ async function checkAccessibility() {
 }
 
 async function autoSave() {
-  const startParts = document.getElementById("schedule-start").value.split(":");
-  const endParts = document.getElementById("schedule-end").value.split(":");
+  const startVal = document.getElementById("schedule-start").value;
+  const endVal = document.getElementById("schedule-end").value;
+  const startParts = startVal ? startVal.split(":") : ["9", "0"];
+  const endParts = endVal ? endVal.split(":") : ["17", "0"];
 
   const scheduleDays = [];
   document.querySelectorAll(".day-checkboxes input:checked").forEach((cb) => {
@@ -121,10 +123,10 @@ async function autoSave() {
     language: document.getElementById("language").value,
     global_hotkey: originalConfig.global_hotkey,
     schedule_enabled: document.getElementById("schedule-enabled").checked,
-    schedule_start_hour: parseInt(startParts[0], 10),
-    schedule_start_minute: parseInt(startParts[1], 10),
-    schedule_end_hour: parseInt(endParts[0], 10),
-    schedule_end_minute: parseInt(endParts[1], 10),
+    schedule_start_hour: parseInt(startParts[0], 10) || 0,
+    schedule_start_minute: parseInt(startParts[1], 10) || 0,
+    schedule_end_hour: parseInt(endParts[0], 10) || 0,
+    schedule_end_minute: parseInt(endParts[1], 10) || 0,
     schedule_days: scheduleDays,
     profiles: originalConfig.profiles || [],
     active_profile: document.getElementById("profile-select").value || "Default",
@@ -153,11 +155,13 @@ async function grantAccessibility() {
 }
 
 async function saveProfileAs() {
-  const name = prompt("Profile name:");
-  if (!name || !name.trim()) return;
+  const raw = prompt("Profile name:");
+  if (!raw || !raw.trim()) return;
+  const name = raw.trim().replace(/[\/\\:*?"<>|.\x00]/g, "").substring(0, 64);
+  if (!name) return;
   try {
-    await invoke("save_profile", { name: name.trim() });
-    await loadProfiles(name.trim());
+    await invoke("save_profile", { name });
+    await loadProfiles(name);
   } catch (e) {
     console.error("Failed to save profile:", e);
   }
