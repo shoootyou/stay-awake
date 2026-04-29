@@ -869,7 +869,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 app.handle().plugin(tauri_plugin_autostart::init(
-                    tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                    tauri_plugin_autostart::MacosLauncher::AppleScript,
                     None,
                 ))?;
             }
