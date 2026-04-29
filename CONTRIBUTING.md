@@ -1,4 +1,4 @@
-# Contributing to No Sleep Please!
+# Contributing to Stay Awake
 
 Thank you for your interest in contributing! This document covers the conventions
 used in this project.

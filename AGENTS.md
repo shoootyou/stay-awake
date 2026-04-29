@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> Agent-facing documentation for **No Sleep Please** — a cross-platform mouse jiggler
+> Agent-facing documentation for **Stay Awake** — a cross-platform mouse jiggler
 > and anti-inactivity tray app built with Rust + Tauri v2.
 
 ---
@@ -9,8 +9,8 @@
 
 | Field           | Value                                      |
 |-----------------|--------------------------------------------|
-| Name            | No Sleep Please                            |
-| Identifier      | `com.shoootyou.no-sleep-please`            |
+| Name            | Stay Awake                                 |
+| Identifier      | `com.shoootyou.stay-awake`                 |
 | Stack           | Rust (backend) + HTML/CSS/JS (frontend)    |
 | Framework       | [Tauri v2](https://v2.tauri.app)           |
 | Platforms       | macOS, Windows, Linux                      |
@@ -263,6 +263,6 @@ npx tauri build      # production .app bundle
 ```
 
 ### Debugging tray/menu issues
-- macOS: check Console.app for `non-sleep` or `runningboardd` messages
+- macOS: check Console.app for `stay-awake` or `runningboardd` messages
 - The app sets `ActivationPolicy::Accessory` (no Dock icon by default)
 - Windows open temporarily switch to `ActivationPolicy::Regular`

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0] — Unreleased
+
+### Features
+
+* **Rebrand**: renamed from "No Sleep Please" to "Stay Awake" to avoid MDM name-based blocklists
+
+---
+
+_Historical entries below reference the former `non-sleep-please` repository._
+
 ## [0.3.0](https://github.com/shoootyou/non-sleep-please/compare/non-sleep-v0.2.0...non-sleep-v0.3.0) (2026-04-06)
 
 

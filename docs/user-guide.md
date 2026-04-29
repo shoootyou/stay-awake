@@ -1,6 +1,6 @@
 # User Guide
 
-No Sleep Please! is a lightweight tray utility that prevents your computer from going idle.
+Stay Awake is a lightweight tray utility that prevents your computer from going idle.
 It runs quietly in your system tray (macOS menu bar or Windows notification area)
 and keeps your machine awake using one of several configurable methods.
 
@@ -8,7 +8,7 @@ and keeps your machine awake using one of several configurable methods.
 
 ## Getting Started
 
-After launching No Sleep Please!, you will see an icon in your system tray. The app does
+After launching Stay Awake, you will see an icon in your system tray. The app does
 **not** open a window by default — everything is controlled from the tray menu.
 
 - **Left-click** or **right-click** the tray icon to open the menu.
@@ -31,7 +31,7 @@ on macOS, `Ctrl+Shift+J` on Windows).
 
 ### Mode
 
-Choose how No Sleep Please! keeps your computer awake. See [Modes](#modes) below for details.
+Choose how Stay Awake keeps your computer awake. See [Modes](#modes) below for details.
 
 ### Accessibility (macOS only)
 
@@ -55,7 +55,7 @@ Stops the engine and exits the application.
 
 ## Modes
 
-No Sleep Please! supports four modes. Each mode keeps your computer from going idle, but
+Stay Awake supports four modes. Each mode keeps your computer from going idle, but
 they differ in *how* they do it.
 
 ### Power Only (default)
@@ -101,7 +101,7 @@ Open from the tray menu via **Settings**. Changes take effect immediately when s
 | **Mode** | Select a mode (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 seconds). Default: 30 seconds. |
 | **App Mode** | Reserved for future use. |
-| **Autostart** | Launch No Sleep Please! automatically when you log in. |
+| **Autostart** | Launch Stay Awake automatically when you log in. |
 | **Language** | Language preference (currently English only). |
 | **Hotkey** | Shows the current global shortcut. |
 
@@ -125,7 +125,7 @@ the tray menu.
 
 ## Idle Detection
 
-When a mouse-based mode is active, No Sleep Please! checks if you have moved the cursor
+When a mouse-based mode is active, Stay Awake checks if you have moved the cursor
 since the last cycle. If you are actively using the mouse, it **skips** the
 simulated movement to avoid interfering with your work.
 
@@ -141,8 +141,8 @@ To grant the permission:
 
 1. Click **Grant Accessibility** in the tray menu (or the banner in Settings).
 2. System Settings will open to **Privacy & Security > Accessibility**.
-3. Enable **No Sleep Please!** in the list.
-4. Return to No Sleep Please! — the status will update to "Accessibility OK".
+3. Enable **Stay Awake** in the list.
+4. Return to Stay Awake — the status will update to "Accessibility OK".
 
 The **Power Only** mode does **not** need this permission.
 
@@ -150,12 +150,12 @@ The **Power Only** mode does **not** need this permission.
 
 ## Configuration File
 
-No Sleep Please! stores its settings as a JSON file in your system's config directory:
+Stay Awake stores its settings as a JSON file in your system's config directory:
 
 | Platform | Path |
 |----------|------|
-| macOS | `~/Library/Application Support/non-sleep/config.json` |
-| Windows | `%APPDATA%\non-sleep\config.json` |
+| macOS | `~/Library/Application Support/stay-awake/config.json` |
+| Windows | `%APPDATA%\stay-awake\config.json` |
 
 You can edit this file directly if needed. Changes take effect on the next launch.
 
@@ -163,10 +163,10 @@ You can edit this file directly if needed. Changes take effect on the next launc
 
 ## FAQ
 
-**Does No Sleep Please! appear in the Dock (macOS)?**
-No. No Sleep Please! is a menu-bar-only utility and does not show a Dock icon.
+**Does Stay Awake appear in the Dock (macOS)?**
+No. Stay Awake is a menu-bar-only utility and does not show a Dock icon.
 
-**Does No Sleep Please! require admin or elevated privileges?**
+**Does Stay Awake require admin or elevated privileges?**
 No. All mechanisms work with standard user permissions. On macOS, Accessibility
 is the only optional permission, and only for mouse-based modes.
 
