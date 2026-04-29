@@ -11,11 +11,11 @@ tray-accessibility-ok = 접근성 OK
 tray-grant-accessibility = 접근성 허용
 tray-settings = 설정…
 tray-quit = 종료
-tray-tooltip-active = No Sleep Please! — 활성
-tray-tooltip-inactive = No Sleep Please! — 비활성
+tray-tooltip-active = Stay Awake — 활성
+tray-tooltip-inactive = Stay Awake — 비활성
 
 # 설정 창
-settings-title = No Sleep Please! 설정
+settings-title = Stay Awake 설정
 settings-mode-label = 모드
 settings-interval-label = 간격
 settings-app-mode-label = 앱 모드

@@ -11,11 +11,11 @@ tray-accessibility-ok = 辅助功能 OK
 tray-grant-accessibility = 授予辅助功能权限
 tray-settings = 设置…
 tray-quit = 退出
-tray-tooltip-active = No Sleep Please! — 已激活
-tray-tooltip-inactive = No Sleep Please! — 未激活
+tray-tooltip-active = Stay Awake — 已激活
+tray-tooltip-inactive = Stay Awake — 未激活
 
 # 设置窗口
-settings-title = No Sleep Please! 设置
+settings-title = Stay Awake 设置
 settings-mode-label = 模式
 settings-interval-label = 间隔
 settings-app-mode-label = 应用模式

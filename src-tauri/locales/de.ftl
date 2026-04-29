@@ -11,11 +11,11 @@ tray-accessibility-ok = Barrierefreiheit OK
 tray-grant-accessibility = Barrierefreiheit gewahren
 tray-settings = Einstellungen…
 tray-quit = Beenden
-tray-tooltip-active = No Sleep Please! — Aktiv
-tray-tooltip-inactive = No Sleep Please! — Inaktiv
+tray-tooltip-active = Stay Awake — Aktiv
+tray-tooltip-inactive = Stay Awake — Inaktiv
 
 # Einstellungsfenster
-settings-title = No Sleep Please! Einstellungen
+settings-title = Stay Awake Einstellungen
 settings-mode-label = Modus
 settings-interval-label = Intervall
 settings-app-mode-label = App-Modus

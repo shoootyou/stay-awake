@@ -11,11 +11,11 @@ tray-accessibility-ok = Acessibilidade OK
 tray-grant-accessibility = Conceder acessibilidade
 tray-settings = Configuracoes…
 tray-quit = Sair
-tray-tooltip-active = No Sleep Please! — Ativo
-tray-tooltip-inactive = No Sleep Please! — Inativo
+tray-tooltip-active = Stay Awake — Ativo
+tray-tooltip-inactive = Stay Awake — Inativo
 
 # Janela de configuracoes
-settings-title = Configuracoes do No Sleep Please!
+settings-title = Configuracoes do Stay Awake
 settings-mode-label = Modo
 settings-interval-label = Intervalo
 settings-app-mode-label = Modo do aplicativo
