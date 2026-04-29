@@ -115,7 +115,7 @@ impl Engine {
                 .power_inhibitor
                 .lock()
                 .map_err(|e| format!("Power lock poisoned: {}", e))?;
-            power.inhibit_sleep("No Sleep Please!: keeping system awake")?;
+            power.inhibit_sleep("Stay Awake: keeping system awake")?;
         }
 
         self.running.store(true, Ordering::SeqCst);

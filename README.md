@@ -1,4 +1,4 @@
-# Non-Sleep Please
+# Stay Awake
 
 > Keep your computer awake and active.
 

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    non_sleep_lib::run()
+    stay_awake_lib::run()
 }

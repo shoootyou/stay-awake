@@ -101,7 +101,7 @@ impl PowerInhibitor for LinuxPowerInhibitor {
         let child = Command::new("systemd-inhibit")
             .args([
                 "--what=idle",
-                "--who=non-sleep",
+                "--who=stay-awake",
                 &format!("--why={}", reason),
                 "sleep",
                 "infinity",

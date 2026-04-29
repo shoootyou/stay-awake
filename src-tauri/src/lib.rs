@@ -1,4 +1,4 @@
-//! No Sleep Please! — a cross-platform tray-only mouse jiggler / anti-inactivity tool.
+//! Stay Awake — a cross-platform tray-only mouse jiggler / anti-inactivity tool.
 //!
 //! This is the main Tauri application entry point. It wires together the
 //! platform layer, configuration, engine, system tray, global shortcut,
@@ -406,7 +406,7 @@ fn show_settings_window(app: &tauri::AppHandle) {
         let _ = win.set_focus();
     } else if let Err(e) =
         WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
-            .title("No Sleep Please! Settings")
+            .title("Stay Awake Settings")
             .inner_size(480.0, 720.0)
             .resizable(false)
             .center()
@@ -429,7 +429,7 @@ fn show_about_window(app: &tauri::AppHandle) {
         let _ = win.set_focus();
     } else if let Err(e) =
         WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
-            .title("About No Sleep Please!")
+            .title("About Stay Awake")
             .inner_size(360.0, 340.0)
             .resizable(false)
             .center()
@@ -874,7 +874,7 @@ pub fn run() {
                 ))?;
             }
 
-            log::info!("No Sleep Please! initialised");
+            log::info!("Stay Awake initialised");
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -883,13 +883,12 @@ pub fn run() {
             #[allow(unused_variables)]
             |app, event| {
                 match &event {
-                    tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    tauri::RunEvent::ExitRequested { api, code, .. }
                         // Only prevent exit when triggered by all windows closing (code = None).
                         // Allow explicit app.exit() calls (code = Some) so Quit works.
-                        if code.is_none() {
+                        if code.is_none() => {
                             api.prevent_exit();
                         }
-                    }
                     #[cfg(target_os = "macos")]
                     tauri::RunEvent::Ready => {
                         // Set Accessory policy AFTER Tauri finishes setup,

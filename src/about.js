@@ -16,10 +16,10 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("link-github").addEventListener("click", (e) => {
     e.preventDefault();
-    openUrl("https://github.com/shoootyou/non-sleep-please");
+    openUrl("https://github.com/shoootyou/stay-awake");
   });
   document.getElementById("link-license").addEventListener("click", (e) => {
     e.preventDefault();
-    openUrl("https://github.com/shoootyou/non-sleep-please/blob/main/LICENSE");
+    openUrl("https://github.com/shoootyou/stay-awake/blob/main/LICENSE");
   });
 });

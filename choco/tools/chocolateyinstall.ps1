@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
-$packageName = 'no-sleep-please'
-$url64 = "https://github.com/shoootyou/non-sleep-please/releases/download/v$($env:ChocolateyPackageVersion)/No-Sleep-Please!_$($env:ChocolateyPackageVersion)_x64-setup.exe"
+$packageName = 'stay-awake'
+$url64 = "https://github.com/shoootyou/stay-awake/releases/download/v$($env:ChocolateyPackageVersion)/Stay.Awake_$($env:ChocolateyPackageVersion)_x64-setup.exe"
 
 $packageArgs = @{
   packageName    = $packageName
@@ -9,7 +9,7 @@ $packageArgs = @{
   url64bit       = $url64
   silentArgs     = '/S'
   validExitCodes = @(0)
-  softwareName   = 'No Sleep Please!*'
+  softwareName   = 'Stay Awake*'
   checksumType64 = 'sha256'
   checksum64     = 'PLACEHOLDER'
 }

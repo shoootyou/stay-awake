@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "No Sleep Please",
+  "productName": "Stay Awake",
   "version": "0.3.1",
-  "identifier": "com.shoootyou.no-sleep-please",
+  "identifier": "com.shoootyou.stay-awake",
   "build": {
     "frontendDist": "../src"
   },
@@ -35,11 +35,11 @@
   },
   "plugins": {
     "shell": {
-      "open": "^https://github\\.com/shoootyou/non-sleep-please"
+      "open": "^https://github\\.com/shoootyou/stay-awake"
     },
     "updater": {
       "endpoints": [
-        "https://github.com/shoootyou/non-sleep-please/releases/latest/download/latest.json"
+        "https://github.com/shoootyou/stay-awake/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDMzAyMDgyMzZEODhBMjAKUldRZ2l0ZzJnaUF3ekNRRFdjWlE3bFJQRkMzWUhCRTRVVzdzYWU0TmN1aFY1cmpTWjNVOXBya1YK"
     }
