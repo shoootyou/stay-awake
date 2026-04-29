@@ -38,4 +38,4 @@ Thumbs.db
 *.csr
 *.cer
 *.pem
-*.p12
+*.p12.input/
