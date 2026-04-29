@@ -33,9 +33,9 @@ jobs:
       - name: Download DMG and compute SHA256
         run: |
           VERSION="${{ steps.version.outputs.tag }}"
-          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/No.Sleep.Please_${VERSION}_aarch64.dmg"
-          curl -fSL "$DMG_URL" -o no-sleep-please.dmg
-          SHA256=$(shasum -a 256 no-sleep-please.dmg | awk '{print $1}')
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/Stay.Awake_${VERSION}_aarch64.dmg"
+          curl -fSL "$DMG_URL" -o stay-awake.dmg
+          SHA256=$(shasum -a 256 stay-awake.dmg | awk '{print $1}')
           echo "SHA256=$SHA256" >> "$GITHUB_ENV"
           echo "Computed SHA256: $SHA256"
 
@@ -50,21 +50,21 @@ jobs:
         working-directory: homebrew-tap
         run: |
           VERSION="${{ steps.version.outputs.tag }}"
-          cat > Casks/no-sleep-please.rb << EOF
-          cask "no-sleep-please" do
+          cat > Casks/stay-awake.rb << EOF
+          cask "stay-awake" do
             version "$VERSION"
             sha256 "$SHA256"
 
-            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/No.Sleep.Please_#{version}_aarch64.dmg"
-            name "No Sleep Please"
+            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/Stay.Awake_#{version}_aarch64.dmg"
+            name "Stay Awake"
             desc "Keep your computer awake and active"
             homepage "https://github.com/${{ github.repository }}"
 
-            app "No Sleep Please.app"
+            app "Stay Awake.app"
 
             zap trash: [
-              "~/Library/Application Support/com.shoootyou.no-sleep-please",
-              "~/Library/Preferences/com.shoootyou.no-sleep-please.plist",
+              "~/Library/Application Support/com.shoootyou.stay-awake",
+              "~/Library/Preferences/com.shoootyou.stay-awake.plist",
             ]
           end
           EOF
@@ -74,8 +74,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/no-sleep-please.rb
-          git commit -m "no-sleep-please ${{ steps.version.outputs.tag }}"
+          git add Casks/stay-awake.rb
+          git commit -m "stay-awake ${{ steps.version.outputs.tag }}"
           git push
 
   update-winget:
@@ -85,6 +85,6 @@ jobs:
     steps:
       - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
-          identifier: shoootyou.NoSleepPlease
+          identifier: shoootyou.StayAwake
           installers-regex: '\.exe$'
           token: ${{ secrets.WINGET_TOKEN }}

@@ -4,13 +4,13 @@ on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Git tag to build (e.g. non-sleep-v0.2.0)"
+        description: "Git tag to build (e.g. stay-awake-v0.4.0)"
         required: true
         type: string
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Git tag to build (e.g. non-sleep-v0.2.0)"
+        description: "Git tag to build (e.g. stay-awake-v0.4.0)"
         required: true
         type: string
 
