@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/shoootyou/stay-awake/compare/stay-awake-v0.4.0...stay-awake-v0.4.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* switch autostart to AppleScript, update publisher, fix postcss vuln ([#13](https://github.com/shoootyou/stay-awake/issues/13)) ([db19486](https://github.com/shoootyou/stay-awake/commit/db1948694e502138972bb1287d5757b4ab5a1e3b))
+
 ## [0.4.0](https://github.com/shoootyou/stay-awake/compare/stay-awake-v0.3.1...stay-awake-v0.4.0) (2026-04-29)
 
 
