@@ -1,6 +1,6 @@
 [package]
 name = "stay-awake"
-version = "0.3.1"
+version = "0.4.0"
 description = "Cross-platform mouse jiggler and anti-inactivity tool"
 authors = ["Rodolfo Castelo <shoootyou>"]
 edition = "2021"

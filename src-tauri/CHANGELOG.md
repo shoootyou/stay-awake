@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/shoootyou/stay-awake/compare/stay-awake-v0.3.1...stay-awake-v0.4.0) (2026-04-29)
+
+
+### Features
+
+* rebrand from No Sleep Please to Stay Awake ([#11](https://github.com/shoootyou/stay-awake/issues/11)) ([0ed9045](https://github.com/shoootyou/stay-awake/commit/0ed9045c2db983e14c5bc3d967b0a1652ba64909))
+
 ## [0.4.0] — Unreleased
 
 ### Features
