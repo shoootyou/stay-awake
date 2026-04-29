@@ -883,13 +883,12 @@ pub fn run() {
             #[allow(unused_variables)]
             |app, event| {
                 match &event {
-                    tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    tauri::RunEvent::ExitRequested { api, code, .. }
                         // Only prevent exit when triggered by all windows closing (code = None).
                         // Allow explicit app.exit() calls (code = Some) so Quit works.
-                        if code.is_none() {
+                        if code.is_none() => {
                             api.prevent_exit();
                         }
-                    }
                     #[cfg(target_os = "macos")]
                     tauri::RunEvent::Ready => {
                         // Set Accessory policy AFTER Tauri finishes setup,
