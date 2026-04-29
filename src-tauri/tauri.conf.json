@@ -29,7 +29,8 @@
     "copyright": "Copyright (c) 2025 Rodolfo Castelo. MIT License.",
     "createUpdaterArtifacts": true,
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "entitlements": "./Entitlements.plist"
     }
   },
   "plugins": {
