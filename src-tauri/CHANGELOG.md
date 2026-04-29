@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/shoootyou/non-sleep-please/compare/non-sleep-v0.3.0...non-sleep-v0.3.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* add JIT entitlement for macOS hardened runtime ([#10](https://github.com/shoootyou/non-sleep-please/issues/10)) ([7a7df87](https://github.com/shoootyou/non-sleep-please/commit/7a7df8757db20c37fadf757ad126444c4dfc3e44))
+* security audit — patch CVEs, harden config, CSP, CI/CD ([#7](https://github.com/shoootyou/non-sleep-please/issues/7)) ([aa71dec](https://github.com/shoootyou/non-sleep-please/commit/aa71dec2bdf22056b4d219a0a39aa7ad0a883bde))
+
 ## [0.3.0](https://github.com/shoootyou/non-sleep-please/compare/non-sleep-v0.2.0...non-sleep-v0.3.0) (2026-04-06)
 
 
