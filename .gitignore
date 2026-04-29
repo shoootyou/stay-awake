@@ -39,3 +39,4 @@ Thumbs.db
 *.cer
 *.pem
 *.p12.input/
+.input/

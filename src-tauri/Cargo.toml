@@ -1,5 +1,5 @@
 [package]
-name = "non-sleep"
+name = "stay-awake"
 version = "0.3.1"
 description = "Cross-platform mouse jiggler and anti-inactivity tool"
 authors = ["Rodolfo Castelo <shoootyou>"]
@@ -7,7 +7,7 @@ edition = "2021"
 license = "MIT"
 
 [lib]
-name = "non_sleep_lib"
+name = "stay_awake_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

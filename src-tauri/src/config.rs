@@ -1,7 +1,7 @@
 //! Application configuration management.
 //!
 //! Provides a serializable [`AppConfig`] struct with load/save to the
-//! platform configuration directory (`non-sleep/config.json`).
+//! platform configuration directory (`stay-awake/config.json`).
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -104,7 +104,7 @@ impl AppConfig {
     fn config_path() -> Result<PathBuf, String> {
         let dir = dirs::config_dir()
             .ok_or_else(|| "Could not determine config directory".to_string())?
-            .join("non-sleep");
+            .join("stay-awake");
         Ok(dir.join("config.json"))
     }
 
