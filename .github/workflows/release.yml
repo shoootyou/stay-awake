@@ -4,13 +4,13 @@ on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Git tag to build (e.g. stay-awake-v0.4.0)"
+        description: "Git tag to build (e.g. v0.5.0)"
         required: true
         type: string
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Git tag to build (e.g. stay-awake-v0.4.0)"
+        description: "Git tag to build (e.g. v0.5.0)"
         required: true
         type: string
 
@@ -122,53 +122,3 @@ jobs:
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
           rm -f $RUNNER_TEMP/certificate.p12 2>/dev/null || true
-
-  build-windows:
-    name: Build Windows
-    runs-on: windows-latest
-    timeout-minutes: 60
-    environment: public
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.tag_name }}
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
-        with:
-          toolchain: stable
-          cache-workspaces: src-tauri
-
-      - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Cache Cargo registry & target
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: release-cargo-windows-latest-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            release-cargo-windows-latest-
-
-      - name: Build and upload release assets
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: ${{ inputs.tag_name }}
-          releaseDraft: false
-          prerelease: false
-          args: --verbose

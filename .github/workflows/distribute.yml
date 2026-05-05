@@ -77,14 +77,3 @@ jobs:
           git add Casks/stay-awake.rb
           git commit -m "stay-awake ${{ steps.version.outputs.tag }}"
           git push
-
-  update-winget:
-    name: Update winget manifest
-    runs-on: windows-latest
-    environment: public
-    steps:
-      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
-        with:
-          identifier: shoootyou.StayAwake
-          installers-regex: '\.exe$'
-          token: ${{ secrets.WINGET_TOKEN }}
