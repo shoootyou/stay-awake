@@ -32,3 +32,12 @@ jobs:
     permissions:
       contents: write
 
+  # Distribute to package managers after the release build completes
+  distribute:
+    needs: [release-please, build]
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/distribute.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
+
