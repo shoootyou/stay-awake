@@ -1,13 +1,67 @@
 # Stay Awake
 
-> Keep your computer awake and active.
+> Keep your macOS awake and active — no sleep, no idle, no interruptions.
 
-A cross-platform (macOS + Windows) mouse jiggler and anti-inactivity desktop tool.
+![License](https://img.shields.io/github/license/shoootyou/stay-awake) ![Release](https://img.shields.io/github/v/release/shoootyou/stay-awake) ![macOS](https://img.shields.io/badge/macOS-12%2B-blue)
 
-## Status
+<!-- Screenshots will be added before first public release -->
+<!-- ![Tray menu](assets/screenshot-tray.png) -->
+<!-- ![Settings window](assets/screenshot-settings.png) -->
 
-🚧 Under development
+Stay Awake is a macOS-only tray utility that prevents your computer from sleeping. It lives in the menu bar and stays out of your way — configure it once and forget it. Built with Rust and Tauri v2.
+
+## Features
+
+- **Power Only** — prevents sleep via macOS IOKit power assertions; no mouse movement, no Accessibility permission required
+- **Mouse Subtle** — moves the cursor 1 px right and back; barely perceptible
+- **Mouse Zen** — fires a zero-delta mouse event that resets the idle timer with no visible movement
+- **Mouse Circle** — traces a small circular movement pattern
+- **Scheduling** — set start/end times and active days (Mon–Sun); supports overnight spans (e.g. 22:00–06:00)
+- **Profiles** — save and load named settings profiles for different use cases
+- **Global hotkey** — toggle active/inactive from anywhere (default: `⌘+Shift+J`, customizable)
+- **Idle detection** — skips jiggle automatically when you are actively using the mouse
+- **Launch at Login** — configurable autostart via macOS LaunchAgent
+- **Auto-updater** — checks for new versions via GitHub Releases
+- **Internationalization** — available in English, Spanish, French, German, Portuguese (BR), Japanese, Chinese (Simplified), and Korean
+
+## Installation
+
+### Homebrew (recommended)
+
+```sh
+brew install shoootyou/tap/stay-awake
+```
+
+### Manual download
+
+Download the latest `.dmg` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, open it, and drag **Stay Awake** to your Applications folder.
+
+## System Requirements
+
+- macOS 12 Monterey or later
+- Apple Silicon (native) or Intel (via Rosetta 2)
+
+## Development
+
+### Prerequisites
+
+- Rust (stable) — install via [rustup](https://rustup.rs)
+- Node.js 22+
+- Tauri CLI — `cargo install tauri-cli`
+
+### Setup
+
+```sh
+npm install
+npm run tauri dev
+```
+
+### Build
+
+```sh
+npm run tauri build
+```
 
 ## License
 
-MIT
+[MIT](LICENSE) © Rodolfo Castelo
