@@ -1,5 +1,6 @@
 // Settings window — Tauri IPC bridge
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 let originalConfig = {};
 
@@ -58,6 +59,12 @@ async function loadConfig() {
     });
 
     await loadProfiles(cfg.active_profile);
+
+    // WiFi fields
+    document.getElementById("wifi-enabled").checked = cfg.wifi?.enabled || false;
+    document.getElementById("wifi-details").style.display = cfg.wifi?.enabled ? "" : "none";
+    await loadWifiState(cfg);
+
     await checkAccessibility();
     await applyTranslations();
   } catch (e) {
@@ -130,6 +137,10 @@ async function autoSave() {
     schedule_days: scheduleDays,
     profiles: originalConfig.profiles || [],
     active_profile: document.getElementById("profile-select").value || "Default",
+    wifi: {
+      enabled: document.getElementById("wifi-enabled").checked,
+      networks: originalConfig.wifi?.networks || [],
+    },
   };
 
   try {
@@ -188,6 +199,114 @@ async function onProfileChange() {
     await loadConfig();
   } catch (e) {
     console.error("Failed to load profile:", e);
+  }
+}
+
+// ── WiFi functions ──
+
+let currentSsid = null;
+
+async function loadWifiState(cfg) {
+  // Fetch current SSID
+  try {
+    currentSsid = await invoke("get_current_wifi");
+  } catch (_) {
+    currentSsid = null;
+  }
+  updateWifiDisplay(cfg);
+}
+
+function updateWifiDisplay(cfg) {
+  const ssidEl = document.getElementById("wifi-current-ssid");
+  const registerBtn = document.getElementById("wifi-register-btn");
+  const networks = cfg?.wifi?.networks || [];
+
+  if (currentSsid) {
+    ssidEl.textContent = currentSsid;
+    ssidEl.classList.remove("disconnected");
+    // Enable register button only if not already registered
+    const alreadyRegistered = networks.includes(currentSsid);
+    registerBtn.disabled = alreadyRegistered;
+  } else {
+    ssidEl.setAttribute("data-i18n", "settings-wifi-disconnected");
+    ssidEl.textContent = "Not connected";
+    ssidEl.classList.add("disconnected");
+    registerBtn.disabled = true;
+    // Apply translation for "Not connected"
+    invoke("get_translation", { key: "settings-wifi-disconnected" })
+      .then((text) => { ssidEl.textContent = text; })
+      .catch(() => {});
+  }
+
+  renderNetworkList(networks);
+}
+
+function renderNetworkList(networks) {
+  const container = document.getElementById("wifi-network-list");
+  container.innerHTML = "";
+
+  if (networks.length === 0) {
+    const none = document.createElement("span");
+    none.className = "wifi-none";
+    none.setAttribute("data-i18n", "settings-wifi-none");
+    none.textContent = "No networks registered";
+    invoke("get_translation", { key: "settings-wifi-none" })
+      .then((text) => { none.textContent = text; })
+      .catch(() => {});
+    container.appendChild(none);
+    return;
+  }
+
+  for (const ssid of networks) {
+    const item = document.createElement("div");
+    item.className = "wifi-network-item";
+
+    const name = document.createElement("span");
+    name.className = "wifi-network-name";
+    name.textContent = ssid;
+    // Highlight if it's the current network
+    if (ssid === currentSsid) {
+      name.classList.add("current");
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "wifi-remove-btn";
+    removeBtn.innerHTML = '<i class="ph ph-x"></i>';
+    removeBtn.title = "Remove";
+    removeBtn.addEventListener("click", () => removeNetwork(ssid));
+
+    item.appendChild(name);
+    item.appendChild(removeBtn);
+    container.appendChild(item);
+  }
+}
+
+async function registerCurrentNetwork() {
+  if (!currentSsid) return;
+
+  // Get current config, add network, save
+  try {
+    const cfg = await invoke("get_config");
+    if (!cfg.wifi.networks.includes(currentSsid)) {
+      cfg.wifi.networks.push(currentSsid);
+      await invoke("save_config", { newConfig: cfg });
+      originalConfig = cfg;
+      updateWifiDisplay(cfg);
+    }
+  } catch (e) {
+    console.error("Failed to register network:", e);
+  }
+}
+
+async function removeNetwork(ssid) {
+  try {
+    const cfg = await invoke("get_config");
+    cfg.wifi.networks = cfg.wifi.networks.filter((n) => n !== ssid);
+    await invoke("save_config", { newConfig: cfg });
+    originalConfig = cfg;
+    updateWifiDisplay(cfg);
+  } catch (e) {
+    console.error("Failed to remove network:", e);
   }
 }
 
@@ -318,4 +437,23 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("profile-save-btn").addEventListener("click", saveProfileAs);
   document.getElementById("profile-delete-btn").addEventListener("click", deleteProfile);
   document.getElementById("profile-select").addEventListener("change", onProfileChange);
+
+  // WiFi section
+  document.getElementById("wifi-enabled").addEventListener("change", () => {
+    const details = document.getElementById("wifi-details");
+    details.style.display = document.getElementById("wifi-enabled").checked ? "" : "none";
+    autoSave();
+  });
+  document.getElementById("wifi-register-btn").addEventListener("click", registerCurrentNetwork);
+
+  // Listen for real-time WiFi state changes from the backend
+  listen("wifi-state-changed", (event) => {
+    const payload = event.payload;
+    currentSsid = payload.ssid || null;
+    // Refresh the display with current config
+    invoke("get_config").then((cfg) => {
+      originalConfig = cfg;
+      updateWifiDisplay(cfg);
+    }).catch(() => {});
+  });
 });
