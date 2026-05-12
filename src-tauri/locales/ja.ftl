@@ -55,3 +55,13 @@ mode-desc-subtle = マウスを1ピクセル右に動かして戻します。ほ
 mode-desc-zen = 移動量ゼロのマウスイベントを送信します。カーソルを動かさずにアイドルタイマーをリセットします。
 mode-desc-circle = マウスを小さな円形パターンで動かします。最も目立ちますがどこでも効果的です。
 tray-about = について
+
+# WiFi自動起動
+settings-wifi-title = WiFi自動起動
+settings-wifi-toggle = WiFi起動を有効にする
+settings-wifi-current = 現在のネットワーク
+settings-wifi-register = 登録
+settings-wifi-registered = 登録済みネットワーク
+settings-wifi-none = 登録されたネットワークはありません
+settings-wifi-disconnected = 未接続
+settings-wifi-hint = 有効にすると、登録されたネットワークでのみStay Awakeが動作します。

@@ -55,3 +55,13 @@ mode-desc-subtle = Deplace la souris de 1 pixel a droite puis revient. A peine v
 mode-desc-zen = Envoie un evenement souris sans deplacement. Reinitialise le minuteur d'inactivite sans mouvement visible du curseur.
 mode-desc-circle = Deplace la souris en petit cercle. Plus visible mais efficace partout.
 tray-about = À propos
+
+# Activation automatique WiFi
+settings-wifi-title = Activation automatique WiFi
+settings-wifi-toggle = Activer par WiFi
+settings-wifi-current = Réseau actuel
+settings-wifi-register = Enregistrer
+settings-wifi-registered = Réseaux enregistrés
+settings-wifi-none = Aucun réseau enregistré
+settings-wifi-disconnected = Non connecté
+settings-wifi-hint = Lorsqu'activé, Stay Awake s'active uniquement sur les réseaux enregistrés.

@@ -55,3 +55,13 @@ mode-desc-subtle = Moves the mouse 1 pixel right then back. Barely visible.
 mode-desc-zen = Sends a zero-delta mouse event. Resets idle timer without any visible cursor movement.
 mode-desc-circle = Moves the mouse in a small circular pattern. Most visible but effective everywhere.
 tray-about = About
+
+# WiFi auto-activation
+settings-wifi-title = WiFi Auto-Activation
+settings-wifi-toggle = Enable WiFi activation
+settings-wifi-current = Current network
+settings-wifi-register = Register
+settings-wifi-registered = Registered networks
+settings-wifi-none = No networks registered
+settings-wifi-disconnected = Not connected
+settings-wifi-hint = When enabled, Stay Awake activates only on registered networks.
