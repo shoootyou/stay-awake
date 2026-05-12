@@ -9,6 +9,7 @@ mod config;
 mod engine;
 mod i18n;
 mod platform;
+mod wifi;
 
 use config::{AppConfig, JiggleMode, Profile};
 use engine::Engine;
