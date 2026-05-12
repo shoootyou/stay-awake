@@ -261,6 +261,7 @@ mod sc_sys {
     extern "C" {
         /// Pass this to CF allocation functions to use the default allocator
         /// (equivalent to passing `NULL`; in practice `NULL` also works fine).
+        #[allow(dead_code)]
         pub static kCFAllocatorDefault: *const c_void;
 
         /// The run-loop mode constant for the default mode.
