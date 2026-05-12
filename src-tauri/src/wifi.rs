@@ -1,19 +1,71 @@
 //! WiFi SSID detection and monitoring for auto-activation.
 //!
-//! Shells out to `networksetup -getairportnetwork en0` to detect the current
-//! WiFi SSID. Does not require Location Services on macOS 12+.
+//! On macOS 26+, uses CoreWLAN via raw Objective-C FFI (corewlan_bridge.m)
+//! with Location Services authorization. Falls back to `networksetup` CLI
+//! for older macOS versions.
 //!
 //! The [`WifiMonitor`] uses SCDynamicStore (event-driven) on macOS, falling
 //! back to a polling loop on failure or on non-macOS platforms.
 
 use crate::config::AppConfig;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Emitter;
+
+// ── CoreWLAN bridge FFI (compiled from corewlan_bridge.m) ──────────────────
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn corewlan_location_status() -> i32;
+    fn corewlan_request_location();
+    fn corewlan_current_ssid() -> *const std::ffi::c_char;
+    fn corewlan_free_string(s: *const std::ffi::c_char);
+}
+
+/// Location Services authorization status.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub enum LocationStatus {
+    NotDetermined, // 0
+    Restricted,    // 1
+    Denied,        // 2
+    Authorized,    // 3 or 4
+}
+
+impl From<i32> for LocationStatus {
+    fn from(val: i32) -> Self {
+        match val {
+            0 => LocationStatus::NotDetermined,
+            1 => LocationStatus::Restricted,
+            2 => LocationStatus::Denied,
+            3 | 4 => LocationStatus::Authorized,
+            _ => LocationStatus::Denied,
+        }
+    }
+}
+
+/// Check the current Location Services authorization status.
+pub fn get_location_status() -> LocationStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let status = unsafe { corewlan_location_status() };
+        LocationStatus::from(status)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        LocationStatus::Authorized // Non-macOS doesn't need location
+    }
+}
+
+/// Request Location Services "When In Use" authorization.
+/// On macOS, this triggers the system permission dialog (only in bundled .app).
+pub fn request_location() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        corewlan_request_location();
+    }
+}
 
 /// Parse the output of `networksetup -getairportnetwork en0`.
 /// Returns the SSID if connected, or `None` if disconnected or unrecognised.
@@ -26,20 +78,40 @@ fn parse_ssid_output(output: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Detect the current WiFi SSID by shelling out to `networksetup`.
-/// Returns `None` if WiFi is disconnected or the command fails.
+/// Detect the current WiFi SSID.
+/// On macOS 26+, uses CoreWLAN (requires Location Services authorization).
+/// Falls back to networksetup CLI if CoreWLAN returns nil.
 pub fn detect_current_ssid() -> Option<String> {
-    let output = Command::new("networksetup")
-        .args(["-getairportnetwork", "en0"])
-        .output()
-        .ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        // Try CoreWLAN first (works on macOS 26+ with Location Services)
+        let ssid_ptr = unsafe { corewlan_current_ssid() };
+        if !ssid_ptr.is_null() {
+            let ssid = unsafe { std::ffi::CStr::from_ptr(ssid_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { corewlan_free_string(ssid_ptr) };
+            if !ssid.is_empty() {
+                return Some(ssid);
+            }
+        }
 
-    if !output.status.success() {
-        return None;
+        // Fallback to networksetup (works on macOS 12-15 without Location Services)
+        let output = std::process::Command::new("networksetup")
+            .args(["-getairportnetwork", "en0"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_ssid_output(&stdout)
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_ssid_output(&stdout)
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 // ─────────────────────────────── Payload ───────────────────────────────────

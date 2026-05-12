@@ -207,6 +207,12 @@ async function onProfileChange() {
 let currentSsid = null;
 
 async function loadWifiState(cfg) {
+  // Check Location Services status
+  try {
+    const locStatus = await invoke("get_location_status");
+    updateLocationBanner(locStatus);
+  } catch (_) {}
+
   // Fetch current SSID
   try {
     currentSsid = await invoke("get_current_wifi");
@@ -214,6 +220,52 @@ async function loadWifiState(cfg) {
     currentSsid = null;
   }
   updateWifiDisplay(cfg);
+}
+
+function updateLocationBanner(status) {
+  let banner = document.getElementById("wifi-location-banner");
+  if (status === "authorized") {
+    if (banner) banner.style.display = "none";
+    return;
+  }
+
+  if (!banner) {
+    // Create the banner dynamically
+    const details = document.getElementById("wifi-details");
+    if (!details) return;
+    banner = document.createElement("div");
+    banner.id = "wifi-location-banner";
+    banner.className = "wifi-location-banner";
+    details.insertBefore(banner, details.firstChild);
+  }
+
+  banner.style.display = "";
+  if (status === "not_determined") {
+    banner.innerHTML = '<span>📍 Location permission required to detect WiFi networks.</span>' +
+      '<button id="wifi-grant-location" class="small">Grant Access</button>';
+    const grantBtn = document.getElementById("wifi-grant-location");
+    if (grantBtn) {
+      grantBtn.addEventListener("click", async () => {
+        try {
+          await invoke("request_location_permission");
+          // Re-check after a short delay (dialog may take time)
+          setTimeout(async () => {
+            const newStatus = await invoke("get_location_status");
+            updateLocationBanner(newStatus);
+            if (newStatus === "authorized") {
+              currentSsid = await invoke("get_current_wifi");
+              const cfg = await invoke("get_config");
+              updateWifiDisplay(cfg);
+            }
+          }, 2000);
+        } catch (e) {
+          console.error("Failed to request location:", e);
+        }
+      });
+    }
+  } else if (status === "denied" || status === "restricted") {
+    banner.innerHTML = '<span>⚠️ Location access denied. Enable it in System Settings → Privacy & Security → Location Services.</span>';
+  }
 }
 
 function updateWifiDisplay(cfg) {
@@ -454,6 +506,10 @@ window.addEventListener("DOMContentLoaded", () => {
     invoke("get_config").then((cfg) => {
       originalConfig = cfg;
       updateWifiDisplay(cfg);
+    }).catch(() => {});
+    // Also refresh location status
+    invoke("get_location_status").then((status) => {
+      updateLocationBanner(status);
     }).catch(() => {});
   });
 });

@@ -336,6 +336,25 @@ fn get_current_wifi() -> Result<Option<String>, String> {
     Ok(wifi::detect_current_ssid())
 }
 
+/// Check Location Services authorization status for WiFi SSID reading.
+#[tauri::command]
+fn get_location_status() -> Result<String, String> {
+    let status = wifi::get_location_status();
+    match status {
+        wifi::LocationStatus::NotDetermined => Ok("not_determined".to_string()),
+        wifi::LocationStatus::Restricted => Ok("restricted".to_string()),
+        wifi::LocationStatus::Denied => Ok("denied".to_string()),
+        wifi::LocationStatus::Authorized => Ok("authorized".to_string()),
+    }
+}
+
+/// Request Location Services permission for WiFi SSID detection.
+#[tauri::command]
+fn request_location_permission() -> Result<(), String> {
+    wifi::request_location();
+    Ok(())
+}
+
 // ───────────────────────── Hotkey string parser ────────────────────────────
 
 /// Parse a human-readable shortcut string like `"CmdOrCtrl+Shift+J"` into a
@@ -571,6 +590,8 @@ pub fn run() {
             update_global_hotkey,
             get_app_version,
             get_current_wifi,
+            get_location_status,
+            request_location_permission,
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
             log::info!("Another instance attempted to start -- focusing existing instance");
