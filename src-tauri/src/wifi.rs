@@ -551,13 +551,32 @@ fn try_event_driven_loop(
     log::info!("WifiMonitor: SCDynamicStore event loop active");
 
     // Initial probe so the frontend gets state immediately on startup.
+    let mut last_ssid = detect_current_ssid();
     check_and_emit(config, app_handle);
 
     // ── Run loop — 1 s slices so we can react to stop() quickly ──────────
+    // Also poll every POLL_INTERVAL_SECS to catch missed SC events (macOS 26+).
+    const POLL_INTERVAL_SECS: u32 = 5;
+    let mut ticks: u32 = 0;
+
     while running.load(Ordering::Relaxed) {
         // Returns after the timeout or after processing a source (our callback).
         unsafe {
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, 0);
+        }
+        ticks += 1;
+        if ticks >= POLL_INTERVAL_SECS {
+            ticks = 0;
+            let current = detect_current_ssid();
+            if current != last_ssid {
+                log::debug!(
+                    "WiFi periodic check: SSID changed {:?} → {:?}",
+                    last_ssid,
+                    current
+                );
+                check_and_emit(config, app_handle);
+                last_ssid = current;
+            }
         }
     }
 
