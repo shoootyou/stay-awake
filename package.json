@@ -2,7 +2,7 @@
   "name": "stay-awake",
   "private": true,
   "version": "0.3.1",
-  "description": "Cross-platform mouse jiggler and anti-inactivity tool",
+  "description": "macOS mouse jiggler and anti-inactivity tool",
   "author": "Rodolfo Castelo",
   "type": "module",
   "scripts": {

@@ -3,10 +3,16 @@
   "packages": {
     "src-tauri": {
       "release-type": "rust",
+      "include-component-in-tag": false,
       "extra-files": [
         {
           "type": "json",
           "path": "tauri.conf.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "../package.json",
           "jsonpath": "$.version"
         }
       ]
