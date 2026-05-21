@@ -9,11 +9,6 @@
           "type": "json",
           "path": "tauri.conf.json",
           "jsonpath": "$.version"
-        },
-        {
-          "type": "json",
-          "path": "../package.json",
-          "jsonpath": "$.version"
         }
       ]
     }
