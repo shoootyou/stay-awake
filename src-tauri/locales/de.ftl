@@ -55,3 +55,13 @@ mode-desc-subtle = Bewegt die Maus 1 Pixel nach rechts und zurueck. Kaum sichtba
 mode-desc-zen = Sendet ein Maus-Ereignis ohne Verschiebung. Setzt den Inaktivitaetstimer zurueck, ohne den Cursor sichtbar zu bewegen.
 mode-desc-circle = Bewegt die Maus in einem kleinen Kreismuster. Am sichtbarsten, aber ueberall wirksam.
 tray-about = Über
+
+# WLAN-Autoaktivierung
+settings-wifi-title = WLAN-Autoaktivierung
+settings-wifi-toggle = WLAN-Aktivierung einschalten
+settings-wifi-current = Aktuelles Netzwerk
+settings-wifi-register = Registrieren
+settings-wifi-registered = Registrierte Netzwerke
+settings-wifi-none = Keine Netzwerke registriert
+settings-wifi-disconnected = Nicht verbunden
+settings-wifi-hint = Wenn aktiviert, wird Stay Awake nur in registrierten Netzwerken aktiv.

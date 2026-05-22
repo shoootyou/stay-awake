@@ -9,6 +9,7 @@ mod config;
 mod engine;
 mod i18n;
 mod platform;
+mod wifi;
 
 use config::{AppConfig, JiggleMode, Profile};
 use engine::Engine;
@@ -34,6 +35,7 @@ fn save_config(
     app: tauri::AppHandle,
     new_config: AppConfig,
     state: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
 ) -> Result<(), String> {
     // Validate config fields.
     if new_config.interval_secs == 0 {
@@ -61,11 +63,45 @@ fn save_config(
         }
     }
 
-    let mut cfg = state
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    *cfg = new_config;
-    cfg.save()
+    // Check if WiFi config changed before overwriting.
+    let wifi_changed = {
+        let cfg = state
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        cfg.wifi != new_config.wifi
+    };
+
+    // Update shared config.
+    {
+        let mut cfg = state
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        *cfg = new_config;
+        cfg.save()?;
+    }
+
+    // Restart or stop the WiFi monitor if the WiFi config changed.
+    if wifi_changed {
+        let mut mon = monitor
+            .lock()
+            .map_err(|e| format!("Monitor lock poisoned: {}", e))?;
+        let cfg = state
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        if cfg.wifi.enabled {
+            log::info!("WiFi config changed — restarting monitor");
+            if let Err(e) = mon.restart() {
+                log::warn!("WiFi monitor restart failed: {}", e);
+            }
+        } else {
+            log::info!("WiFi disabled — stopping monitor");
+            if let Err(e) = mon.stop() {
+                log::warn!("WiFi monitor stop failed: {}", e);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Return the engine state name (`"idle"`, `"active"`, …).
@@ -291,6 +327,32 @@ fn update_global_hotkey(
 #[tauri::command]
 fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Return the SSID of the currently connected WiFi network, or `None` if
+/// disconnected. Delegates directly to the platform detection function.
+#[tauri::command]
+fn get_current_wifi() -> Result<Option<String>, String> {
+    Ok(wifi::detect_current_ssid())
+}
+
+/// Check Location Services authorization status for WiFi SSID reading.
+#[tauri::command]
+fn get_location_status() -> Result<String, String> {
+    let status = wifi::get_location_status();
+    match status {
+        wifi::LocationStatus::NotDetermined => Ok("not_determined".to_string()),
+        wifi::LocationStatus::Restricted => Ok("restricted".to_string()),
+        wifi::LocationStatus::Denied => Ok("denied".to_string()),
+        wifi::LocationStatus::Authorized => Ok("authorized".to_string()),
+    }
+}
+
+/// Request Location Services permission for WiFi SSID detection.
+#[tauri::command]
+fn request_location_permission() -> Result<(), String> {
+    wifi::request_location();
+    Ok(())
 }
 
 // ───────────────────────── Hotkey string parser ────────────────────────────
@@ -527,6 +589,9 @@ pub fn run() {
             delete_profile,
             update_global_hotkey,
             get_app_version,
+            get_current_wifi,
+            get_location_status,
+            request_location_permission,
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
             log::info!("Another instance attempted to start -- focusing existing instance");
@@ -579,6 +644,67 @@ pub fn run() {
             app.manage(Arc::clone(&shared_engine));
             app.manage(Arc::clone(&perm_checker));
             app.manage(Arc::clone(&shared_bundle));
+
+            // ── WiFi monitor ───────────────────────────────────────────
+            let wifi_monitor =
+                wifi::WifiMonitor::new(Arc::clone(&shared_config), app.handle().clone());
+            let shared_wifi_monitor: Arc<Mutex<wifi::WifiMonitor>> =
+                Arc::new(Mutex::new(wifi_monitor));
+
+            // Start the monitor if WiFi feature is enabled.
+            {
+                let cfg = shared_config
+                    .lock()
+                    .map_err(|e| format!("Config lock: {}", e))?;
+                if cfg.wifi.enabled {
+                    let mut monitor = shared_wifi_monitor
+                        .lock()
+                        .map_err(|e| format!("Monitor lock: {}", e))?;
+                    if let Err(e) = monitor.start() {
+                        log::warn!("WiFi monitor startup failed: {}", e);
+                    }
+                }
+            }
+
+            app.manage(Arc::clone(&shared_wifi_monitor));
+
+            // ── WiFi event → engine control ────────────────────────────
+            // Local mirror of WifiStatePayload used only for deserialization.
+            #[derive(serde::Deserialize)]
+            struct WifiStateEvent {
+                ssid: Option<String>,
+                active: bool,
+            }
+
+            {
+                use tauri::Listener;
+                let engine_for_wifi = Arc::clone(&shared_engine);
+                app.listen("wifi-state-changed", move |event| {
+                    if let Ok(payload) = serde_json::from_str::<WifiStateEvent>(event.payload()) {
+                        if let Ok(mut eng) = engine_for_wifi.lock() {
+                            if payload.active {
+                                if !eng.is_active() {
+                                    log::info!(
+                                        "WiFi: registered network {:?} — starting engine",
+                                        payload.ssid
+                                    );
+                                    if let Err(e) = eng.start() {
+                                        log::error!("WiFi-triggered engine start failed: {}", e);
+                                    }
+                                }
+                            } else if eng.is_active() {
+                                log::info!(
+                                    "WiFi: unregistered/disconnected {:?} — stopping engine",
+                                    payload.ssid
+                                );
+                                if let Err(e) = eng.stop() {
+                                    log::error!("WiFi-triggered engine stop failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
 
             // ── System tray ────────────────────────────────────────────
             #[cfg(desktop)]

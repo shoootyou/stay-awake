@@ -55,3 +55,13 @@ mode-desc-subtle = Move o mouse 1 pixel para a direita e volta. Quase invisivel.
 mode-desc-zen = Envia um evento de mouse sem deslocamento. Reinicia o temporizador de inatividade sem movimento visivel do cursor.
 mode-desc-circle = Move o mouse em um pequeno padrao circular. Mais visivel, mas eficaz em qualquer lugar.
 tray-about = Sobre
+
+# Ativação automática WiFi
+settings-wifi-title = Ativação Automática WiFi
+settings-wifi-toggle = Ativar por WiFi
+settings-wifi-current = Rede atual
+settings-wifi-register = Registrar
+settings-wifi-registered = Redes registradas
+settings-wifi-none = Nenhuma rede registrada
+settings-wifi-disconnected = Não conectado
+settings-wifi-hint = Quando ativado, Stay Awake funciona apenas em redes registradas.

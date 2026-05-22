@@ -4,5 +4,7 @@
 <dict>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Stay Awake needs your location to detect which WiFi network you're connected to for automatic activation.</string>
 </dict>
 </plist>

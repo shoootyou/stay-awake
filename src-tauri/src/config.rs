@@ -31,6 +31,15 @@ pub enum AppMode {
     Scheduled,
 }
 
+/// WiFi-based automatic activation configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct WifiConfig {
+    /// Whether WiFi-based activation is enabled.
+    pub enabled: bool,
+    /// SSIDs that trigger automatic activation.
+    pub networks: Vec<String>,
+}
+
 /// A named settings profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
@@ -70,6 +79,9 @@ pub struct AppConfig {
     // ── Profiles ──
     pub profiles: Vec<Profile>,
     pub active_profile: String,
+    // ── WiFi ──
+    #[serde(default)]
+    pub wifi: WifiConfig,
 }
 
 impl Default for AppConfig {
@@ -95,6 +107,7 @@ impl Default for AppConfig {
             ],
             profiles: vec![],
             active_profile: String::from("Default"),
+            wifi: WifiConfig::default(),
         }
     }
 }
@@ -134,5 +147,66 @@ impl AppConfig {
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, contents).map_err(|e| format!("Failed to write config: {}", e))?;
         fs::rename(&tmp, &path).map_err(|e| format!("Failed to commit config: {}", e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wifi_config_default_is_disabled_with_empty_networks() {
+        let cfg = WifiConfig::default();
+        assert!(!cfg.enabled);
+        assert!(cfg.networks.is_empty());
+    }
+
+    #[test]
+    fn app_config_without_wifi_key_deserializes_with_wifi_default() {
+        // Minimal JSON that matches the current AppConfig fields but omits "wifi"
+        let json = r#"{
+            "mode": "Manual",
+            "jiggle_mode": "MouseSubtle",
+            "interval_secs": 30,
+            "autostart": false,
+            "language": "en",
+            "global_hotkey": "CmdOrCtrl+Shift+J",
+            "schedule_enabled": false,
+            "schedule_start_hour": 9,
+            "schedule_start_minute": 0,
+            "schedule_end_hour": 17,
+            "schedule_end_minute": 0,
+            "schedule_days": ["mon","tue","wed","thu","fri"],
+            "profiles": [],
+            "active_profile": "Default"
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).expect("deserialization must succeed");
+        assert_eq!(config.wifi, WifiConfig::default());
+    }
+
+    #[test]
+    fn wifi_config_round_trips_through_json() {
+        let original = WifiConfig {
+            enabled: true,
+            networks: vec!["HomeNet".into(), "OfficeNet".into()],
+        };
+        let json = serde_json::to_string(&original).expect("serialize must succeed");
+        let decoded: WifiConfig = serde_json::from_str(&json).expect("deserialize must succeed");
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn app_config_with_wifi_key_round_trips_correctly() {
+        let config = AppConfig {
+            wifi: WifiConfig {
+                enabled: true,
+                networks: vec!["TestSSID".into()],
+            },
+            ..AppConfig::default()
+        };
+        let json = serde_json::to_string(&config).expect("serialize must succeed");
+        let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
+        assert!(decoded.wifi.enabled);
+        assert_eq!(decoded.wifi.networks, vec!["TestSSID".to_string()]);
     }
 }

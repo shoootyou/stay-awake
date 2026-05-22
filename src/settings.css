@@ -511,3 +511,130 @@ header h1 i[class^="ph"] {
 .hotkey-btn.recording .hotkey-hint {
   color: var(--accent);
 }
+
+/* ── WiFi section ── */
+.wifi-current-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wifi-current-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wifi-ssid {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+
+.wifi-ssid.disconnected {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.wifi-registered {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wifi-network-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  min-height: 32px;
+}
+
+.wifi-network-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.wifi-network-item:hover {
+  background: var(--bg-group);
+}
+
+.wifi-network-name {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.wifi-network-name.current {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.wifi-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 50%;
+  font-size: 14px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.wifi-remove-btn:hover {
+  background: rgba(255, 59, 48, 0.1);
+  color: #ff3b30;
+}
+
+.wifi-none {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.wifi-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.wifi-hint::before {
+  content: "ⓘ";
+  flex-shrink: 0;
+}
+
+/* ── WiFi Location Services banner ── */
+.wifi-location-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--banner-bg);
+  color: var(--banner-text);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.wifi-location-banner .small {
+  margin-left: auto;
+  flex-shrink: 0;
+}

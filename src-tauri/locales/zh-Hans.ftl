@@ -55,3 +55,13 @@ mode-desc-subtle = 将鼠标向右移动1像素然后返回。几乎不可见。
 mode-desc-zen = 发送零位移鼠标事件。在不移动光标的情况下重置空闲计时器。
 mode-desc-circle = 以小圆形模式移动鼠标。最明显但在任何地方都有效。
 tray-about = 关于
+
+# WiFi自动激活
+settings-wifi-title = WiFi自动激活
+settings-wifi-toggle = 启用WiFi激活
+settings-wifi-current = 当前网络
+settings-wifi-register = 注册
+settings-wifi-registered = 已注册网络
+settings-wifi-none = 暂无已注册网络
+settings-wifi-disconnected = 未连接
+settings-wifi-hint = 启用后，Stay Awake仅在已注册的网络上激活。
