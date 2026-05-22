@@ -4,6 +4,12 @@
     "src-tauri": {
       "release-type": "rust",
       "include-component-in-tag": false,
+      "include-paths": [
+        "src",
+        "src-tauri",
+        "package.json",
+        "package-lock.json"
+      ],
       "extra-files": [
         {
           "type": "json",
