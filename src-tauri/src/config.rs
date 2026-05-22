@@ -32,7 +32,7 @@ pub enum AppMode {
 }
 
 /// WiFi-based automatic activation configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct WifiConfig {
     /// Whether WiFi-based activation is enabled.
     pub enabled: bool,
@@ -40,14 +40,7 @@ pub struct WifiConfig {
     pub networks: Vec<String>,
 }
 
-impl Default for WifiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            networks: vec![],
-        }
-    }
-}
+
 
 /// A named settings profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,14 +199,16 @@ mod tests {
 
     #[test]
     fn app_config_with_wifi_key_round_trips_correctly() {
-        let mut config = AppConfig::default();
-        config.wifi = WifiConfig {
-            enabled: true,
-            networks: vec!["TestSSID".into()],
+        let config = AppConfig {
+            wifi: WifiConfig {
+                enabled: true,
+                networks: vec!["TestSSID".into()],
+            },
+            ..AppConfig::default()
         };
         let json = serde_json::to_string(&config).expect("serialize must succeed");
         let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
-        assert_eq!(decoded.wifi.enabled, true);
+        assert!(decoded.wifi.enabled);
         assert_eq!(decoded.wifi.networks, vec!["TestSSID".to_string()]);
     }
 }

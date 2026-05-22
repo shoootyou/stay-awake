@@ -69,6 +69,7 @@ pub fn request_location() {
 
 /// Parse the output of `networksetup -getairportnetwork en0`.
 /// Returns the SSID if connected, or `None` if disconnected or unrecognised.
+#[cfg(target_os = "macos")]
 fn parse_ssid_output(output: &str) -> Option<String> {
     // Expected: "Current Wi-Fi Network: MySSID\n"
     // Disconnected: "You are not associated with an AirPort network.\n"
@@ -587,6 +588,7 @@ fn try_event_driven_loop(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parse_connected_ssid() {
         assert_eq!(
@@ -595,6 +597,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parse_disconnected() {
         assert_eq!(
@@ -603,11 +606,13 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parse_empty_output() {
         assert_eq!(parse_ssid_output(""), None);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parse_ssid_with_spaces() {
         assert_eq!(
