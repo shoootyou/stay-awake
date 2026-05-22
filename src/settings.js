@@ -40,6 +40,7 @@ async function loadConfig() {
     document.getElementById("interval").value = cfg.interval_secs;
     document.getElementById("interval-value").textContent = cfg.interval_secs + "s";
     document.getElementById("app-mode").value = cfg.mode;
+    updateModeDescription();
     document.getElementById("autostart").checked = cfg.autostart;
     document.getElementById("language").value = cfg.language;
     document.getElementById("hotkey").textContent = formatHotkeyDisplay(cfg.global_hotkey);
@@ -111,7 +112,20 @@ async function checkAccessibility() {
   }
 }
 
-async function autoSave() {
+const MODE_DESCRIPTIONS = {
+  Manual:    "Engine starts and stops manually via the tray toggle or hotkey. WiFi auto-activation works in this mode.",
+  AlwaysOn:  "Engine runs continuously while Stay Awake is open. WiFi state is ignored — the engine is always on.",
+  Scheduled: "Engine runs automatically within the configured time window. Toggle manually outside those hours.",
+};
+
+function updateModeDescription() {
+  const select = document.getElementById("app-mode");
+  const desc = document.getElementById("app-mode-desc");
+  if (!select || !desc) return;
+  desc.textContent = MODE_DESCRIPTIONS[select.value] || "";
+}
+
+
   const startVal = document.getElementById("schedule-start").value;
   const endVal = document.getElementById("schedule-end").value;
   const startParts = startVal ? startVal.split(":") : ["9", "0"];
@@ -163,6 +177,44 @@ async function grantAccessibility() {
   } catch (e) {
     console.error("Failed to request accessibility:", e);
   }
+
+  // Inject a Recheck button into the banner so the user can trigger a
+  // manual recheck, and start an automatic polling loop (5 s × 6 = 30 s).
+  const banner = document.getElementById("accessibility-banner");
+  if (!banner || banner.classList.contains("hidden")) return;
+
+  // Avoid duplicate recheck buttons if the user clicks Grant multiple times.
+  if (!document.getElementById("recheck-btn")) {
+    const recheckBtn = document.createElement("button");
+    recheckBtn.id = "recheck-btn";
+    recheckBtn.className = "link";
+    recheckBtn.textContent = "Recheck";
+    recheckBtn.addEventListener("click", () => checkAccessibility());
+    banner.appendChild(recheckBtn);
+  }
+
+  // Automatic poll: check every 5 s for up to 30 s (6 attempts).
+  let attempts = 0;
+  const MAX_ATTEMPTS = 6;
+  const POLL_INTERVAL_MS = 5000;
+
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      const granted = await invoke("check_accessibility");
+      if (granted) {
+        clearInterval(poll);
+        // Re-use existing checkAccessibility() to update the banner state.
+        await checkAccessibility();
+        return;
+      }
+    } catch (_) {
+      // Ignore transient errors — keep polling.
+    }
+    if (attempts >= MAX_ATTEMPTS) {
+      clearInterval(poll);
+    }
+  }, POLL_INTERVAL_MS);
 }
 
 async function saveProfileAs() {
@@ -470,7 +522,10 @@ window.addEventListener("DOMContentLoaded", () => {
     autoSave();
   });
   document.getElementById("interval").addEventListener("change", autoSave);
-  document.getElementById("app-mode").addEventListener("change", autoSave);
+  document.getElementById("app-mode").addEventListener("change", () => {
+    updateModeDescription();
+    autoSave();
+  });
   document.getElementById("autostart").addEventListener("change", autoSave);
   document.getElementById("language").addEventListener("change", autoSave);
   document.getElementById("schedule-enabled").addEventListener("change", autoSave);
