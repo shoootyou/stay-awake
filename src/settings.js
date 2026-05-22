@@ -130,7 +130,7 @@ function updateModeDescription() {
   desc.textContent = MODE_DESCRIPTIONS[select.value] || "";
 }
 
-
+async function autoSave() {
   const startVal = document.getElementById("schedule-start").value;
   const endVal = document.getElementById("schedule-end").value;
   const startParts = startVal ? startVal.split(":") : ["9", "0"];
@@ -264,9 +264,15 @@ async function onProfileChange() {
 let currentSsid = null;
 
 async function loadWifiState(cfg) {
-  // Check Location Services status
+  // Check Location Services status; auto-request if undetermined
   try {
-    const locStatus = await invoke("get_location_status");
+    let locStatus = await invoke("get_location_status");
+    if (locStatus === "not_determined") {
+      try {
+        await invoke("request_location_permission");
+        locStatus = await invoke("get_location_status");
+      } catch (_) {}
+    }
     updateLocationBanner(locStatus);
   } catch (_) {}
 

@@ -64,6 +64,31 @@
         </label>
       </section>
 
+      <section class="group" id="wifi-section" style="display:none">
+        <div class="group-header"><i class="ph ph-wifi-high"></i> <span data-i18n="settings-wifi-title">WiFi Auto-Activation</span></div>
+        <div class="field" id="wifi-details">
+          <div class="wifi-current-row">
+            <span class="label-sm" data-i18n="settings-wifi-current">Current network</span>
+            <div class="wifi-current-info">
+              <span id="wifi-current-ssid" class="wifi-ssid">—</span>
+              <button id="wifi-register-btn" class="small" data-i18n="settings-wifi-register" disabled>Register</button>
+            </div>
+          </div>
+          <div class="wifi-registered">
+            <span class="label-sm" data-i18n="settings-wifi-registered">Registered networks</span>
+            <div id="wifi-network-list" class="wifi-network-list">
+              <span class="wifi-none" data-i18n="settings-wifi-none">No networks registered</span>
+            </div>
+          </div>
+          <div class="wifi-hint">
+            <span data-i18n="settings-wifi-hint">
+              Stay Awake activates automatically when connected to a registered network.
+              Requires Location Services.
+            </span>
+          </div>
+        </div>
+      </section>
+
       <section class="group">
         <label class="field">
           <span class="label"><i class="ph ph-translate"></i> <span data-i18n="settings-language-label">Language</span></span>
@@ -126,31 +151,6 @@
           </select>
           <button id="profile-save-btn" class="small" data-i18n="profile-save-as">Save as...</button>
           <button id="profile-delete-btn" class="small secondary" data-i18n="profile-delete">Delete</button>
-        </div>
-      </section>
-
-      <section class="group" id="wifi-section" style="display:none">
-        <div class="group-header"><i class="ph ph-wifi-high"></i> <span data-i18n="settings-wifi-title">WiFi Auto-Activation</span></div>
-        <div class="field" id="wifi-details">
-          <div class="wifi-current-row">
-            <span class="label-sm" data-i18n="settings-wifi-current">Current network</span>
-            <div class="wifi-current-info">
-              <span id="wifi-current-ssid" class="wifi-ssid">—</span>
-              <button id="wifi-register-btn" class="small" data-i18n="settings-wifi-register" disabled>Register</button>
-            </div>
-          </div>
-          <div class="wifi-registered">
-            <span class="label-sm" data-i18n="settings-wifi-registered">Registered networks</span>
-            <div id="wifi-network-list" class="wifi-network-list">
-              <span class="wifi-none" data-i18n="settings-wifi-none">No networks registered</span>
-            </div>
-          </div>
-          <div class="wifi-hint">
-            <span data-i18n="settings-wifi-hint">
-              Stay Awake activates automatically when connected to a registered network.
-              Requires Location Services.
-            </span>
-          </div>
         </div>
       </section>
 
