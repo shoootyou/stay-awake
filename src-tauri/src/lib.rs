@@ -646,10 +646,8 @@ pub fn run() {
             app.manage(Arc::clone(&shared_bundle));
 
             // ── WiFi monitor ───────────────────────────────────────────
-            let wifi_monitor = wifi::WifiMonitor::new(
-                Arc::clone(&shared_config),
-                app.handle().clone(),
-            );
+            let wifi_monitor =
+                wifi::WifiMonitor::new(Arc::clone(&shared_config), app.handle().clone());
             let shared_wifi_monitor: Arc<Mutex<wifi::WifiMonitor>> =
                 Arc::new(Mutex::new(wifi_monitor));
 
@@ -682,9 +680,7 @@ pub fn run() {
                 use tauri::Listener;
                 let engine_for_wifi = Arc::clone(&shared_engine);
                 app.listen("wifi-state-changed", move |event| {
-                    if let Ok(payload) =
-                        serde_json::from_str::<WifiStateEvent>(event.payload())
-                    {
+                    if let Ok(payload) = serde_json::from_str::<WifiStateEvent>(event.payload()) {
                         if let Ok(mut eng) = engine_for_wifi.lock() {
                             if payload.active {
                                 if !eng.is_active() {
@@ -693,10 +689,7 @@ pub fn run() {
                                         payload.ssid
                                     );
                                     if let Err(e) = eng.start() {
-                                        log::error!(
-                                            "WiFi-triggered engine start failed: {}",
-                                            e
-                                        );
+                                        log::error!("WiFi-triggered engine start failed: {}", e);
                                     }
                                 }
                             } else if eng.is_active() {
@@ -705,10 +698,7 @@ pub fn run() {
                                     payload.ssid
                                 );
                                 if let Err(e) = eng.stop() {
-                                    log::error!(
-                                        "WiFi-triggered engine stop failed: {}",
-                                        e
-                                    );
+                                    log::error!("WiFi-triggered engine stop failed: {}", e);
                                 }
                             }
                         }

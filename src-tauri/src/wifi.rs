@@ -228,11 +228,7 @@ fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
 
 // ──────────────────────────── Polling fallback ──────────────────────────────
 
-fn polling_loop(
-    config: &Arc<Mutex<AppConfig>>,
-    running: &Arc<AtomicBool>,
-    app_handle: &AppHandle,
-) {
+fn polling_loop(config: &Arc<Mutex<AppConfig>>, running: &Arc<AtomicBool>, app_handle: &AppHandle) {
     let mut last_ssid: Option<String> = None;
 
     while running.load(Ordering::Relaxed) {
@@ -359,11 +355,7 @@ mod sc_sys {
 
         pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
 
-        pub fn CFRunLoopAddSource(
-            rl: CFRunLoopRef,
-            source: CFRunLoopSourceRef,
-            mode: CFStringRef,
-        );
+        pub fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
 
         pub fn CFRunLoopRunInMode(
             mode: CFStringRef,
@@ -438,8 +430,8 @@ fn try_event_driven_loop(
     running: &Arc<AtomicBool>,
     app_handle: &AppHandle,
 ) -> bool {
-    use std::ffi::c_void;
     use sc_sys::*;
+    use std::ffi::c_void;
 
     // ── Callback data (lives for the full duration of this function) ──────
     let callback_data = WifiCallbackData {
