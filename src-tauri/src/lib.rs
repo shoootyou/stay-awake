@@ -11,7 +11,7 @@ mod i18n;
 mod platform;
 mod wifi;
 
-use config::{AppConfig, JiggleMode, Profile};
+use config::{AppConfig, AppMode, JiggleMode, Profile};
 use engine::Engine;
 use i18n::Bundle as I18nBundle;
 use platform::PermissionChecker;
@@ -564,6 +564,17 @@ fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'st
 
 // ──────────────────────────── Application entry ────────────────────────────
 
+/// Returns true if the current wall-clock time falls within the schedule
+/// window defined in `cfg`. Used at startup to decide whether to auto-start
+/// the engine for `AppMode::Scheduled`.
+///
+/// Delegates to `engine::is_within_schedule` for the actual day/time check,
+/// but returns `false` early when `schedule_enabled` is not set — preventing
+/// an accidental auto-start when the schedule feature is off.
+fn is_within_schedule(cfg: &AppConfig) -> bool {
+    cfg.schedule_enabled && engine::is_within_schedule(cfg)
+}
+
 /// Build and run the Tauri application (called from `main.rs`).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -632,10 +643,33 @@ pub fn run() {
             let engine = Engine::new(mouse_driver, power_inhibitor, Arc::clone(&shared_config));
             let shared_engine: Arc<Mutex<Engine>> = Arc::new(Mutex::new(engine));
 
-            // Auto-start the engine on launch.
-            if let Ok(mut eng) = shared_engine.lock() {
-                if let Err(e) = eng.start() {
-                    log::warn!("Engine auto-start failed: {}", e);
+            // Auto-start the engine based on the current AppMode.
+            {
+                let cfg = shared_config.lock().map(|c| c.clone()).unwrap_or_default();
+                match cfg.mode {
+                    AppMode::AlwaysOn => {
+                        if let Ok(mut eng) = shared_engine.lock() {
+                            if let Err(e) = eng.start() {
+                                log::warn!("Engine auto-start (AlwaysOn) failed: {}", e);
+                            }
+                        }
+                    }
+                    AppMode::Scheduled => {
+                        if is_within_schedule(&cfg) {
+                            if let Ok(mut eng) = shared_engine.lock() {
+                                if let Err(e) = eng.start() {
+                                    log::warn!("Engine auto-start (Scheduled) failed: {}", e);
+                                }
+                            }
+                        } else {
+                            log::info!(
+                                "Engine auto-start: Scheduled mode, outside window — not starting"
+                            );
+                        }
+                    }
+                    AppMode::Manual => {
+                        log::info!("Engine auto-start: Manual mode — not starting");
+                    }
                 }
             }
 
@@ -679,8 +713,15 @@ pub fn run() {
             {
                 use tauri::Listener;
                 let engine_for_wifi = Arc::clone(&shared_engine);
+                let config_for_wifi = Arc::clone(&shared_config);
                 app.listen("wifi-state-changed", move |event| {
                     if let Ok(payload) = serde_json::from_str::<WifiStateEvent>(event.payload()) {
+                        // Read current mode — skip lock poisoning silently.
+                        let mode = config_for_wifi
+                            .lock()
+                            .map(|c| c.mode.clone())
+                            .unwrap_or(AppMode::Manual);
+
                         if let Ok(mut eng) = engine_for_wifi.lock() {
                             if payload.active {
                                 if !eng.is_active() {
@@ -692,13 +733,22 @@ pub fn run() {
                                         log::error!("WiFi-triggered engine start failed: {}", e);
                                     }
                                 }
-                            } else if eng.is_active() {
-                                log::info!(
-                                    "WiFi: unregistered/disconnected {:?} — stopping engine",
-                                    payload.ssid
-                                );
-                                if let Err(e) = eng.stop() {
-                                    log::error!("WiFi-triggered engine stop failed: {}", e);
+                            } else {
+                                // AlwaysOn: engine must never be stopped by WiFi events.
+                                if mode == AppMode::AlwaysOn {
+                                    log::debug!(
+                                        "WiFi: unregistered/disconnected {:?} but mode is AlwaysOn \
+                                         — engine left running",
+                                        payload.ssid
+                                    );
+                                } else if eng.is_active() {
+                                    log::info!(
+                                        "WiFi: unregistered/disconnected {:?} — stopping engine",
+                                        payload.ssid
+                                    );
+                                    if let Err(e) = eng.stop() {
+                                        log::error!("WiFi-triggered engine stop failed: {}", e);
+                                    }
                                 }
                             }
                         }

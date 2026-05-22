@@ -85,19 +85,29 @@ fn parse_ssid_output(output: &str) -> Option<String> {
 pub fn detect_current_ssid() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        // Try CoreWLAN first (works on macOS 26+ with Location Services)
-        let ssid_ptr = unsafe { corewlan_current_ssid() };
-        if !ssid_ptr.is_null() {
-            let ssid = unsafe { std::ffi::CStr::from_ptr(ssid_ptr) }
-                .to_string_lossy()
-                .into_owned();
-            unsafe { corewlan_free_string(ssid_ptr) };
-            if !ssid.is_empty() {
-                return Some(ssid);
+        // Only attempt CoreWLAN when Location Services is authorized.
+        // If not authorized, fall through directly to the networksetup fallback
+        // to avoid a potential hang or silent failure in the FFI call.
+        if get_location_status() == LocationStatus::Authorized {
+            let ssid_ptr = unsafe { corewlan_current_ssid() };
+            if !ssid_ptr.is_null() {
+                let ssid = unsafe { std::ffi::CStr::from_ptr(ssid_ptr) }
+                    .to_string_lossy()
+                    .into_owned();
+                unsafe { corewlan_free_string(ssid_ptr) };
+                if !ssid.is_empty() {
+                    return Some(ssid);
+                }
             }
+        } else {
+            log::debug!(
+                "detect_current_ssid: Location Services not authorized ({:?}) \
+                 — skipping CoreWLAN, using networksetup fallback",
+                get_location_status()
+            );
         }
 
-        // Fallback to networksetup (works on macOS 12-15 without Location Services)
+        // Fallback to networksetup (works on macOS 12–25 without Location Services)
         let output = std::process::Command::new("networksetup")
             .args(["-getairportnetwork", "en0"])
             .output()
