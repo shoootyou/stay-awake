@@ -29,6 +29,8 @@ pub enum AppMode {
     AlwaysOn,
     /// Active during a scheduled time window.
     Scheduled,
+    /// Activates automatically when connected to a registered WiFi network.
+    WiFi,
 }
 
 /// WiFi-based automatic activation configuration.
@@ -113,6 +115,13 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Returns `true` when WiFi-based engine control is active.
+    /// Derived from `mode` — the `wifi.enabled` field is retained only for
+    /// config backward-compatibility and MUST NOT be used as a runtime gate.
+    pub fn wifi_enabled(&self) -> bool {
+        self.mode == AppMode::WiFi
+    }
+
     /// Returns the path to the configuration file.
     fn config_path() -> Result<PathBuf, String> {
         let dir = dirs::config_dir()
@@ -208,5 +217,37 @@ mod tests {
         let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
         assert!(decoded.wifi.enabled);
         assert_eq!(decoded.wifi.networks, vec!["TestSSID".to_string()]);
+    }
+
+    #[test]
+    fn wifi_enabled_returns_true_only_for_wifi_mode() {
+        for mode in [AppMode::Manual, AppMode::AlwaysOn, AppMode::Scheduled] {
+            let cfg = AppConfig {
+                mode,
+                ..Default::default()
+            };
+            assert!(!cfg.wifi_enabled());
+        }
+        let cfg = AppConfig {
+            mode: AppMode::WiFi,
+            ..Default::default()
+        };
+        assert!(cfg.wifi_enabled());
+    }
+
+    #[test]
+    fn app_mode_wifi_round_trips_through_json() {
+        let cfg = AppConfig {
+            mode: AppMode::WiFi,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).expect("serialize must succeed");
+        assert!(
+            json.contains("\"WiFi\""),
+            "WiFi variant must serialize as \"WiFi\""
+        );
+        let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
+        assert_eq!(decoded.mode, AppMode::WiFi);
+        assert!(decoded.wifi_enabled());
     }
 }
