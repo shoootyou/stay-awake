@@ -40,8 +40,6 @@ pub struct WifiConfig {
     pub networks: Vec<String>,
 }
 
-
-
 /// A named settings profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
