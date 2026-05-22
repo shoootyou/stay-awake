@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/shoootyou/stay-awake/compare/v0.5.0...v0.5.1) (2026-05-22)
+
+
+### Bug Fixes
+
+* **engine:** v0.6 — mode-aware startup, WiFi/AlwaysOn guard, location guard, accessibility recheck ([#19](https://github.com/shoootyou/stay-awake/issues/19)) ([22426c5](https://github.com/shoootyou/stay-awake/commit/22426c51f5b7c5b3d1da2ce521128529810e4f02))
+
 ## [0.5.0](https://github.com/shoootyou/stay-awake/compare/v0.4.1...v0.5.0) (2026-05-22)
 
 
