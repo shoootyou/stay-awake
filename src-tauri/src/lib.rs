@@ -63,13 +63,14 @@ fn save_config(
         }
     }
 
-    // Check if WiFi config changed before overwriting.
-    let wifi_changed = {
+    // Detect whether WiFi-mode activation changed before overwriting.
+    let wifi_was_enabled = {
         let cfg = state
             .lock()
             .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi != new_config.wifi
+        cfg.wifi_enabled()
     };
+    let networks_snapshot = new_config.wifi.networks.clone();
 
     // Update shared config.
     {
@@ -80,21 +81,31 @@ fn save_config(
         cfg.save()?;
     }
 
-    // Restart or stop the WiFi monitor if the WiFi config changed.
-    if wifi_changed {
-        let mut mon = monitor
-            .lock()
-            .map_err(|e| format!("Monitor lock poisoned: {}", e))?;
+    // Restart or stop the WiFi monitor if WiFi-mode activation changed or
+    // the network list changed while WiFi mode stayed active.
+    let wifi_now_enabled = {
         let cfg = state
             .lock()
             .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        if cfg.wifi.enabled {
-            log::info!("WiFi config changed — restarting monitor");
+        cfg.wifi_enabled()
+    };
+    let networks_changed = {
+        let cfg = state
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        cfg.wifi.networks != networks_snapshot
+    };
+    if wifi_was_enabled != wifi_now_enabled || (wifi_now_enabled && networks_changed) {
+        let mut mon = monitor
+            .lock()
+            .map_err(|e| format!("Monitor lock poisoned: {}", e))?;
+        if wifi_now_enabled {
+            log::info!("WiFi mode enabled or networks changed — restarting monitor");
             if let Err(e) = mon.restart() {
                 log::warn!("WiFi monitor restart failed: {}", e);
             }
         } else {
-            log::info!("WiFi disabled — stopping monitor");
+            log::info!("WiFi mode disabled — stopping monitor");
             if let Err(e) = mon.stop() {
                 log::warn!("WiFi monitor stop failed: {}", e);
             }
@@ -667,8 +678,8 @@ pub fn run() {
                             );
                         }
                     }
-                    AppMode::Manual => {
-                        log::info!("Engine auto-start: Manual mode — not starting");
+                    AppMode::Manual | AppMode::WiFi => {
+                        log::info!("Engine auto-start: {:?} mode — not starting", cfg.mode);
                     }
                 }
             }
@@ -690,7 +701,7 @@ pub fn run() {
                 let cfg = shared_config
                     .lock()
                     .map_err(|e| format!("Config lock: {}", e))?;
-                if cfg.wifi.enabled {
+                if cfg.wifi_enabled() {
                     let mut monitor = shared_wifi_monitor
                         .lock()
                         .map_err(|e| format!("Monitor lock: {}", e))?;
@@ -716,11 +727,15 @@ pub fn run() {
                 let config_for_wifi = Arc::clone(&shared_config);
                 app.listen("wifi-state-changed", move |event| {
                     if let Ok(payload) = serde_json::from_str::<WifiStateEvent>(event.payload()) {
-                        // Read current mode — skip lock poisoning silently.
                         let mode = config_for_wifi
                             .lock()
                             .map(|c| c.mode.clone())
                             .unwrap_or(AppMode::Manual);
+
+                        // Only act when WiFi Mode is active.
+                        if mode != AppMode::WiFi {
+                            return;
+                        }
 
                         if let Ok(mut eng) = engine_for_wifi.lock() {
                             if payload.active {
@@ -733,22 +748,13 @@ pub fn run() {
                                         log::error!("WiFi-triggered engine start failed: {}", e);
                                     }
                                 }
-                            } else {
-                                // AlwaysOn: engine must never be stopped by WiFi events.
-                                if mode == AppMode::AlwaysOn {
-                                    log::debug!(
-                                        "WiFi: unregistered/disconnected {:?} but mode is AlwaysOn \
-                                         — engine left running",
-                                        payload.ssid
-                                    );
-                                } else if eng.is_active() {
-                                    log::info!(
-                                        "WiFi: unregistered/disconnected {:?} — stopping engine",
-                                        payload.ssid
-                                    );
-                                    if let Err(e) = eng.stop() {
-                                        log::error!("WiFi-triggered engine stop failed: {}", e);
-                                    }
+                            } else if eng.is_active() {
+                                log::info!(
+                                    "WiFi: unregistered/disconnected {:?} — stopping engine",
+                                    payload.ssid
+                                );
+                                if let Err(e) = eng.stop() {
+                                    log::error!("WiFi-triggered engine stop failed: {}", e);
                                 }
                             }
                         }

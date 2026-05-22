@@ -39,7 +39,10 @@ async function loadConfig() {
     document.getElementById("jiggle-mode").value = cfg.jiggle_mode;
     document.getElementById("interval").value = cfg.interval_secs;
     document.getElementById("interval-value").textContent = cfg.interval_secs + "s";
-    document.getElementById("app-mode").value = cfg.mode;
+    // Scheduled is no longer in the UI select — fall back to Manual for old configs.
+    const supportedModes = ["Manual", "AlwaysOn", "WiFi"];
+    const modeValue = supportedModes.includes(cfg.mode) ? cfg.mode : "Manual";
+    document.getElementById("app-mode").value = modeValue;
     updateModeDescription();
     document.getElementById("autostart").checked = cfg.autostart;
     document.getElementById("language").value = cfg.language;
@@ -61,10 +64,12 @@ async function loadConfig() {
 
     await loadProfiles(cfg.active_profile);
 
-    // WiFi fields
-    document.getElementById("wifi-enabled").checked = cfg.wifi?.enabled || false;
-    document.getElementById("wifi-details").style.display = cfg.wifi?.enabled ? "" : "none";
-    await loadWifiState(cfg);
+    // WiFi section — visible only when mode is WiFi
+    const isWifiMode = modeValue === "WiFi";
+    document.getElementById("wifi-section").style.display = isWifiMode ? "" : "none";
+    if (isWifiMode) {
+      await loadWifiState(cfg);
+    }
 
     await checkAccessibility();
     await applyTranslations();
@@ -113,9 +118,9 @@ async function checkAccessibility() {
 }
 
 const MODE_DESCRIPTIONS = {
-  Manual:    "Engine starts and stops manually via the tray toggle or hotkey. WiFi auto-activation works in this mode.",
-  AlwaysOn:  "Engine runs continuously while Stay Awake is open. WiFi state is ignored — the engine is always on.",
-  Scheduled: "Engine runs automatically within the configured time window. Toggle manually outside those hours.",
+  Manual:   "Engine starts and stops manually via the tray toggle or global hotkey.",
+  AlwaysOn: "Engine runs continuously while Stay Awake is open.",
+  WiFi:     "Engine activates automatically on registered networks. Requires Location Services.",
 };
 
 function updateModeDescription() {
@@ -152,7 +157,7 @@ function updateModeDescription() {
     profiles: originalConfig.profiles || [],
     active_profile: document.getElementById("profile-select").value || "Default",
     wifi: {
-      enabled: document.getElementById("wifi-enabled").checked,
+      enabled: document.getElementById("app-mode").value === "WiFi",
       networks: originalConfig.wifi?.networks || [],
     },
   };
@@ -522,7 +527,29 @@ window.addEventListener("DOMContentLoaded", () => {
     autoSave();
   });
   document.getElementById("interval").addEventListener("change", autoSave);
-  document.getElementById("app-mode").addEventListener("change", () => {
+  document.getElementById("app-mode").addEventListener("change", async () => {
+    const mode = document.getElementById("app-mode").value;
+    const wifiSection = document.getElementById("wifi-section");
+
+    if (mode === "WiFi") {
+      wifiSection.style.display = "";
+      // Proactively request location if status is not_determined — no banner click needed.
+      try {
+        const locStatus = await invoke("get_location_status");
+        if (locStatus === "not_determined") {
+          await invoke("request_location_permission");
+        }
+        updateLocationBanner(locStatus);
+      } catch (_) {}
+      // Load current SSID and network list.
+      try {
+        const cfg = await invoke("get_config");
+        await loadWifiState(cfg);
+      } catch (_) {}
+    } else {
+      wifiSection.style.display = "none";
+    }
+
     updateModeDescription();
     autoSave();
   });
@@ -546,11 +573,6 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("profile-select").addEventListener("change", onProfileChange);
 
   // WiFi section
-  document.getElementById("wifi-enabled").addEventListener("change", () => {
-    const details = document.getElementById("wifi-details");
-    details.style.display = document.getElementById("wifi-enabled").checked ? "" : "none";
-    autoSave();
-  });
   document.getElementById("wifi-register-btn").addEventListener("click", registerCurrentNetwork);
 
   // Listen for real-time WiFi state changes from the backend

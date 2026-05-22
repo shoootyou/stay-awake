@@ -7,7 +7,7 @@
 //! The [`WifiMonitor`] uses SCDynamicStore (event-driven) on macOS, falling
 //! back to a polling loop on failure or on non-macOS platforms.
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, AppMode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -215,7 +215,7 @@ fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
             Ok(cfg) => cfg,
             Err(_) => return,
         };
-        if !cfg.wifi.enabled {
+        if cfg.mode != AppMode::WiFi {
             return;
         }
         let is_registered = match &ssid {
