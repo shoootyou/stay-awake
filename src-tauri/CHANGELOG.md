@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/shoootyou/stay-awake/compare/v0.5.1...v0.6.0) (2026-05-22)
+
+
+### Features
+
+* **modes:** add WiFi as first-class AppMode, auto location request, dep cleanup ([#21](https://github.com/shoootyou/stay-awake/issues/21)) ([06a6d71](https://github.com/shoootyou/stay-awake/commit/06a6d7153b3e2d11bcdbd9117a311afbaca4dd22))
+
 ## [0.5.1](https://github.com/shoootyou/stay-awake/compare/v0.5.0...v0.5.1) (2026-05-22)
 
 
