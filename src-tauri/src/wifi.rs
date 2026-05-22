@@ -584,11 +584,10 @@ fn try_event_driven_loop(
 
 // ───────────────────────────────── Tests ───────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn parse_connected_ssid() {
         assert_eq!(
@@ -597,7 +596,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn parse_disconnected() {
         assert_eq!(
@@ -606,13 +604,11 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn parse_empty_output() {
         assert_eq!(parse_ssid_output(""), None);
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn parse_ssid_with_spaces() {
         assert_eq!(
