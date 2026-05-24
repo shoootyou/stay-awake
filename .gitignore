@@ -33,10 +33,14 @@ Thumbs.db
 .research/
 .github/conversations
 
+# Internal / workspace artifacts (not for public repo)
+AGENTS.md
+CLAUDE.md
+
 # Keys
 *.key
 *.csr
 *.cer
 *.pem
-*.p12.input/
+*.p12
 .input/

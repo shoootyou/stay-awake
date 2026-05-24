@@ -23,8 +23,10 @@ jobs:
     steps:
       - name: Extract version
         id: version
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
         run: |
-          TAG="${{ inputs.tag_name }}"
+          TAG="${TAG_NAME}"
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -33,11 +35,14 @@ jobs:
       - name: Download DMG and compute SHA256
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION_OUT: ${{ steps.version.outputs.version }}
+          TAG_OUT: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
-          DMG_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/Stay.Awake_${VERSION}_aarch64.dmg"
-          curl -fSL "$DMG_URL" -o stay-awake.dmg
+          VERSION="${VERSION_OUT}"
+          TAG="${TAG_OUT}"
+          DMG_URL="https://github.com/${REPO}/releases/download/${TAG}/Stay.Awake_${VERSION}_aarch64.dmg"
+          curl -fSL -H "Authorization: Bearer $GH_TOKEN" "$DMG_URL" -o stay-awake.dmg
           SHA256=$(shasum -a 256 stay-awake.dmg | awk '{print $1}')
           echo "SHA256=${SHA256}" >> "$GITHUB_ENV"
           echo "Computed SHA256: ${SHA256}"
@@ -51,18 +56,21 @@ jobs:
 
       - name: Update cask formula
         working-directory: homebrew-tap
+        env:
+          VERSION_OUT: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${VERSION_OUT}"
           mkdir -p Casks
           cat > Casks/stay-awake.rb << EOF
           cask "stay-awake" do
             version "${VERSION}"
             sha256 "${SHA256}"
 
-            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/Stay.Awake_#{version}_aarch64.dmg"
+            url "https://github.com/${REPO}/releases/download/v#{version}/Stay.Awake_#{version}_aarch64.dmg"
             name "Stay Awake"
             desc "Keep your computer awake and active"
-            homepage "https://github.com/${{ github.repository }}"
+            homepage "https://github.com/${REPO}"
 
             app "Stay Awake.app"
 
@@ -75,10 +83,12 @@ jobs:
 
       - name: Commit and push
         working-directory: homebrew-tap
+        env:
+          VERSION_OUT: ${{ steps.version.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/
           git diff --cached --quiet && echo "No changes to commit" && exit 0
-          git commit -m "stay-awake ${{ steps.version.outputs.version }}"
+          git commit -m "stay-awake ${VERSION_OUT}"
           git push

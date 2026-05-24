@@ -4,11 +4,18 @@
 
 ![License](https://img.shields.io/github/license/shoootyou/stay-awake) ![Release](https://img.shields.io/github/v/release/shoootyou/stay-awake) ![macOS](https://img.shields.io/badge/macOS-12%2B-blue)
 
-<!-- Screenshots will be added before first public release -->
-<!-- ![Tray menu](assets/screenshot-tray.png) -->
-<!-- ![Settings window](assets/screenshot-settings.png) -->
-
 Stay Awake is a macOS-only tray utility that prevents your computer from sleeping. It lives in the menu bar and stays out of your way — configure it once and forget it. Built with Rust and Tauri v2.
+
+## Screenshots
+
+### Menu bar
+![Tray menu](assets/screenshot-tray.png)
+
+### Settings
+![Settings window](assets/screenshot-settings.png)
+
+### About
+![About window](assets/screenshot-about.png)
 
 ## Features
 
