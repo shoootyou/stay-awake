@@ -28,7 +28,7 @@ Stay Awake is a macOS-only tray utility that prevents your computer from sleepin
 - **Global hotkey** — toggle active/inactive from anywhere (default: `⌘+Shift+J`, customizable)
 - **Idle detection** — skips jiggle automatically when you are actively using the mouse
 - **Launch at Login** — configurable autostart via macOS LaunchAgent
-- **Auto-updater** — checks for new versions via GitHub Releases
+- **Auto-updater** — checks for new versions on launch; prompts to install when a release is available
 - **Internationalization** — available in English, Spanish, French, German, Portuguese (BR), Japanese, Chinese (Simplified), and Korean
 
 ## Installation
@@ -42,6 +42,12 @@ brew install shoootyou/tap/stay-awake
 ### Manual download
 
 Download the latest `.dmg` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, open it, and drag **Stay Awake** to your Applications folder.
+
+## Updates
+
+**Homebrew** — run `brew upgrade shoootyou/tap/stay-awake`.
+
+**Manual DMG install** — Stay Awake checks for new versions on launch. When an update is available on [GitHub Releases](https://github.com/shoootyou/stay-awake/releases), a prompt appears in the menu bar letting you install it in one click.
 
 ## System Requirements
 
@@ -68,6 +74,10 @@ npm run tauri dev
 ```sh
 npm run tauri build
 ```
+
+## Sponsor
+
+If Stay Awake saves you from one more accidental sleep during a video call, consider [sponsoring the project on GitHub](https://github.com/sponsors/shoootyou). Every contribution helps keep development going.
 
 ## License
 
