@@ -1,6 +1,6 @@
 [package]
 name = "stay-awake"
-version = "0.6.1"
+version = "1.0.0"
 description = "macOS mouse jiggler and anti-inactivity tool"
 authors = ["Rodolfo Castelo <shoootyou>"]
 edition = "2021"
