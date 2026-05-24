@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/shoootyou/stay-awake/compare/v0.6.1...v1.0.0) (2026-05-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **release:** First stable public release. Bumping to 1.0.0 to signal API/UX stability commitment going forward.
+
+### Features
+
+* **release:** prepare Stay Awake for public v1.0.0 release ([#27](https://github.com/shoootyou/stay-awake/issues/27)) ([e2b769b](https://github.com/shoootyou/stay-awake/commit/e2b769baeb5e0922ce7910856e2d183b8a2996f8))
+
 ## [0.6.0](https://github.com/shoootyou/stay-awake/compare/v0.5.1...v0.6.0) (2026-05-22)
 
 
