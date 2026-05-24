@@ -5,6 +5,6 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Stay Awake needs your location to detect which WiFi network you're connected to for automatic activation.</string>
+	<string>Stay Awake reads your current Wi-Fi network name to enable Wi-Fi auto-activation. Location access is required by macOS to read the SSID. Stay Awake does not record, transmit, or use your location for any other purpose.</string>
 </dict>
 </plist>
