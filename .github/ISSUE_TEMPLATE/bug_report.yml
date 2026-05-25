@@ -12,7 +12,7 @@ body:
     attributes:
       label: Stay Awake version
       description: "Find this in the About window, or run: `mdls -name kMDItemVersion /Applications/Stay\\ Awake.app`"
-      placeholder: "e.g. 0.6.2"
+      placeholder: "e.g. 1.0.0"
     validations:
       required: true
   - type: dropdown
