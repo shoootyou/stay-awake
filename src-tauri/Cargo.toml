@@ -42,7 +42,7 @@ objc2-foundation = { version = "0.3", features = ["NSProcessInfo"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSMenu"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Power",
