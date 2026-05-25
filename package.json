@@ -9,15 +9,15 @@
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.5.0",
+    "@commitlint/cli": "^21.0.1",
+    "@commitlint/config-conventional": "^21.0.1",
     "@phosphor-icons/core": "^2.1.1",
     "@resvg/resvg-js": "^2.6.2",
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2.11.2"
   },
   "dependencies": {
     "@fontsource/geist-sans": "^5.2.5",
-    "@phosphor-icons/web": "^2.1.1"
+    "@phosphor-icons/web": "^2.1.2"
   },
   "overrides": {
     "postcss": "^8.5.10",

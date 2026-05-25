@@ -26,23 +26,22 @@ dirs = "6"
 sys-locale = "0.3"
 log = "0.4"
 env_logger = "0.11"
-rand = "0.9"
-fluent = "0.16"
-fluent-bundle = "0.15"
+fluent = "0.17"
+fluent-bundle = "0.16"
 fluent-langneg = "0.14"
 unic-langid = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-shell = "2.3.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24"
+core-graphics = "0.25"
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSMenu"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Power",
