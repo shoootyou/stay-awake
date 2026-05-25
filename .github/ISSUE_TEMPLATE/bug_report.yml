@@ -1,0 +1,81 @@
+name: Bug Report
+description: Report a problem with Stay Awake
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill in the fields below so we can reproduce and fix the issue quickly.
+  - type: input
+    id: version
+    attributes:
+      label: Stay Awake version
+      description: "Find this in the About window, or run: `mdls -name kMDItemVersion /Applications/Stay\\ Awake.app`"
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: macos
+    attributes:
+      label: macOS version
+      options:
+        - "12 Monterey"
+        - "13 Ventura"
+        - "14 Sonoma"
+        - "15 Sequoia"
+        - "26 or later"
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Architecture
+      options:
+        - "Apple Silicon (native)"
+        - "Intel (via Rosetta 2)"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode in use when the bug occurred
+      options:
+        - "Power Only"
+        - "Mouse Subtle"
+        - "Mouse Zen"
+        - "Mouse Circle"
+        - "WiFi"
+        - "Other / Not applicable"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal, numbered list of steps that reliably triggers the bug.
+      placeholder: |
+        1. Open Stay Awake
+        2. Switch to Mouse Subtle
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, or additional context
+      description: "Optional. Drag and drop screenshots directly into this field. Please redact personal information (Wi-Fi network names, usernames, file paths, hostnames) before submitting."
+    validations:
+      required: false
