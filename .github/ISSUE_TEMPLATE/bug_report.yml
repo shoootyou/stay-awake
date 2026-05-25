@@ -76,6 +76,6 @@ body:
     id: logs
     attributes:
       label: Logs, screenshots, or additional context
-      description: Optional. Drag and drop screenshots directly into this field.
+      description: "Optional. Drag and drop screenshots directly into this field. Please redact personal information (Wi-Fi network names, usernames, file paths, hostnames) before submitting."
     validations:
       required: false

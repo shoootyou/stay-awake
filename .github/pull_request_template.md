@@ -17,10 +17,12 @@
 - [ ] build — build system or external dependency changes
 - [ ] ci — CI configuration changes
 - [ ] chore — other changes that don't modify src or test files
+- [ ] style — formatting or whitespace only (no logic change)
+- [ ] revert — reverts a previous commit
 
 ## Checklist
 
 - [ ] Tests added or updated for the change
 - [ ] Documentation updated (if user-visible behavior changed)
-- [ ] Followed the contribution guidelines in [CONTRIBUTING.md](../CONTRIBUTING.md)
+- [ ] Followed the contribution guidelines in [CONTRIBUTING.md](CONTRIBUTING.md)
 - [ ] Commit message follows [Conventional Commits](https://www.conventionalcommits.org/)
