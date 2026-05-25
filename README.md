@@ -22,7 +22,7 @@ Stay Awake is a macOS-only tray utility that prevents your computer from sleepin
 - **Power Only** — prevents sleep via macOS IOKit power assertions; no mouse movement, no Accessibility permission required
 - **Mouse Subtle** — moves the cursor 1 px right and back; barely perceptible
 - **Mouse Zen** — fires a zero-delta mouse event that resets the idle timer with no visible movement
-- **Mouse Circle** — traces a small circular movement pattern
+- **Mouse Circle** — traces a small square pattern (right, down, left, up; 1 pixel per step)
 - **Scheduling** — set start/end times and active days (Mon–Sun); supports overnight spans (e.g. 22:00–06:00)
 - **Profiles** — save and load named settings profiles for different use cases
 - **Global hotkey** — toggle active/inactive from anywhere (default: `⌘+Shift+J`, customizable)

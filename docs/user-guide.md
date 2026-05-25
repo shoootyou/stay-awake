@@ -233,10 +233,7 @@ on or off without opening the tray menu.
 1. Open **Settings** and scroll to **Hotkey**.
 2. Click **Record**, then press your desired key combination (at least one modifier
    key — ⌘, ⌃, ⌥, or ⇧ — is required).
-3. The new shortcut takes effect immediately and is saved to the config file.
-
-You can also edit the `global_hotkey` field in the [config file](#configuration-file)
-directly (e.g. `"CmdOrCtrl+Alt+K"`) and restart the app.
+3. The new shortcut takes effect immediately and is saved.
 
 ---
 
@@ -287,19 +284,6 @@ shows **Grant Accessibility**, follow the steps in the tray or Settings banner.
   Stay Awake** must be enabled (required on macOS 26+).
 - If not on macOS 26+, SSID detection uses `networksetup` and no location permission
   is needed — verify Stay Awake is not blocked by a firewall or corporate MDM policy.
-
----
-
-## Configuration File
-
-Stay Awake stores settings as a JSON file at:
-
-```
-~/Library/Application Support/stay-awake/config.json
-```
-
-You can edit this file directly if needed. Use an atomic save (write to a temp file,
-then rename) to avoid data loss. Changes take effect on the next launch.
 
 ---
 
