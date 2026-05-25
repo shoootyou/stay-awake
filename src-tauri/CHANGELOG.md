@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/shoootyou/stay-awake/compare/v1.0.0...v1.0.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **deps:** bump multiple dependencies for v1.0.1 ([#43](https://github.com/shoootyou/stay-awake/issues/43)) ([4eca2dc](https://github.com/shoootyou/stay-awake/commit/4eca2dc290b31469af6b7d4ed045c10315feb2f3))
+
 ## [1.0.0](https://github.com/shoootyou/stay-awake/compare/v0.6.1...v1.0.0) (2026-05-24)
 
 
