@@ -9,7 +9,7 @@
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.0.1",
+    "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.1",
     "@phosphor-icons/core": "^2.1.1",
     "@resvg/resvg-js": "^2.6.2",
