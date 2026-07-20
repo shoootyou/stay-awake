@@ -16,7 +16,7 @@
     "@tauri-apps/cli": "^2.11.2"
   },
   "dependencies": {
-    "@fontsource/geist-sans": "^5.2.5",
+    "@fontsource/geist-sans": "^5.3.0",
     "@phosphor-icons/web": "^2.1.2"
   },
   "overrides": {
