@@ -49,6 +49,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
 [profile.release]
 strip = true
 lto = true

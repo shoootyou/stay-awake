@@ -67,6 +67,44 @@ pub fn request_location() {
     }
 }
 
+/// NetworkManager availability, as surfaced to the frontend so it can present a single
+/// consistent shape across platforms without needing its own platform detection (the frontend
+/// has no `tauri-plugin-os` dependency today).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub enum NetworkManagerStatus {
+    /// Linux, and NetworkManager's D-Bus bus name is owned — WiFi mode is fully functional.
+    Available,
+    /// Linux, but NetworkManager's D-Bus bus name is absent — WiFi mode is unsupported (D1
+    /// accepted risk: NetworkManager-only reactive WiFi, no fallback tier).
+    Unavailable,
+    /// Non-Linux platform — this signal doesn't apply; WiFi detection uses a different
+    /// mechanism (CoreWLAN/networksetup on macOS) that isn't NetworkManager-gated.
+    /// Only constructed on non-Linux targets, so it's dead code on a Linux-only build.
+    #[allow(dead_code)]
+    NotApplicable,
+}
+
+/// Check whether NetworkManager is available for reactive WiFi monitoring.
+/// Linux-meaningful; returns [`NetworkManagerStatus::NotApplicable`] on other platforms so the
+/// frontend has one consistent shape to branch on.
+pub fn get_networkmanager_status() -> NetworkManagerStatus {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(conn) = zbus::blocking::Connection::system() else {
+            return NetworkManagerStatus::Unavailable;
+        };
+        if nm_available_from(nm_bus_name_present(&conn)) {
+            NetworkManagerStatus::Available
+        } else {
+            NetworkManagerStatus::Unavailable
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        NetworkManagerStatus::NotApplicable
+    }
+}
+
 /// Parse the output of `networksetup -getairportnetwork en0`.
 /// Returns the SSID if connected, or `None` if disconnected or unrecognised.
 #[cfg(target_os = "macos")]
@@ -119,7 +157,25 @@ pub fn detect_current_ssid() -> Option<String> {
         parse_ssid_output(&stdout)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        use zbus::blocking::{Connection, Proxy};
+
+        let conn = Connection::system().ok()?;
+        let wifi_path = find_wifi_device_path(&conn)?;
+        let wireless_proxy =
+            Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_WIRELESS_IFACE).ok()?;
+        let active_ap: zbus::zvariant::OwnedObjectPath =
+            wireless_proxy.get_property("ActiveAccessPoint").ok()?;
+        if is_disconnected_ap_path(active_ap.as_str()) {
+            return None;
+        }
+        let ap_proxy = Proxy::new(&conn, NM_SERVICE, active_ap.as_str(), NM_AP_IFACE).ok()?;
+        let ssid_bytes: Vec<u8> = ap_proxy.get_property("Ssid").ok()?;
+        Some(String::from_utf8_lossy(&ssid_bytes).into_owned())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         None
     }
@@ -167,7 +223,10 @@ impl WifiMonitor {
 
         self.thread_handle = Some(thread::spawn(move || {
             if !try_event_driven_loop(&config, &running, &app_handle) {
-                log::warn!("SCDynamicStore setup failed — falling back to polling");
+                log::warn!(
+                    "Event-driven WiFi monitoring unavailable on this platform \
+                     (or setup failed) — falling back to polling"
+                );
                 polling_loop(&config, &running, &app_handle);
             }
         }));
@@ -264,13 +323,212 @@ fn polling_loop(config: &Arc<Mutex<AppConfig>>, running: &Arc<AtomicBool>, app_h
 
 // ─────────────────── Event-driven path (non-macOS stub) ─────────────────────
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn try_event_driven_loop(
     _config: &Arc<Mutex<AppConfig>>,
     _running: &Arc<AtomicBool>,
     _app_handle: &AppHandle,
 ) -> bool {
-    false // Always falls back to polling on non-macOS
+    false // Always falls back to polling on non-macOS, non-Linux platforms (e.g. Windows)
+}
+
+// ─────────────── Event-driven path (Linux NetworkManager D-Bus) ─────────────
+//
+// Uses `zbus::blocking` against NetworkManager's system-bus D-Bus surface. NM is present on
+// effectively every Ubuntu/Fedora desktop; on systems without it, `try_event_driven_loop`
+// returns `false` (bus name absent) and the caller falls back to polling, which also returns
+// `None` from `detect_current_ssid()` since the Linux block below shares the same NM-absence
+// check. See RFC 048 D1 for the accepted-risk rationale (NetworkManager-only reactive WiFi).
+
+#[cfg(target_os = "linux")]
+const NM_SERVICE: &str = "org.freedesktop.NetworkManager";
+#[cfg(target_os = "linux")]
+const NM_DEVICE_IFACE: &str = "org.freedesktop.NetworkManager.Device";
+#[cfg(target_os = "linux")]
+const NM_WIRELESS_IFACE: &str = "org.freedesktop.NetworkManager.Device.Wireless";
+#[cfg(target_os = "linux")]
+const NM_AP_IFACE: &str = "org.freedesktop.NetworkManager.AccessPoint";
+#[cfg(target_os = "linux")]
+const NM_PROPERTIES_IFACE: &str = "org.freedesktop.DBus.Properties";
+/// `DeviceType` enum value for WiFi devices, per the NetworkManager D-Bus API spec.
+#[cfg(target_os = "linux")]
+const NM_DEVICE_TYPE_WIFI: u32 = 2;
+
+/// The D-Bus object path NetworkManager uses to represent "no active access point" — the root
+/// path is never a real `AccessPoint` object, so it serves as the disconnected sentinel.
+/// Extracted as a pure predicate (mirroring the macOS `parse_ssid_output` precedent) so it's
+/// unit-testable without a live D-Bus connection.
+#[cfg(target_os = "linux")]
+fn is_disconnected_ap_path(path: &str) -> bool {
+    path == "/"
+}
+
+/// Pure decision function over whether NetworkManager's well-known bus name is currently owned
+/// on the system bus. Mirrors the `xdotool_present_from` seam pattern (`platform/linux.rs`,
+/// D3a): the caller performs the real D-Bus `NameHasOwner` check and passes in the resulting
+/// `bool`, keeping the decision itself unit-testable without a real system bus connection.
+#[cfg(target_os = "linux")]
+fn nm_available_from(has_bus_name: bool) -> bool {
+    has_bus_name
+}
+
+/// Check whether NetworkManager's well-known bus name is currently owned on the system bus.
+/// Returns `false` if the system bus itself is unreachable (treated the same as NM being
+/// absent — either way, the WiFi feature is unavailable).
+#[cfg(target_os = "linux")]
+fn nm_bus_name_present(conn: &zbus::blocking::Connection) -> bool {
+    use zbus::blocking::fdo::DBusProxy;
+    use zbus::names::BusName;
+
+    let Ok(dbus_proxy) = DBusProxy::new(conn) else {
+        return false;
+    };
+    let Ok(name) = BusName::try_from(NM_SERVICE) else {
+        return false;
+    };
+    dbus_proxy.name_has_owner(name).unwrap_or(false)
+}
+
+/// Find the object path of the first NetworkManager device with `DeviceType == 2` (WiFi).
+/// Returns `None` if NetworkManager is unavailable or no WiFi device is present.
+#[cfg(target_os = "linux")]
+fn find_wifi_device_path(
+    conn: &zbus::blocking::Connection,
+) -> Option<zbus::zvariant::OwnedObjectPath> {
+    use zbus::blocking::Proxy;
+
+    let nm_proxy = Proxy::new(
+        conn,
+        NM_SERVICE,
+        "/org/freedesktop/NetworkManager",
+        NM_SERVICE,
+    )
+    .ok()?;
+    let devices: Vec<zbus::zvariant::OwnedObjectPath> = nm_proxy.get_property("AllDevices").ok()?;
+
+    for device_path in devices {
+        let device_proxy =
+            Proxy::new(conn, NM_SERVICE, device_path.as_str(), NM_DEVICE_IFACE).ok()?;
+        let device_type: u32 = match device_proxy.get_property("DeviceType") {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        drop(device_proxy);
+        if device_type == NM_DEVICE_TYPE_WIFI {
+            return Some(device_path);
+        }
+    }
+    None
+}
+
+/// Try to run a `zbus`+NetworkManager event-driven loop on the current thread.
+/// Returns `true` if the loop ran to completion (i.e. `running` went false), or `false` if
+/// setup failed — NM bus name absent, no WiFi device found, or the system bus itself is
+/// unreachable (caller falls back to polling).
+#[cfg(target_os = "linux")]
+fn try_event_driven_loop(
+    config: &Arc<Mutex<AppConfig>>,
+    running: &Arc<AtomicBool>,
+    app_handle: &AppHandle,
+) -> bool {
+    use std::sync::mpsc;
+    use zbus::blocking::{Connection, Proxy};
+
+    let conn = match Connection::system() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to connect to the D-Bus system bus: {e}");
+            return false;
+        }
+    };
+
+    if !nm_available_from(nm_bus_name_present(&conn)) {
+        log::warn!(
+            "WifiMonitor: NetworkManager is not available on the D-Bus system bus \
+             (org.freedesktop.NetworkManager has no owner) — WiFi mode requires \
+             NetworkManager on Linux; falling back to polling (which will also report no SSID)"
+        );
+        return false;
+    }
+
+    let Some(wifi_path) = find_wifi_device_path(&conn) else {
+        log::warn!(
+            "WifiMonitor: no WiFi device found via NetworkManager — falling back to polling"
+        );
+        return false;
+    };
+
+    let device_proxy = match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to create Device proxy: {e}");
+            return false;
+        }
+    };
+    let state_sig_iter = match device_proxy.receive_signal("StateChanged") {
+        Ok(it) => it,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to subscribe to Device.StateChanged: {e}");
+            return false;
+        }
+    };
+
+    let props_proxy = match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_PROPERTIES_IFACE) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to create Properties proxy: {e}");
+            return false;
+        }
+    };
+    let props_sig_iter = match props_proxy
+        .receive_signal_with_args("PropertiesChanged", &[(0, NM_WIRELESS_IFACE)])
+    {
+        Ok(it) => it,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to subscribe to Wireless PropertiesChanged: {e}");
+            return false;
+        }
+    };
+
+    log::info!("WifiMonitor: zbus/NetworkManager event loop active");
+
+    // Bridge the two blocking signal iterators onto a single channel so the main loop below can
+    // wait on either with a timeout, mirroring the macOS CFRunLoopRunInMode(1.0) cadence.
+    let (tx, rx) = mpsc::channel::<()>();
+    let tx_state = tx.clone();
+    thread::spawn(move || {
+        for _sig in state_sig_iter {
+            if tx_state.send(()).is_err() {
+                break;
+            }
+        }
+    });
+    thread::spawn(move || {
+        for _sig in props_sig_iter {
+            if tx.send(()).is_err() {
+                break;
+            }
+        }
+    });
+
+    // Initial probe so the frontend gets state immediately on startup.
+    check_and_emit(config, app_handle);
+
+    while running.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(()) => check_and_emit(config, app_handle),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No signal within the ~1s slice — just loop again to re-check `running`.
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Both signal-forwarding threads exited (e.g. connection dropped) —
+                // nothing more to wait on.
+                break;
+            }
+        }
+    }
+
+    true
 }
 
 // ─────────────── Event-driven path (macOS SCDynamicStore) ───────────────────
@@ -625,5 +883,103 @@ mod tests {
             parse_ssid_output("Current Wi-Fi Network: My Home Network\n"),
             Some("My Home Network".to_string())
         );
+    }
+}
+
+/// @spec-handoff
+///
+/// ## `is_disconnected_ap_path`
+///
+/// ```
+/// fn is_disconnected_ap_path(path: &str) -> bool
+/// ```
+///
+/// Pure predicate mirroring the macOS `parse_ssid_output` precedent: NetworkManager represents
+/// "no active access point" as the D-Bus object path `"/"` (the root path is never a real
+/// `AccessPoint` object). `detect_current_ssid()` calls this on the `ActiveAccessPoint` property
+/// value before attempting to read `AccessPoint.Ssid`, returning `None` early when it's `true`.
+///
+/// Behavior:
+/// - `"/"` → `true` (disconnected sentinel).
+/// - Any other non-empty path (e.g. `"/org/freedesktop/NetworkManager/AccessPoint/22"`) →
+///   `false`.
+/// - `""` (empty string, never actually emitted by NM but defensively covered) → `false` — only
+///   the exact sentinel `"/"` counts as disconnected.
+///
+/// ## SSID byte-array decode (inline in `detect_current_ssid`, tested here via
+/// `String::from_utf8_lossy` directly — no separate helper needed since it's a single stdlib
+/// call)
+///
+/// NetworkManager's `AccessPoint.Ssid` property is D-Bus type `ay` (raw byte array), not `s`
+/// (string) — SSIDs are not guaranteed valid UTF-8. Decoding uses `String::from_utf8_lossy`,
+/// matching the existing macOS path's `CStr::to_string_lossy` semantics: valid UTF-8 bytes
+/// decode losslessly, and any invalid byte sequence is replaced with `U+FFFD` (lossy
+/// replacement) rather than panicking or returning an `Err`.
+///
+/// ## `nm_available_from`
+///
+/// ```
+/// fn nm_available_from(has_bus_name: bool) -> bool
+/// ```
+///
+/// Pure decision function mirroring the `xdotool_present_from` seam pattern established in
+/// `platform/linux.rs` for D3a: the caller performs the real D-Bus `NameHasOwner` check against
+/// `org.freedesktop.NetworkManager` and passes in the resulting `bool`, keeping the "is NM
+/// available" decision itself unit-testable without a real system bus connection. Identity
+/// function today (`has_bus_name` in, same value out) — kept as a named seam rather than
+/// inlined so the decision point has one place to grow additional signals later (e.g. also
+/// checking `WirelessEnabled`) without every call site needing to change.
+///
+/// Behavior:
+/// - `true` (NM bus name is owned) → `true` (NM available).
+/// - `false` (bus name absent — system bus reachable but NetworkManager isn't running/installed)
+///   → `false` (NM unavailable).
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    fn ssid_bytes_decode_valid_utf8() {
+        let raw: Vec<u8> = b"OfficeWiFi".to_vec();
+        assert_eq!(String::from_utf8_lossy(&raw), "OfficeWiFi");
+    }
+
+    #[test]
+    fn ssid_bytes_decode_non_utf8_is_lossy_not_panic() {
+        // 0xFF is not a valid UTF-8 continuation/start byte on its own.
+        let raw: Vec<u8> = vec![b'A', b'B', 0xFF, b'C'];
+        let decoded = String::from_utf8_lossy(&raw);
+        // Lossy decode replaces the invalid byte with U+FFFD rather than panicking.
+        assert!(decoded.contains('\u{FFFD}'));
+        assert!(decoded.starts_with("AB"));
+        assert!(decoded.ends_with('C'));
+    }
+
+    #[test]
+    fn disconnected_sentinel_path_is_detected() {
+        assert!(is_disconnected_ap_path("/"));
+    }
+
+    #[test]
+    fn real_access_point_path_is_not_disconnected() {
+        assert!(!is_disconnected_ap_path(
+            "/org/freedesktop/NetworkManager/AccessPoint/22"
+        ));
+    }
+
+    #[test]
+    fn empty_path_is_not_the_disconnected_sentinel() {
+        // Defensive: NM never actually emits "", but only the exact "/" sentinel counts.
+        assert!(!is_disconnected_ap_path(""));
+    }
+
+    #[test]
+    fn nm_available_from_true_when_bus_name_present() {
+        assert!(nm_available_from(true));
+    }
+
+    #[test]
+    fn nm_available_from_false_when_bus_name_absent() {
+        assert!(!nm_available_from(false));
     }
 }

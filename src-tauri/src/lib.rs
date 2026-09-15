@@ -366,6 +366,20 @@ fn request_location_permission() -> Result<(), String> {
     Ok(())
 }
 
+/// Check NetworkManager availability for reactive WiFi monitoring on Linux.
+/// Returns `"available"`, `"unavailable"`, or `"not_applicable"` (non-Linux platforms) — a
+/// single consistent shape the frontend can branch on without needing its own platform
+/// detection (there is no `tauri-plugin-os` dependency today).
+#[tauri::command]
+fn get_networkmanager_status() -> Result<String, String> {
+    let status = wifi::get_networkmanager_status();
+    match status {
+        wifi::NetworkManagerStatus::Available => Ok("available".to_string()),
+        wifi::NetworkManagerStatus::Unavailable => Ok("unavailable".to_string()),
+        wifi::NetworkManagerStatus::NotApplicable => Ok("not_applicable".to_string()),
+    }
+}
+
 // ───────────────────────── Hotkey string parser ────────────────────────────
 
 /// Parse a human-readable shortcut string like `"CmdOrCtrl+Shift+J"` into a
@@ -614,6 +628,7 @@ pub fn run() {
             get_current_wifi,
             get_location_status,
             request_location_permission,
+            get_networkmanager_status,
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
             log::info!("Another instance attempted to start -- focusing existing instance");
