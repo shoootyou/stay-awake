@@ -3,6 +3,33 @@
 Thank you for your interest in contributing! This document covers the conventions
 used in this project.
 
+## Development Prerequisites
+
+- Rust (stable) — install via [rustup](https://rustup.rs)
+- Node.js 22+
+- Tauri CLI — `cargo install tauri-cli`
+
+### Linux system dependencies
+
+Building on Linux requires the following system libraries (needed to compile Tauri's
+GTK/WebKit stack — `cargo check`/`cargo test` will fail to compile without them):
+
+```sh
+sudo apt-get install -y \
+  libgtk-3-dev \
+  libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  patchelf
+```
+
+Runtime notes for Linux users/contributors testing the app:
+
+- **NetworkManager** is required for WiFi mode.
+- **`xdotool`** is recommended (not required) for the mouse-jiggle modes; `Power Only` mode
+  works without it. The `.deb` package declares it as a `Recommends`.
+- Linux updates ship via the `.deb` package on GitHub Releases, not the in-app updater.
+
 ## Conventional Commits
 
 All commit messages **must** follow the
