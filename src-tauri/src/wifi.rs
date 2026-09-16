@@ -70,7 +70,14 @@ pub fn request_location() {
 /// NetworkManager availability, as surfaced to the frontend so it can present a single
 /// consistent shape across platforms without needing its own platform detection (the frontend
 /// has no `tauri-plugin-os` dependency today).
+///
+/// The `#[allow(dead_code)]` is on the enum itself rather than a single variant: on a Linux
+/// build, only `NotApplicable` goes unconstructed; on a non-Linux build, only `Available` and
+/// `Unavailable` go unconstructed (`derive`d impls like `serde::Serialize` don't count as
+/// construction for dead-code analysis). Which variant(s) are "dead" flips per target, so the
+/// allow needs to cover the whole enum rather than pin to whichever variant is dead today.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[allow(dead_code)]
 pub enum NetworkManagerStatus {
     /// Linux, and NetworkManager's D-Bus bus name is owned — WiFi mode is fully functional.
     Available,
@@ -79,8 +86,6 @@ pub enum NetworkManagerStatus {
     Unavailable,
     /// Non-Linux platform — this signal doesn't apply; WiFi detection uses a different
     /// mechanism (CoreWLAN/networksetup on macOS) that isn't NetworkManager-gated.
-    /// Only constructed on non-Linux targets, so it's dead code on a Linux-only build.
-    #[allow(dead_code)]
     NotApplicable,
 }
 
@@ -363,6 +368,17 @@ fn is_disconnected_ap_path(path: &str) -> bool {
     path == "/"
 }
 
+/// Decide whether a periodic re-check (`Option<String>` freshly read vs. the last-known value)
+/// represents an SSID change that should be emitted. Pure comparison extracted from the
+/// `Timeout` arm of `try_event_driven_loop` so the "did it change" decision is unit-testable
+/// without a live D-Bus connection — mirrors the macOS `try_event_driven_loop`'s inline
+/// `current != last_ssid` check (line ~831), just named and seamed for Linux's periodic
+/// safety-net re-check.
+#[cfg(target_os = "linux")]
+fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
+    current != last
+}
+
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
 /// on the system bus. Mirrors the `xdotool_present_from` seam pattern (`platform/linux.rs`,
 /// D3a): the caller performs the real D-Bus `NameHasOwner` check and passes in the resulting
@@ -407,8 +423,14 @@ fn find_wifi_device_path(
     let devices: Vec<zbus::zvariant::OwnedObjectPath> = nm_proxy.get_property("AllDevices").ok()?;
 
     for device_path in devices {
-        let device_proxy =
-            Proxy::new(conn, NM_SERVICE, device_path.as_str(), NM_DEVICE_IFACE).ok()?;
+        // A single un-constructible device proxy must not abort discovery of a WiFi device
+        // later in the list — `continue` here mirrors the `DeviceType` read failure handling
+        // directly below, rather than propagating `None` out of the whole function via `?`.
+        let device_proxy = match Proxy::new(conn, NM_SERVICE, device_path.as_str(), NM_DEVICE_IFACE)
+        {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
         let device_type: u32 = match device_proxy.get_property("DeviceType") {
             Ok(t) => t,
             Err(_) => continue,
@@ -494,16 +516,18 @@ fn try_event_driven_loop(
 
     // Bridge the two blocking signal iterators onto a single channel so the main loop below can
     // wait on either with a timeout, mirroring the macOS CFRunLoopRunInMode(1.0) cadence.
+    // Both `JoinHandle`s are kept (rather than discarded) so the cleanup block below this loop
+    // can join them — see the comment there for why that join is load-bearing.
     let (tx, rx) = mpsc::channel::<()>();
     let tx_state = tx.clone();
-    thread::spawn(move || {
+    let state_thread = thread::spawn(move || {
         for _sig in state_sig_iter {
             if tx_state.send(()).is_err() {
                 break;
             }
         }
     });
-    thread::spawn(move || {
+    let props_thread = thread::spawn(move || {
         for _sig in props_sig_iter {
             if tx.send(()).is_err() {
                 break;
@@ -512,13 +536,53 @@ fn try_event_driven_loop(
     });
 
     // Initial probe so the frontend gets state immediately on startup.
+    let mut last_ssid = detect_current_ssid();
     check_and_emit(config, app_handle);
+
+    // Periodic safety net, mirroring the macOS branch's `POLL_INTERVAL_SECS` pattern (see
+    // ~line 830 below): every `POLL_INTERVAL_SECS` timeout slices we (a) re-poll the SSID
+    // directly in case a D-Bus signal was missed, and (b) re-resolve the WiFi device path,
+    // because both match rules registered above are path-scoped (`MatchRule::path(...)`) and do
+    // not survive NetworkManager regenerating the device's object path on restart, or the path
+    // disappearing outright on device removal. If the path changed or vanished, the cached match
+    // rules are now watching a path nothing will ever signal on again — tear down and fall back
+    // to polling rather than staying permanently deaf.
+    const POLL_INTERVAL_SECS: u32 = 5;
+    let mut ticks: u32 = 0;
+    let mut path_stale = false;
 
     while running.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(()) => check_and_emit(config, app_handle),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // No signal within the ~1s slice — just loop again to re-check `running`.
+                ticks += 1;
+                if ticks >= POLL_INTERVAL_SECS {
+                    ticks = 0;
+
+                    match find_wifi_device_path(&conn) {
+                        Some(current_path) if current_path == wifi_path => {
+                            let current = detect_current_ssid();
+                            if ssid_changed(&current, &last_ssid) {
+                                log::debug!(
+                                    "WiFi periodic check: SSID changed {:?} → {:?}",
+                                    last_ssid,
+                                    current
+                                );
+                                check_and_emit(config, app_handle);
+                                last_ssid = current;
+                            }
+                        }
+                        _ => {
+                            log::warn!(
+                                "WifiMonitor: WiFi device path changed or disappeared \
+                                 (NetworkManager restart or device removal) — falling back \
+                                 to polling"
+                            );
+                            path_stale = true;
+                            break;
+                        }
+                    }
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Both signal-forwarding threads exited (e.g. connection dropped) —
@@ -528,7 +592,22 @@ fn try_event_driven_loop(
         }
     }
 
-    true
+    // Close the connection so both blocked `SignalIterator::next()` calls unblock: closing the
+    // shared socket makes the socket-reader task broadcast a terminal error to every match-rule
+    // stream and then clear its senders, which ends each `for` loop above and lets
+    // `SignalIterator`'s `Drop` run its `AsyncDrop` (deregistering the match rule) before this
+    // function returns. Without this, `stop()`/`restart()` leaves both signal-forwarding threads
+    // blocked forever, each still holding a live match rule — the leak this fix closes.
+    if let Err(e) = conn.close() {
+        log::debug!("WifiMonitor: error closing D-Bus connection during shutdown: {e}");
+    }
+    for handle in [state_thread, props_thread] {
+        if handle.join().is_err() {
+            log::debug!("WifiMonitor: a signal-forwarding thread panicked during shutdown");
+        }
+    }
+
+    !path_stale
 }
 
 // ─────────────── Event-driven path (macOS SCDynamicStore) ───────────────────
@@ -934,6 +1013,24 @@ mod tests {
 /// - `true` (NM bus name is owned) → `true` (NM available).
 /// - `false` (bus name absent — system bus reachable but NetworkManager isn't running/installed)
 ///   → `false` (NM unavailable).
+///
+/// ## `ssid_changed`
+///
+/// ```
+/// fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool
+/// ```
+///
+/// Pure comparison extracted from the `Timeout` arm of `try_event_driven_loop`'s periodic
+/// safety-net re-check (HIGH #1 remediation), mirroring the macOS branch's inline
+/// `current != last_ssid` check. Kept as a named seam so the "did the SSID change" decision is
+/// unit-testable without a live D-Bus connection or a real WiFi adapter.
+///
+/// Behavior:
+/// - Both `None` (disconnected, still disconnected) → `false` (no change).
+/// - `None` → `Some(ssid)` (connected after being disconnected) → `true`.
+/// - `Some(ssid)` → `None` (disconnected after being connected) → `true`.
+/// - `Some(a)` → `Some(a)` (same SSID) → `false`.
+/// - `Some(a)` → `Some(b)` where `a != b` (roamed to a different network) → `true`.
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
@@ -981,5 +1078,114 @@ mod linux_tests {
     #[test]
     fn nm_available_from_false_when_bus_name_absent() {
         assert!(!nm_available_from(false));
+    }
+
+    #[test]
+    fn ssid_changed_false_when_both_none() {
+        assert!(!ssid_changed(&None, &None));
+    }
+
+    #[test]
+    fn ssid_changed_true_when_connecting_from_disconnected() {
+        assert!(ssid_changed(&Some("OfficeWiFi".to_string()), &None));
+    }
+
+    #[test]
+    fn ssid_changed_true_when_disconnecting_from_connected() {
+        assert!(ssid_changed(&None, &Some("OfficeWiFi".to_string())));
+    }
+
+    #[test]
+    fn ssid_changed_false_when_same_ssid() {
+        assert!(!ssid_changed(
+            &Some("OfficeWiFi".to_string()),
+            &Some("OfficeWiFi".to_string())
+        ));
+    }
+
+    #[test]
+    fn ssid_changed_true_when_roamed_to_different_ssid() {
+        assert!(ssid_changed(
+            &Some("HomeWiFi".to_string()),
+            &Some("OfficeWiFi".to_string())
+        ));
+    }
+
+    // ── Live-verification tests against a real NetworkManager D-Bus (HIGH #1/#2) ───────────
+    //
+    // These require a running `NetworkManager` on the system D-Bus with at least one WiFi
+    // device present (`DeviceType == 2`). They are `#[ignore]`d by default so a plain `cargo
+    // test` never depends on host D-Bus/NM state, and are run explicitly with
+    // `cargo test -- --ignored` on a host known to have NetworkManager (verified present in
+    // this remediation session — see the plan's audit report for the live evidence captured).
+
+    /// HIGH #1 evidence: `find_wifi_device_path` resolves to a real, currently-present WiFi
+    /// device path on a live system, and calling it twice in a row is stable (same device,
+    /// same path) absent an actual NM restart/device removal — i.e. the staleness branch in
+    /// `try_event_driven_loop`'s periodic re-check is not a false positive on a healthy system.
+    #[test]
+    #[ignore = "requires a live NetworkManager D-Bus + WiFi device"]
+    fn find_wifi_device_path_is_stable_on_a_healthy_live_system() {
+        let conn = zbus::blocking::Connection::system()
+            .expect("system bus should be reachable in this environment");
+        let first = find_wifi_device_path(&conn);
+        assert!(
+            first.is_some(),
+            "expected a live WiFi device on this host — see plan's Chi context: verified via \
+             `busctl --system get-property .../Devices/2 ... DeviceType` == 2"
+        );
+        let second = find_wifi_device_path(&conn);
+        assert_eq!(
+            first, second,
+            "device path should be stable across two immediate re-resolutions absent a real \
+             NM restart or device removal"
+        );
+    }
+
+    /// HIGH #2 evidence: closing the blocking `Connection` unblocks a thread parked in
+    /// `SignalIterator::next()` — the exact mechanism `try_event_driven_loop`'s shutdown path
+    /// now relies on to join both signal-forwarding threads during `stop()`/`restart()` instead
+    /// of leaking them. Traced via zbus 5.19.0 source: `Connection::close()` shuts down the
+    /// socket, the socket-reader task then broadcasts a terminal `Err` to every registered
+    /// match-rule sender and clears its sender map, which ends the `SignalStream`/`MessageStream`
+    /// and returns `None` from the next `SignalIterator::next()` poll.
+    #[test]
+    #[ignore = "requires a live NetworkManager D-Bus + WiFi device"]
+    fn closing_connection_unblocks_a_parked_signal_iterator_thread() {
+        use std::sync::mpsc;
+
+        let conn = zbus::blocking::Connection::system()
+            .expect("system bus should be reachable in this environment");
+        let wifi_path =
+            find_wifi_device_path(&conn).expect("expected a live WiFi device on this host");
+        let device_proxy =
+            zbus::blocking::Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE)
+                .expect("Device proxy should construct against a live NM device");
+        let sig_iter = device_proxy
+            .receive_signal("StateChanged")
+            .expect("subscribing to StateChanged should succeed against a live NM device");
+
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            // Blocks in `SignalIterator::next()` until the connection closes underneath it —
+            // exactly the leak scenario HIGH #2 describes, absent the `conn.close()` call below.
+            for _sig in sig_iter {}
+            let _ = done_tx.send(());
+        });
+
+        // Give the forwarder thread a moment to actually park in `next()` before we close.
+        thread::sleep(Duration::from_millis(200));
+
+        conn.close()
+            .expect("closing a live system-bus connection should succeed");
+
+        // If `Connection::close()` didn't unblock the parked iterator, this would hang until
+        // the test harness times out — a real (not simulated) proof of the shutdown mechanism.
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("closing the connection should unblock the parked SignalIterator thread");
+        handle
+            .join()
+            .expect("signal-forwarding thread should exit cleanly after the connection closes");
     }
 }
