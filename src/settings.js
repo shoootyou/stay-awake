@@ -6,6 +6,35 @@ let originalConfig = {};
 
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
 
+// Linux platform signal, resolved via a backend-sourced command rather than UA-sniffing.
+// `isMac` above is a `navigator.platform` heuristic kept only for hotkey-glyph rendering
+// (⌘ vs Ctrl) — it cannot reliably distinguish Linux from Windows across webview engines
+// (both fail the "MAC" substring test identically), so it is unsuitable for the
+// xdotool-specific accessibility copy below, which needs a genuine Linux/non-Linux split.
+let isLinux = false;
+
+// Resolve the real platform from the backend and, on Linux, swap the accessibility
+// banner's static data-i18n keys to the xdotool-specific ones before the first
+// applyTranslations() call renders them. Must run before checkAccessibility()/
+// applyTranslations() in loadConfig() so the correct key is already in place.
+async function detectPlatform() {
+  try {
+    const os = await invoke("get_platform_os");
+    isLinux = os === "linux";
+  } catch (_) {
+    isLinux = false;
+  }
+
+  if (isLinux) {
+    const bannerText = document.querySelector(
+      '#accessibility-banner [data-i18n="settings-accessibility-banner"]'
+    );
+    if (bannerText) bannerText.setAttribute("data-i18n", "settings-xdotool-banner");
+    const grantBtn = document.getElementById("grant-btn");
+    if (grantBtn) grantBtn.setAttribute("data-i18n", "settings-xdotool-install-btn");
+  }
+}
+
 function formatHotkeyDisplay(hotkey) {
   return hotkey
     .replace("CmdOrCtrl", isMac ? "\u2318 Cmd" : "Ctrl")
@@ -33,6 +62,8 @@ async function applyTranslations() {
 
 async function loadConfig() {
   try {
+    await detectPlatform();
+
     const cfg = await invoke("get_config");
     originalConfig = cfg;
 
@@ -181,6 +212,17 @@ async function autoSave() {
 }
 
 async function grantAccessibility() {
+  // On Linux there is no OS permission dialog to request — the gating condition is
+  // whether `xdotool` is present on PATH, fixable only from a terminal (`apt install
+  // xdotool`). The 6-attempt/30 s poll below can never succeed there since nothing about
+  // the system changes without that terminal action, so the button is a plain Recheck
+  // that re-runs checkAccessibility() directly and returns — no request_accessibility()
+  // call, no poll.
+  if (isLinux) {
+    await checkAccessibility();
+    return;
+  }
+
   try {
     await invoke("request_accessibility");
   } catch (e) {

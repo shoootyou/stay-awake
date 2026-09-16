@@ -66,3 +66,9 @@ settings-wifi-none = No networks registered
 settings-wifi-disconnected = Not connected
 settings-wifi-hint = When enabled, Stay Awake activates only on registered networks.
 settings-wifi-nm-required = NetworkManager is required for WiFi mode on Linux.
+
+# Linux xdotool
+tray-xdotool-missing = xdotool not found — install xdotool for mouse-jiggle mode
+tray-xdotool-ok = xdotool OK
+settings-xdotool-banner = Mouse modes require xdotool. Install it with: sudo apt install xdotool
+settings-xdotool-install-btn = Recheck

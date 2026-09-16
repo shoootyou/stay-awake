@@ -340,6 +340,16 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Return the compile-time target OS (`"linux"`, `"macos"`, `"windows"`) so the frontend can
+/// branch on platform without relying on `navigator.platform` UA-sniffing, which is
+/// deprecated and does not reliably distinguish Linux from Windows across webview engines.
+/// Mirrors the `get_networkmanager_status` precedent of surfacing platform facts via a
+/// backend-sourced command rather than frontend detection.
+#[tauri::command]
+fn get_platform_os() -> String {
+    std::env::consts::OS.to_string()
+}
+
 /// Return the SSID of the currently connected WiFi network, or `None` if
 /// disconnected. Delegates directly to the platform detection function.
 #[tauri::command]
@@ -608,6 +618,56 @@ fn is_appindicator_panic_message(message: &str) -> bool {
     message.contains("appindicator")
 }
 
+/// Pure selection logic: which Fluent key names the tray accessibility-warning item's
+/// text when the checked condition is *not* satisfied?
+///
+/// Linux never had a macOS-style accessibility permission to grant — the real gating
+/// condition there is whether `xdotool` is present on `PATH` (see
+/// `LinuxPermissionChecker::check_accessibility`). Kept as a pure `bool -> &str` function,
+/// separate from any `#[cfg(target_os = ...)]` gate, so the decision is unit-testable on
+/// every build target.
+fn warn_key_for(is_linux: bool) -> &'static str {
+    if is_linux {
+        "tray-xdotool-missing"
+    } else {
+        "tray-grant-accessibility"
+    }
+}
+
+/// Pure selection logic: which Fluent key names the tray accessibility item's text when
+/// the checked condition *is* satisfied? Counterpart to `warn_key_for`.
+fn ok_key_for(is_linux: bool) -> &'static str {
+    if is_linux {
+        "tray-xdotool-ok"
+    } else {
+        "tray-accessibility-ok"
+    }
+}
+
+/// Fluent key for the tray accessibility-warning item on this build target.
+#[cfg(target_os = "linux")]
+fn accessibility_warn_key() -> &'static str {
+    warn_key_for(true)
+}
+
+/// Fluent key for the tray accessibility-warning item on this build target.
+#[cfg(not(target_os = "linux"))]
+fn accessibility_warn_key() -> &'static str {
+    warn_key_for(false)
+}
+
+/// Fluent key for the tray accessibility-OK item on this build target.
+#[cfg(target_os = "linux")]
+fn accessibility_ok_key() -> &'static str {
+    ok_key_for(true)
+}
+
+/// Fluent key for the tray accessibility-OK item on this build target.
+#[cfg(not(target_os = "linux"))]
+fn accessibility_ok_key() -> &'static str {
+    ok_key_for(false)
+}
+
 /// Build and run the Tauri application (called from `main.rs`).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -633,6 +693,7 @@ pub fn run() {
             delete_profile,
             update_global_hotkey,
             get_app_version,
+            get_platform_os,
             get_current_wifi,
             get_location_status,
             request_location_permission,
@@ -836,10 +897,13 @@ pub fn run() {
 
                 // Accessibility permission indicator.
                 let (acc_text, acc_enabled) = if has_accessibility {
-                    (format!("\u{1f7e2} {}", tr("tray-accessibility-ok")), false)
+                    (
+                        format!("\u{1f7e2} {}", tr(accessibility_ok_key())),
+                        false,
+                    )
                 } else {
                     (
-                        format!("\u{26a0}\u{fe0f} {}", tr("tray-grant-accessibility")),
+                        format!("\u{26a0}\u{fe0f} {}", tr(accessibility_warn_key())),
                         true,
                     )
                 };
@@ -881,7 +945,7 @@ pub fn run() {
                 // Translated tooltip strings for the tray-menu event closure.
                 let tip_active = tr("tray-tooltip-active");
                 let tip_inactive = tr("tray-tooltip-inactive");
-                let acc_ok_text = format!("\u{1f7e2} {}", tr("tray-accessibility-ok"));
+                let acc_ok_text = format!("\u{1f7e2} {}", tr(accessibility_ok_key()));
 
                 // Clones for the tray-menu closure.
                 let engine_for_tray = Arc::clone(&shared_engine);
@@ -992,10 +1056,20 @@ pub fn run() {
                                 }
                             }
                             "grant_accessibility" => {
-                                if let Err(e) = perm_for_tray.request_accessibility() {
-                                    log::error!("Failed to request accessibility: {}", e);
+                                // On Linux there is no OS permission dialog to trigger — the
+                                // gating condition is whether `xdotool` is present on `PATH`,
+                                // which the user can only fix from a terminal. Calling
+                                // `request_accessibility()` there is a no-op; clicking this
+                                // item is a genuine re-check instead.
+                                #[cfg(not(target_os = "linux"))]
+                                {
+                                    if let Err(e) = perm_for_tray.request_accessibility() {
+                                        log::error!("Failed to request accessibility: {}", e);
+                                    }
                                 }
-                                // Re-check after the user (potentially) grants access.
+                                // Re-check — on Linux this is the sole action; on
+                                // macOS/Windows it re-checks after the user (potentially)
+                                // grants access via the OS dialog opened above.
                                 if perm_for_tray.check_accessibility() {
                                     let _ = accessibility_clone.set_text(&acc_ok_text);
                                     let _ = accessibility_clone.set_enabled(false);
@@ -1189,5 +1263,53 @@ mod appindicator_panic_hook_tests {
             lib_name
         );
         assert!(is_appindicator_panic_message(payload.as_str()));
+    }
+}
+
+// @spec-handoff
+// Interface:
+//   `fn warn_key_for(is_linux: bool) -> &'static str`
+//   `fn ok_key_for(is_linux: bool) -> &'static str`
+//   `fn accessibility_warn_key() -> &'static str` (thin `#[cfg(target_os = "linux")]` wrapper
+//     over `warn_key_for`)
+//   `fn accessibility_ok_key() -> &'static str` (thin `#[cfg(target_os = "linux")]` wrapper
+//     over `ok_key_for`)
+// Purpose: select the correct Fluent key id for the tray accessibility-warning menu item
+//   depending on target OS, so macOS/Windows keep their existing "Grant Accessibility"
+//   semantic copy while Linux gets copy naming the real condition (missing `xdotool`).
+// Behavior:
+//   - `warn_key_for(true)` (Linux) returns `"tray-xdotool-missing"`.
+//   - `warn_key_for(false)` (macOS/Windows) returns `"tray-grant-accessibility"`.
+//   - `ok_key_for(true)` (Linux) returns `"tray-xdotool-ok"`.
+//   - `ok_key_for(false)` (macOS/Windows) returns `"tray-accessibility-ok"`.
+// Edge cases:
+//   - The pure `_for(bool)` functions carry the branch logic and are unit-tested
+//     unconditionally (no `#[cfg(target_os = ...)]` gate on the test module itself), per the
+//     step spec's instruction to keep the decision testable without a Linux-only test gate.
+//   - The real `#[cfg(target_os = "linux")]`-gated `accessibility_warn_key`/
+//     `accessibility_ok_key` wrappers are exercised indirectly by the tray call sites; they
+//     are not unit-tested directly since their body is a one-line delegation with no branch.
+#[cfg(test)]
+mod accessibility_key_selection_tests {
+    use super::*;
+
+    #[test]
+    fn warn_key_for_linux_is_xdotool_missing() {
+        assert_eq!(warn_key_for(true), "tray-xdotool-missing");
+    }
+
+    #[test]
+    fn warn_key_for_non_linux_is_grant_accessibility() {
+        assert_eq!(warn_key_for(false), "tray-grant-accessibility");
+    }
+
+    #[test]
+    fn ok_key_for_linux_is_xdotool_ok() {
+        assert_eq!(ok_key_for(true), "tray-xdotool-ok");
+    }
+
+    #[test]
+    fn ok_key_for_non_linux_is_accessibility_ok() {
+        assert_eq!(ok_key_for(false), "tray-accessibility-ok");
     }
 }

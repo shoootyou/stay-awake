@@ -66,3 +66,9 @@ settings-wifi-none = Nenhuma rede registrada
 settings-wifi-disconnected = Não conectado
 settings-wifi-hint = Quando ativado, Stay Awake funciona apenas em redes registradas.
 settings-wifi-nm-required = O NetworkManager é necessário para o modo WiFi no Linux.
+
+# xdotool no Linux
+tray-xdotool-missing = xdotool não encontrado — instale o xdotool para o modo mouse
+tray-xdotool-ok = xdotool OK
+settings-xdotool-banner = Os modos de mouse requerem xdotool. Instale com: sudo apt install xdotool
+settings-xdotool-install-btn = Verificar novamente
