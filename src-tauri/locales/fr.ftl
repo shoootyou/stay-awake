@@ -69,6 +69,6 @@ settings-wifi-nm-required = NetworkManager est requis pour le mode WiFi sous Lin
 
 # xdotool sous Linux
 tray-xdotool-missing = xdotool introuvable — installez xdotool pour le mode souris
-tray-xdotool-ok = xdotool OK
+tray-xdotool-ok = xdotool trouvé
 settings-xdotool-banner = Les modes souris nécessitent xdotool. Installez-le avec : sudo apt install xdotool
 settings-xdotool-install-btn = Réessayer

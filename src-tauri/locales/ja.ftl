@@ -69,6 +69,6 @@ settings-wifi-nm-required = LinuxでWiFiモードを使用するにはNetworkMan
 
 # Linuxのxdotool
 tray-xdotool-missing = xdotoolが見つかりません — マウス揺動モードにはxdotoolをインストールしてください
-tray-xdotool-ok = xdotool OK
+tray-xdotool-ok = xdotool 正常
 settings-xdotool-banner = マウスモードにはxdotoolが必要です。次でインストールしてください: sudo apt install xdotool
 settings-xdotool-install-btn = 再確認

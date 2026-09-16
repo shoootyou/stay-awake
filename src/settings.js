@@ -151,18 +151,25 @@ async function checkAccessibility() {
 const MODE_DESCRIPTIONS = {
   Manual:   "Engine starts and stops manually via the tray toggle or global hotkey.",
   AlwaysOn: "Engine runs continuously while Stay Awake is open.",
-  // Location Services is only required on macOS (CoreWLAN SSID detection). On Linux, WiFi
-  // mode is gated on NetworkManager instead — surfaced separately via the NM banner below.
-  WiFi: isMac
-    ? "Engine activates automatically on registered networks. Requires Location Services."
-    : "Engine activates automatically on registered networks.",
 };
+
+// Location Services is only required on macOS (CoreWLAN SSID detection). On Linux, WiFi
+// mode is gated on NetworkManager instead — surfaced separately via the NM banner below.
+// Resolved at call time (not module load) so it can consult the backend-sourced `isLinux`
+// signal instead of the unreliable module-load-time `isMac` UA-sniff.
+function wifiModeDescription() {
+  return isLinux
+    ? "Engine activates automatically on registered networks."
+    : "Engine activates automatically on registered networks. Requires Location Services.";
+}
 
 function updateModeDescription() {
   const select = document.getElementById("app-mode");
   const desc = document.getElementById("app-mode-desc");
   if (!select || !desc) return;
-  desc.textContent = MODE_DESCRIPTIONS[select.value] || "";
+  desc.textContent = select.value === "WiFi"
+    ? wifiModeDescription()
+    : (MODE_DESCRIPTIONS[select.value] || "");
 }
 
 async function autoSave() {
@@ -355,16 +362,14 @@ async function updateNetworkManagerBanner() {
   if (!banner) {
     const details = document.getElementById("wifi-details");
     if (!details) return;
+    const translated = await invoke("get_translation", { key: "settings-wifi-nm-required" }).catch(() => "");
     banner = document.createElement("div");
     banner.id = "wifi-nm-banner";
     banner.className = "wifi-location-banner";
     const text = document.createElement("span");
     text.setAttribute("data-i18n", "settings-wifi-nm-required");
-    text.textContent = "NetworkManager is required for WiFi mode on Linux.";
+    text.textContent = translated;
     banner.appendChild(text);
-    invoke("get_translation", { key: "settings-wifi-nm-required" })
-      .then((t) => { text.textContent = t; })
-      .catch(() => {});
     details.insertBefore(banner, details.firstChild);
   }
 

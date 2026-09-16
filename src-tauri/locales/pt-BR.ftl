@@ -69,6 +69,6 @@ settings-wifi-nm-required = O NetworkManager é necessário para o modo WiFi no 
 
 # xdotool no Linux
 tray-xdotool-missing = xdotool não encontrado — instale o xdotool para o modo mouse
-tray-xdotool-ok = xdotool OK
+tray-xdotool-ok = xdotool encontrado
 settings-xdotool-banner = Os modos de mouse requerem xdotool. Instale com: sudo apt install xdotool
 settings-xdotool-install-btn = Verificar novamente

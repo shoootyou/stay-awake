@@ -69,6 +69,6 @@ settings-wifi-nm-required = NetworkManager ist für den WLAN-Modus unter Linux e
 
 # xdotool unter Linux
 tray-xdotool-missing = xdotool nicht gefunden — installiere xdotool für den Maus-Modus
-tray-xdotool-ok = xdotool OK
+tray-xdotool-ok = xdotool gefunden
 settings-xdotool-banner = Mausmodi erfordern xdotool. Installiere es mit: sudo apt install xdotool
 settings-xdotool-install-btn = Erneut prüfen

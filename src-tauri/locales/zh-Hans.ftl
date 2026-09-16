@@ -69,6 +69,6 @@ settings-wifi-nm-required = 在Linux上使用WiFi模式需要NetworkManager。
 
 # Linux上的xdotool
 tray-xdotool-missing = 未找到xdotool — 安装xdotool以使用鼠标晃动模式
-tray-xdotool-ok = xdotool OK
+tray-xdotool-ok = xdotool 正常
 settings-xdotool-banner = 鼠标模式需要xdotool。安装方式：sudo apt install xdotool
 settings-xdotool-install-btn = 重新检查
