@@ -600,6 +600,14 @@ fn is_within_schedule(cfg: &AppConfig) -> bool {
     cfg.schedule_enabled && engine::is_within_schedule(cfg)
 }
 
+/// Pure predicate: does this panic message describe the appindicator dynamic-library
+/// load failure raised by `libappindicator-sys`? Matched on message text only — no
+/// coupling to the library's private soname-search logic.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_appindicator_panic_message(message: &str) -> bool {
+    message.contains("appindicator")
+}
+
 /// Build and run the Tauri application (called from `main.rs`).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -901,6 +909,32 @@ pub fn run() {
                 let active_icon_for_sc = active_icon.clone();
                 let inactive_icon_for_sc = inactive_icon.clone();
 
+                // ── Panic-hook diagnostic for appindicator dlopen failures ──
+                // Under `panic = "abort"` (release profile), a missing
+                // libayatana-appindicator3 causes an unavoidable abort inside
+                // TrayIconBuilder::build(). This does NOT prevent the abort — it only
+                // makes the failure actionable by naming the missing package on stderr
+                // before the process goes down.
+                #[cfg(target_os = "linux")]
+                {
+                    let previous_hook = std::panic::take_hook();
+                    std::panic::set_hook(Box::new(move |info| {
+                        previous_hook(info);
+                        let message = info
+                            .payload()
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| info.payload().downcast_ref::<&str>().copied());
+                        if let Some(message) = message {
+                            if is_appindicator_panic_message(message) {
+                                eprintln!(
+                                    "the system tray library is missing — install libayatana-appindicator3-1"
+                                );
+                            }
+                        }
+                    }));
+                }
+
                 TrayIconBuilder::with_id("main")
                     .icon(active_icon)
                     .tooltip(&tip_active)
@@ -1110,4 +1144,50 @@ pub fn run() {
                 }
             },
         );
+}
+
+// @spec-handoff
+// Interface: `fn is_appindicator_panic_message(message: &str) -> bool`
+// Purpose: pure, testable predicate extracted from the Linux panic-hook diagnostic
+//   (E4/D2) that decides whether a panic payload's message text refers to the
+//   appindicator dynamic-library load failure raised by `libappindicator-sys`.
+// Behavior:
+//   - Case-sensitive substring match on `"appindicator"` (matches both
+//     `ayatana-appindicator3` and `appindicator3` shapes, since both contain the substring).
+//   - Returns `false` for unrelated panic messages.
+// Edge cases:
+//   - The real `libappindicator-sys` panic payload is a `String` built via format args
+//     (not a `&'static str` literal) — the predicate itself is payload-type-agnostic
+//     (it takes an already-downcast `&str`), but the caller (Task 2) must downcast
+//     `String` first, `&str` second, per the RFC's verified payload shape. Covered by
+//     `matches_when_payload_is_a_string_not_a_literal` below, which builds the input via
+//     `format!()` to avoid the literal being folded into a `&'static str` by the compiler.
+#[cfg(test)]
+mod appindicator_panic_hook_tests {
+    use super::*;
+
+    #[test]
+    fn matches_real_libappindicator_sys_panic_message() {
+        let payload = "Failed to load ayatana-appindicator3 or appindicator3 dynamic library";
+        assert!(is_appindicator_panic_message(payload));
+    }
+
+    #[test]
+    fn does_not_match_unrelated_panic_message() {
+        let payload = "index out of bounds: the len is 3 but the index is 5";
+        assert!(!is_appindicator_panic_message(payload));
+    }
+
+    #[test]
+    fn matches_when_payload_is_a_string_not_a_literal() {
+        // Built via format! so the compiler can't fold this into a &'static str —
+        // mirrors the real payload shape the RFC verified (a heap-allocated String
+        // from libappindicator-sys's format-args panic, not a string literal).
+        let lib_name = "ayatana-appindicator3";
+        let payload: String = format!(
+            "Failed to load {} or appindicator3 dynamic library",
+            lib_name
+        );
+        assert!(is_appindicator_panic_message(payload.as_str()));
+    }
 }
