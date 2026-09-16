@@ -125,6 +125,14 @@ jobs:
 
   build-linux:
     name: Build Linux
+    # Depends on build-macos so macOS creates the GitHub release first (getOrCreateRelease's
+    # createRelease path) and this job finds it via getReleaseByTag, instead of both jobs
+    # racing to create the same tag's release concurrently (loser gets an unhandled 422
+    # already_exists from tauri-action). `needs:` implies an implicit success() gate: if
+    # build-macos is ever skipped (not just failed), build-linux is ALSO skipped by default.
+    # build-macos has no conditional skip path today, so this is safe — but if one is added,
+    # revisit this job's `if:` too, or the Linux artifact silently stops being produced.
+    needs: build-macos
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: public
@@ -189,3 +197,7 @@ jobs:
           prerelease: false
           includeUpdaterJson: false
           args: --verbose
+
+      - name: Warn on Linux build failure
+        if: failure()
+        run: echo "::warning::build-linux failed - this release will ship without a Linux .deb artifact"
