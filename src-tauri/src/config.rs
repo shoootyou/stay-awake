@@ -86,11 +86,36 @@ pub struct AppConfig {
     pub wifi: WifiConfig,
 }
 
+/// Default `jiggle_mode` for a fresh `AppConfig`.
+///
+/// On Linux this defaults to `PowerOnly` rather than `MouseSubtle`. The RFC's A1 assumption —
+/// that `xdotool` absolute-motion injection resets the GNOME/Mutter idle timer on Wayland — was
+/// left genuinely unresolved by the implementation-phase measurement attempt (the sandbox
+/// environment used for that pass could not reliably exercise the session D-Bus/systemd-user
+/// tooling required). This is an inconclusive result, not a confirmed timer-reset failure, but
+/// per the RFC's own precautionary framing an unresolved measurement is treated as "not shown to
+/// reset" for the purposes of choosing a default. `PowerOnly` (systemd-inhibit-based) is already
+/// verified working on Linux, so it is the safe default here. Mouse-jiggle modes remain fully
+/// available and are known to work on X11 — users can opt into `MouseSubtle` / `MouseCircle` /
+/// `MouseZen` manually via Settings once they've confirmed it works for their setup. A future
+/// re-test on real hardware (outside this sandbox) may confirm the Wayland reset behavior and
+/// justify flipping this default back — see README.md § Linux prerequisites.
+#[cfg(target_os = "linux")]
+fn default_jiggle_mode() -> JiggleMode {
+    JiggleMode::PowerOnly
+}
+
+/// Default `jiggle_mode` for a fresh `AppConfig` on non-Linux targets.
+#[cfg(not(target_os = "linux"))]
+fn default_jiggle_mode() -> JiggleMode {
+    JiggleMode::MouseSubtle
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             mode: AppMode::Manual,
-            jiggle_mode: JiggleMode::MouseSubtle,
+            jiggle_mode: default_jiggle_mode(),
             interval_secs: 30,
             autostart: false,
             language: String::from("en"),
@@ -249,5 +274,17 @@ mod tests {
         let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
         assert_eq!(decoded.mode, AppMode::WiFi);
         assert!(decoded.wifi_enabled());
+    }
+
+    /// E8 fallback: on Linux, `AppConfig::default()` must default `jiggle_mode` to
+    /// `PowerOnly` (A1 — Wayland idle-timer reset — was left inconclusive), while all other
+    /// targets keep the original `MouseSubtle` default.
+    #[test]
+    fn default_jiggle_mode_is_power_only_on_linux_and_mouse_subtle_elsewhere() {
+        let cfg = AppConfig::default();
+        #[cfg(target_os = "linux")]
+        assert_eq!(cfg.jiggle_mode, JiggleMode::PowerOnly);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(cfg.jiggle_mode, JiggleMode::MouseSubtle);
     }
 }

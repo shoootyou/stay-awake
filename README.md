@@ -55,6 +55,19 @@ sudo apt install ./stay-awake_<version>_amd64.deb
 - **NetworkManager** — required for WiFi mode (auto-activate on a registered network). Other modes work without it.
 - **`xdotool`** (recommended, not required) — needed for the mouse-jiggle modes (Subtle, Zen, Circle). `Power Only` mode works without it. The `.deb` package declares `xdotool` as a `Recommends`, so it installs automatically via `apt` unless you opt out with `--no-install-recommends`.
 
+**Why `Power Only` is the default jiggle mode on Linux:** the mouse-jiggle modes rely on
+`xdotool` injecting absolute mouse motion to reset the desktop's idle timer. Whether this
+actually resets GNOME/Mutter's idle timer under Wayland was never conclusively measured during
+implementation — the measurement attempt was run in a sandboxed environment that could not
+reliably reach the session D-Bus/systemd-user-session tooling required, so the result is
+genuinely inconclusive rather than a confirmed failure. Per this project's precautionary
+policy, an inconclusive reset measurement is treated the same as a negative one for choosing a
+default, so `Power Only` (which uses `systemd-inhibit` and is verified working) ships as the
+Linux default instead of `MouseSubtle`. If you're on X11 and have confirmed mouse-jiggle works
+for your setup, you can still opt into `Mouse Subtle` / `Mouse Circle` / `Mouse Zen` manually
+via Settings. A future re-test on real (non-sandboxed) Wayland hardware may confirm the reset
+behavior and justify changing this default back — contributions measuring this are welcome.
+
 ## Updates
 
 **Homebrew (macOS)** — run `brew upgrade shoootyou/tap/stay-awake`.
