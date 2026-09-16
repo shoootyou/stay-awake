@@ -120,7 +120,11 @@ async function checkAccessibility() {
 const MODE_DESCRIPTIONS = {
   Manual:   "Engine starts and stops manually via the tray toggle or global hotkey.",
   AlwaysOn: "Engine runs continuously while Stay Awake is open.",
-  WiFi:     "Engine activates automatically on registered networks. Requires Location Services.",
+  // Location Services is only required on macOS (CoreWLAN SSID detection). On Linux, WiFi
+  // mode is gated on NetworkManager instead — surfaced separately via the NM banner below.
+  WiFi: isMac
+    ? "Engine activates automatically on registered networks. Requires Location Services."
+    : "Engine activates automatically on registered networks.",
 };
 
 function updateModeDescription() {
@@ -276,6 +280,9 @@ async function loadWifiState(cfg) {
     updateLocationBanner(locStatus);
   } catch (_) {}
 
+  // Check NetworkManager availability (Linux-meaningful; "not_applicable" elsewhere).
+  await updateNetworkManagerBanner();
+
   // Fetch current SSID
   try {
     currentSsid = await invoke("get_current_wifi");
@@ -283,6 +290,43 @@ async function loadWifiState(cfg) {
     currentSsid = null;
   }
   updateWifiDisplay(cfg);
+}
+
+// Show/hide the WiFi-unavailable banner sourced from E1's `get_networkmanager_status`
+// command, mirroring the get_location_status → updateLocationBanner creation pattern above
+// (dynamically inserted into #wifi-details). Unlike updateLocationBanner's hardcoded-English
+// wart, this banner's text is routed through data-i18n/get_translation.
+async function updateNetworkManagerBanner() {
+  let status;
+  try {
+    status = await invoke("get_networkmanager_status");
+  } catch (_) {
+    status = "not_applicable";
+  }
+
+  let banner = document.getElementById("wifi-nm-banner");
+  if (status !== "unavailable") {
+    if (banner) banner.style.display = "none";
+    return;
+  }
+
+  if (!banner) {
+    const details = document.getElementById("wifi-details");
+    if (!details) return;
+    banner = document.createElement("div");
+    banner.id = "wifi-nm-banner";
+    banner.className = "wifi-location-banner";
+    const text = document.createElement("span");
+    text.setAttribute("data-i18n", "settings-wifi-nm-required");
+    text.textContent = "NetworkManager is required for WiFi mode on Linux.";
+    banner.appendChild(text);
+    invoke("get_translation", { key: "settings-wifi-nm-required" })
+      .then((t) => { text.textContent = t; })
+      .catch(() => {});
+    details.insertBefore(banner, details.firstChild);
+  }
+
+  banner.style.display = "";
 }
 
 function updateLocationBanner(status) {
@@ -547,6 +591,7 @@ window.addEventListener("DOMContentLoaded", () => {
         }
         updateLocationBanner(locStatus);
       } catch (_) {}
+      await updateNetworkManagerBanner();
       // Load current SSID and network list.
       try {
         const cfg = await invoke("get_config");
@@ -594,5 +639,8 @@ window.addEventListener("DOMContentLoaded", () => {
     invoke("get_location_status").then((status) => {
       updateLocationBanner(status);
     }).catch(() => {});
+    // Also refresh NetworkManager availability (Linux) so the banner clears/appears
+    // without requiring a Settings-window restart.
+    updateNetworkManagerBanner();
   });
 });

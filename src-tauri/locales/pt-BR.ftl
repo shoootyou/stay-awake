@@ -65,3 +65,4 @@ settings-wifi-registered = Redes registradas
 settings-wifi-none = Nenhuma rede registrada
 settings-wifi-disconnected = Não conectado
 settings-wifi-hint = Quando ativado, Stay Awake funciona apenas em redes registradas.
+settings-wifi-nm-required = O NetworkManager é necessário para o modo WiFi no Linux.

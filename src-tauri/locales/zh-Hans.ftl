@@ -65,3 +65,4 @@ settings-wifi-registered = 已注册网络
 settings-wifi-none = 暂无已注册网络
 settings-wifi-disconnected = 未连接
 settings-wifi-hint = 启用后，Stay Awake仅在已注册的网络上激活。
+settings-wifi-nm-required = 在Linux上使用WiFi模式需要NetworkManager。
