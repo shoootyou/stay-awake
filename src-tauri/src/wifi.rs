@@ -1165,16 +1165,26 @@ mod linux_tests {
             .receive_signal("StateChanged")
             .expect("subscribing to StateChanged should succeed against a live NM device");
 
+        // Rendezvous (zero-capacity) channel: `about_to_park_tx.send(())` blocks the forwarder
+        // thread until the main thread's `about_to_park_rx.recv()` has taken the value, giving a
+        // real happens-before edge instead of a hardcoded `sleep()` guess. The forwarder sends
+        // this *immediately before* calling `SignalIterator::next()` for the first time, so by
+        // the time `recv()` on the main thread returns, the forwarder has already committed to
+        // making that call — it is at most a thread-scheduling quantum away from being parked
+        // inside it, not "probably parked by now" after an arbitrary duration.
+        let (about_to_park_tx, about_to_park_rx) = mpsc::sync_channel::<()>(0);
         let (done_tx, done_rx) = mpsc::channel::<()>();
         let handle = thread::spawn(move || {
+            let _ = about_to_park_tx.send(());
             // Blocks in `SignalIterator::next()` until the connection closes underneath it —
             // exactly the leak scenario HIGH #2 describes, absent the `conn.close()` call below.
             for _sig in sig_iter {}
             let _ = done_tx.send(());
         });
 
-        // Give the forwarder thread a moment to actually park in `next()` before we close.
-        thread::sleep(Duration::from_millis(200));
+        about_to_park_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("forwarder thread should signal readiness well before a 5s safety timeout");
 
         conn.close()
             .expect("closing a live system-bus connection should succeed");
