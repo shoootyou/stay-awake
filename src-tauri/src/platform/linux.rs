@@ -344,4 +344,40 @@ mod tests {
             "must undo exactly this function's own +1 delta relative to the fresh read"
         );
     }
+
+    /// Round-3 audit finding (Sho, MEDIUM): the TOCTOU test above pins the *final resting
+    /// position*, but never independently confirms `move_to` was actually *invoked* the
+    /// expected number of times with the expected arguments — a sink neutered to a silent
+    /// no-op (`|_x, _y| Ok(())`) could in principle satisfy weaker assertions built only
+    /// around the last-observed value. This test is a dedicated spy, deliberately decoupled
+    /// from the TOCTOU nudge scenario, that exists solely to assert the *call sequence*
+    /// itself: exactly two invocations, in order, with the exact `(x, y)` pair each call
+    /// received — the `+1` move first, then the fresh-read-relative `-1` undo.
+    #[test]
+    fn jiggle_zen_with_invokes_move_to_exactly_twice_with_expected_sequence() {
+        // No mid-sequence nudge here — both `get_pos` calls return the same fixed position,
+        // isolating "was move_to called correctly" from the TOCTOU fresh-read behavior the
+        // sibling test already covers.
+        let get_pos = || -> Result<(i32, i32), String> { Ok((100, 200)) };
+
+        let calls = std::cell::RefCell::new(Vec::new());
+        let move_to = |x: i32, y: i32| -> Result<(), String> {
+            calls.borrow_mut().push((x, y));
+            Ok(())
+        };
+
+        jiggle_zen_with(get_pos, move_to).expect("jiggle_zen_with should succeed");
+
+        let recorded = calls.borrow();
+        assert_eq!(
+            recorded.len(),
+            2,
+            "move_to must be invoked exactly twice: the +1 move, then the undo"
+        );
+        assert_eq!(
+            *recorded,
+            vec![(101, 200), (99, 200)],
+            "move_to's call sequence must be the +1 move first, then the -1-relative-to-fresh-read undo"
+        );
+    }
 }
