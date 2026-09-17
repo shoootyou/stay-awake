@@ -353,16 +353,32 @@ async function updateNetworkManagerBanner() {
     status = "not_applicable";
   }
 
-  let banner = document.getElementById("wifi-nm-banner");
   if (status !== "unavailable") {
+    const banner = document.getElementById("wifi-nm-banner");
     if (banner) banner.style.display = "none";
     return;
   }
 
+  // Fetch the translation *before* checking for an existing banner. This function has
+  // three concurrent callers (one fire-and-forget: the `wifi-state-changed` listener), so
+  // an await sitting between the `getElementById` check and the `insertBefore` opens a
+  // check-then-act window where two interleaved calls can both see no banner and both
+  // insert one (the second becomes a permanently orphaned, unhideable duplicate). Hoisting
+  // the only await above the check means the check + create + insert below run in a single
+  // uninterrupted synchronous turn once we resume, so a second concurrent call always sees
+  // the first call's banner already in the DOM.
+  //
+  // On IPC failure, fall back to a hardcoded English string rather than leaving the banner
+  // blank — this is a genuine error path (get_translation only fails on a poisoned-mutex/IPC
+  // fault, not a missing key), so a plain-English fallback is preferable to a silent empty box.
+  const translated = await invoke("get_translation", { key: "settings-wifi-nm-required" }).catch(
+    () => "NetworkManager is required for WiFi mode on Linux."
+  );
+
+  let banner = document.getElementById("wifi-nm-banner");
   if (!banner) {
     const details = document.getElementById("wifi-details");
     if (!details) return;
-    const translated = await invoke("get_translation", { key: "settings-wifi-nm-required" }).catch(() => "");
     banner = document.createElement("div");
     banner.id = "wifi-nm-banner";
     banner.className = "wifi-location-banner";
