@@ -135,7 +135,12 @@ jobs:
     needs: build-macos
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: public
+    # `environment: public` scoped only TAURI_SIGNING_PRIVATE_KEY /
+    # TAURI_SIGNING_PRIVATE_KEY_PASSWORD here, both removed below (D5: this job's
+    # tauri.linux.conf.json sets createUpdaterArtifacts: false, so sign_updaters returns
+    # before ever touching the key — provably unused, confirmed against tauri-bundler
+    # source). No other secret/var used by this job comes from the "public" environment,
+    # so the `environment:` key itself is dropped too.
     # Bake-in period: a build-linux failure must not block the working macOS → Homebrew-cask
     # chain, since release-please.yml's `distribute` job gates on this entire workflow
     # succeeding. Revisit removing this once Linux release builds have proven stable across a
@@ -189,8 +194,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_LINUX_AYATANA_APPINDICATOR: true
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ inputs.tag_name }}
           releaseDraft: false
