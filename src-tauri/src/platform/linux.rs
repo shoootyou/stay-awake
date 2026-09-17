@@ -57,7 +57,11 @@ impl MouseDriver for LinuxMouseDriver {
         let (x, y) = self.get_position()?;
         let (x1, y1) = rmw_target((x, y), 1, 0);
         move_absolute(x1, y1)?;
-        move_absolute(x, y)
+        // Re-read the position rather than reusing the cached (x, y) from before the first
+        // move: if the user moved the mouse during the two subprocess spawns above, moving
+        // back to the stale value would teleport the cursor instead of drifting naturally.
+        let (cur_x, cur_y) = self.get_position()?;
+        move_absolute(cur_x, cur_y)
     }
 }
 
