@@ -54,15 +54,30 @@ impl MouseDriver for LinuxMouseDriver {
     }
 
     fn jiggle_zen(&self) -> Result<(), String> {
-        let (x, y) = self.get_position()?;
-        let (x1, y1) = rmw_target((x, y), 1, 0);
-        move_absolute(x1, y1)?;
-        // Re-read the position rather than reusing the cached (x, y) from before the first
-        // move: if the user moved the mouse during the two subprocess spawns above, moving
-        // back to the stale value would teleport the cursor instead of drifting naturally.
-        let (cur_x, cur_y) = self.get_position()?;
-        move_absolute(cur_x, cur_y)
+        jiggle_zen_with(|| self.get_position(), move_absolute)
     }
+}
+
+/// The `jiggle_zen` sequence with the position-reader and move-sink injected, so the
+/// return-move arithmetic is unit-testable without spawning `xdotool`.
+///
+/// Re-reads the position *after* the `+1` move rather than reusing the position captured
+/// before it: if the user moved the mouse during the two subprocess spawns, this closes the
+/// TOCTOU window that would otherwise teleport the cursor back to a stale pre-move value.
+/// Critically, the return move must undo *this function's own* `+1` delta relative to that
+/// fresh read (`fresh - 1`) — it must NOT move to the fresh position unchanged, which would
+/// be an unconditional no-op that leaves the cursor permanently displaced `+1px` per call.
+fn jiggle_zen_with<F, M>(get_pos: F, move_to: M) -> Result<(), String>
+where
+    F: Fn() -> Result<(i32, i32), String>,
+    M: Fn(i32, i32) -> Result<(), String>,
+{
+    let (x, y) = get_pos()?;
+    let (x1, y1) = rmw_target((x, y), 1, 0);
+    move_to(x1, y1)?;
+    let fresh = get_pos()?;
+    let (back_x, back_y) = rmw_target(fresh, -1, 0);
+    move_to(back_x, back_y)
 }
 
 /// Move the cursor to an absolute position via `xdotool mousemove`.
@@ -197,7 +212,7 @@ fn xdotool_present_from(probe: Result<std::process::ExitStatus, std::io::Error>)
 
 /// @spec-handoff
 ///
-/// Tests for the two pure-function seams that make the `xdotool`-shelling logic in this
+/// Tests for the pure-function seams that make the `xdotool`-shelling logic in this
 /// module unit-testable without spawning a real subprocess:
 ///
 /// - `xdotool_present_from(probe: Result<std::process::ExitStatus, std::io::Error>) -> bool` —
@@ -205,6 +220,11 @@ fn xdotool_present_from(probe: Result<std::process::ExitStatus, std::io::Error>)
 /// - `rmw_target(base: (i32, i32), dx: i32, dy: i32) -> (i32, i32)` — see doc comment above its
 ///   definition for full behavior, including the `jiggle_zen` `+1`/immediately-back special
 ///   case covered by its own test below.
+/// - `jiggle_zen_with(get_pos, move_to) -> Result<(), String>` — the `jiggle_zen` sequence
+///   with its position-reader and move-sink injected. Tests assert the exact final resting
+///   position after a fresh mid-sequence read, distinguishing a correct undo (`fresh - 1`)
+///   from both known regressions: a no-op undo (`fresh` unchanged) and a stale-cache undo
+///   (the pre-move position, ignoring the fresh read entirely).
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
@@ -256,5 +276,72 @@ mod tests {
         assert_eq!(out, (801, 400));
         assert_ne!(out, base);
         assert_eq!(back, base);
+    }
+
+    /// Regression test for the round-1/round-2 `jiggle_zen` TOCTOU saga.
+    ///
+    /// Simulates the exact scenario both bugs mishandled: the user nudges the mouse in the
+    /// gap between `jiggle_zen`'s first `move_absolute` and its second `get_position` call, so
+    /// the fresh read (`850, 400`) genuinely differs from the pre-move cached position
+    /// (`800, 400`). This distinguishes all three implementations, which would otherwise be
+    /// indistinguishable under a test that only asserts "some move happened":
+    ///
+    /// - **Original TOCTOU bug** (pre-`c8f1161`): moved back to the *stale cached* position
+    ///   `(800, 400)` — a real teleport, ignoring the user's nudge entirely.
+    /// - **No-op regression** (`c8f1161`, this round's finding): moved back to the *fresh*
+    ///   position `(850, 400)` unchanged — a guaranteed no-op that leaves the `+1` this
+    ///   function itself applied permanently in place.
+    /// - **Correct fix**: moves back to `fresh - 1 = (849, 400)` — undoing exactly this
+    ///   function's own delta relative to the fresh read, closing the TOCTOU window without
+    ///   either teleporting or drifting.
+    ///
+    /// Only the correct fix's final move lands on `(849, 400)`; both bugs land elsewhere.
+    #[test]
+    fn jiggle_zen_with_undoes_its_own_delta_relative_to_a_fresh_read() {
+        let call_count = std::cell::Cell::new(0);
+        let get_pos = || -> Result<(i32, i32), String> {
+            let n = call_count.get();
+            call_count.set(n + 1);
+            // First read: pre-move cached position. Second read: fresh position after the
+            // user nudged the mouse during the first `move_absolute` subprocess spawn.
+            Ok(if n == 0 { (800, 400) } else { (850, 400) })
+        };
+
+        let moves = std::cell::RefCell::new(Vec::new());
+        let move_to = |x: i32, y: i32| -> Result<(), String> {
+            moves.borrow_mut().push((x, y));
+            Ok(())
+        };
+
+        jiggle_zen_with(get_pos, move_to).expect("jiggle_zen_with should succeed");
+
+        let recorded = moves.borrow();
+        assert_eq!(
+            recorded.len(),
+            2,
+            "expected exactly two moves: +1, then undo"
+        );
+        assert_eq!(
+            recorded[0],
+            (801, 400),
+            "first move applies +1 to the pre-move position"
+        );
+
+        let final_move = recorded[1];
+        assert_ne!(
+            final_move,
+            (800, 400),
+            "must not undo to the stale cached pre-move position (the original TOCTOU bug)"
+        );
+        assert_ne!(
+            final_move,
+            (850, 400),
+            "must not undo to the fresh position unchanged (the no-op regression)"
+        );
+        assert_eq!(
+            final_move,
+            (849, 400),
+            "must undo exactly this function's own +1 delta relative to the fresh read"
+        );
     }
 }
