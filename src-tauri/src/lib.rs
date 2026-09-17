@@ -340,6 +340,16 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Return the compile-time target OS (`"linux"`, `"macos"`, `"windows"`) so the frontend can
+/// branch on platform without relying on `navigator.platform` UA-sniffing, which is
+/// deprecated and does not reliably distinguish Linux from Windows across webview engines.
+/// Mirrors the `get_networkmanager_status` precedent of surfacing platform facts via a
+/// backend-sourced command rather than frontend detection.
+#[tauri::command]
+fn get_platform_os() -> String {
+    std::env::consts::OS.to_string()
+}
+
 /// Return the SSID of the currently connected WiFi network, or `None` if
 /// disconnected. Delegates directly to the platform detection function.
 #[tauri::command]
@@ -364,6 +374,20 @@ fn get_location_status() -> Result<String, String> {
 fn request_location_permission() -> Result<(), String> {
     wifi::request_location();
     Ok(())
+}
+
+/// Check NetworkManager availability for reactive WiFi monitoring on Linux.
+/// Returns `"available"`, `"unavailable"`, or `"not_applicable"` (non-Linux platforms) — a
+/// single consistent shape the frontend can branch on without needing its own platform
+/// detection (there is no `tauri-plugin-os` dependency today).
+#[tauri::command]
+fn get_networkmanager_status() -> Result<String, String> {
+    let status = wifi::get_networkmanager_status();
+    match status {
+        wifi::NetworkManagerStatus::Available => Ok("available".to_string()),
+        wifi::NetworkManagerStatus::Unavailable => Ok("unavailable".to_string()),
+        wifi::NetworkManagerStatus::NotApplicable => Ok("not_applicable".to_string()),
+    }
 }
 
 // ───────────────────────── Hotkey string parser ────────────────────────────
@@ -586,6 +610,64 @@ fn is_within_schedule(cfg: &AppConfig) -> bool {
     cfg.schedule_enabled && engine::is_within_schedule(cfg)
 }
 
+/// Pure predicate: does this panic message describe the appindicator dynamic-library
+/// load failure raised by `libappindicator-sys`? Matched on message text only — no
+/// coupling to the library's private soname-search logic.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_appindicator_panic_message(message: &str) -> bool {
+    message.contains("appindicator")
+}
+
+/// Pure selection logic: which Fluent key names the tray accessibility-warning item's
+/// text when the checked condition is *not* satisfied?
+///
+/// Linux never had a macOS-style accessibility permission to grant — the real gating
+/// condition there is whether `xdotool` is present on `PATH` (see
+/// `LinuxPermissionChecker::check_accessibility`). Kept as a pure `bool -> &str` function,
+/// separate from any `#[cfg(target_os = ...)]` gate, so the decision is unit-testable on
+/// every build target.
+fn warn_key_for(is_linux: bool) -> &'static str {
+    if is_linux {
+        "tray-xdotool-missing"
+    } else {
+        "tray-grant-accessibility"
+    }
+}
+
+/// Pure selection logic: which Fluent key names the tray accessibility item's text when
+/// the checked condition *is* satisfied? Counterpart to `warn_key_for`.
+fn ok_key_for(is_linux: bool) -> &'static str {
+    if is_linux {
+        "tray-xdotool-ok"
+    } else {
+        "tray-accessibility-ok"
+    }
+}
+
+/// Fluent key for the tray accessibility-warning item on this build target.
+#[cfg(target_os = "linux")]
+fn accessibility_warn_key() -> &'static str {
+    warn_key_for(true)
+}
+
+/// Fluent key for the tray accessibility-warning item on this build target.
+#[cfg(not(target_os = "linux"))]
+fn accessibility_warn_key() -> &'static str {
+    warn_key_for(false)
+}
+
+/// Fluent key for the tray accessibility-OK item on this build target.
+#[cfg(target_os = "linux")]
+fn accessibility_ok_key() -> &'static str {
+    ok_key_for(true)
+}
+
+/// Fluent key for the tray accessibility-OK item on this build target.
+#[cfg(not(target_os = "linux"))]
+fn accessibility_ok_key() -> &'static str {
+    ok_key_for(false)
+}
+
 /// Build and run the Tauri application (called from `main.rs`).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -611,9 +693,11 @@ pub fn run() {
             delete_profile,
             update_global_hotkey,
             get_app_version,
+            get_platform_os,
             get_current_wifi,
             get_location_status,
             request_location_permission,
+            get_networkmanager_status,
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
             log::info!("Another instance attempted to start -- focusing existing instance");
@@ -813,10 +897,13 @@ pub fn run() {
 
                 // Accessibility permission indicator.
                 let (acc_text, acc_enabled) = if has_accessibility {
-                    (format!("\u{1f7e2} {}", tr("tray-accessibility-ok")), false)
+                    (
+                        format!("\u{1f7e2} {}", tr(accessibility_ok_key())),
+                        false,
+                    )
                 } else {
                     (
-                        format!("\u{26a0}\u{fe0f} {}", tr("tray-grant-accessibility")),
+                        format!("\u{26a0}\u{fe0f} {}", tr(accessibility_warn_key())),
                         true,
                     )
                 };
@@ -858,7 +945,7 @@ pub fn run() {
                 // Translated tooltip strings for the tray-menu event closure.
                 let tip_active = tr("tray-tooltip-active");
                 let tip_inactive = tr("tray-tooltip-inactive");
-                let acc_ok_text = format!("\u{1f7e2} {}", tr("tray-accessibility-ok"));
+                let acc_ok_text = format!("\u{1f7e2} {}", tr(accessibility_ok_key()));
 
                 // Clones for the tray-menu closure.
                 let engine_for_tray = Arc::clone(&shared_engine);
@@ -885,6 +972,32 @@ pub fn run() {
                 // Extra clones for the global shortcut handler closure.
                 let active_icon_for_sc = active_icon.clone();
                 let inactive_icon_for_sc = inactive_icon.clone();
+
+                // ── Panic-hook diagnostic for appindicator dlopen failures ──
+                // Under `panic = "abort"` (release profile), a missing
+                // libayatana-appindicator3 causes an unavoidable abort inside
+                // TrayIconBuilder::build(). This does NOT prevent the abort — it only
+                // makes the failure actionable by naming the missing package on stderr
+                // before the process goes down.
+                #[cfg(target_os = "linux")]
+                {
+                    let previous_hook = std::panic::take_hook();
+                    std::panic::set_hook(Box::new(move |info| {
+                        previous_hook(info);
+                        let message = info
+                            .payload()
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| info.payload().downcast_ref::<&str>().copied());
+                        if let Some(message) = message {
+                            if is_appindicator_panic_message(message) {
+                                eprintln!(
+                                    "the system tray library is missing — install libayatana-appindicator3-1"
+                                );
+                            }
+                        }
+                    }));
+                }
 
                 TrayIconBuilder::with_id("main")
                     .icon(active_icon)
@@ -943,10 +1056,20 @@ pub fn run() {
                                 }
                             }
                             "grant_accessibility" => {
-                                if let Err(e) = perm_for_tray.request_accessibility() {
-                                    log::error!("Failed to request accessibility: {}", e);
+                                // On Linux there is no OS permission dialog to trigger — the
+                                // gating condition is whether `xdotool` is present on `PATH`,
+                                // which the user can only fix from a terminal. Calling
+                                // `request_accessibility()` there is a no-op; clicking this
+                                // item is a genuine re-check instead.
+                                #[cfg(not(target_os = "linux"))]
+                                {
+                                    if let Err(e) = perm_for_tray.request_accessibility() {
+                                        log::error!("Failed to request accessibility: {}", e);
+                                    }
                                 }
-                                // Re-check after the user (potentially) grants access.
+                                // Re-check — on Linux this is the sole action; on
+                                // macOS/Windows it re-checks after the user (potentially)
+                                // grants access via the OS dialog opened above.
                                 if perm_for_tray.check_accessibility() {
                                     let _ = accessibility_clone.set_text(&acc_ok_text);
                                     let _ = accessibility_clone.set_enabled(false);
@@ -1095,4 +1218,98 @@ pub fn run() {
                 }
             },
         );
+}
+
+// @spec-handoff
+// Interface: `fn is_appindicator_panic_message(message: &str) -> bool`
+// Purpose: pure, testable predicate extracted from the Linux panic-hook diagnostic
+//   (E4/D2) that decides whether a panic payload's message text refers to the
+//   appindicator dynamic-library load failure raised by `libappindicator-sys`.
+// Behavior:
+//   - Case-sensitive substring match on `"appindicator"` (matches both
+//     `ayatana-appindicator3` and `appindicator3` shapes, since both contain the substring).
+//   - Returns `false` for unrelated panic messages.
+// Edge cases:
+//   - The real `libappindicator-sys` panic payload is a `String` built via format args
+//     (not a `&'static str` literal) — the predicate itself is payload-type-agnostic
+//     (it takes an already-downcast `&str`), but the caller (Task 2) must downcast
+//     `String` first, `&str` second, per the RFC's verified payload shape. Covered by
+//     `matches_when_payload_is_a_string_not_a_literal` below, which builds the input via
+//     `format!()` to avoid the literal being folded into a `&'static str` by the compiler.
+#[cfg(test)]
+mod appindicator_panic_hook_tests {
+    use super::*;
+
+    #[test]
+    fn matches_real_libappindicator_sys_panic_message() {
+        let payload = "Failed to load ayatana-appindicator3 or appindicator3 dynamic library";
+        assert!(is_appindicator_panic_message(payload));
+    }
+
+    #[test]
+    fn does_not_match_unrelated_panic_message() {
+        let payload = "index out of bounds: the len is 3 but the index is 5";
+        assert!(!is_appindicator_panic_message(payload));
+    }
+
+    #[test]
+    fn matches_when_payload_is_a_string_not_a_literal() {
+        // Built via format! so the compiler can't fold this into a &'static str —
+        // mirrors the real payload shape the RFC verified (a heap-allocated String
+        // from libappindicator-sys's format-args panic, not a string literal).
+        let lib_name = "ayatana-appindicator3";
+        let payload: String = format!(
+            "Failed to load {} or appindicator3 dynamic library",
+            lib_name
+        );
+        assert!(is_appindicator_panic_message(payload.as_str()));
+    }
+}
+
+// @spec-handoff
+// Interface:
+//   `fn warn_key_for(is_linux: bool) -> &'static str`
+//   `fn ok_key_for(is_linux: bool) -> &'static str`
+//   `fn accessibility_warn_key() -> &'static str` (thin `#[cfg(target_os = "linux")]` wrapper
+//     over `warn_key_for`)
+//   `fn accessibility_ok_key() -> &'static str` (thin `#[cfg(target_os = "linux")]` wrapper
+//     over `ok_key_for`)
+// Purpose: select the correct Fluent key id for the tray accessibility-warning menu item
+//   depending on target OS, so macOS/Windows keep their existing "Grant Accessibility"
+//   semantic copy while Linux gets copy naming the real condition (missing `xdotool`).
+// Behavior:
+//   - `warn_key_for(true)` (Linux) returns `"tray-xdotool-missing"`.
+//   - `warn_key_for(false)` (macOS/Windows) returns `"tray-grant-accessibility"`.
+//   - `ok_key_for(true)` (Linux) returns `"tray-xdotool-ok"`.
+//   - `ok_key_for(false)` (macOS/Windows) returns `"tray-accessibility-ok"`.
+// Edge cases:
+//   - The pure `_for(bool)` functions carry the branch logic and are unit-tested
+//     unconditionally (no `#[cfg(target_os = ...)]` gate on the test module itself), per the
+//     step spec's instruction to keep the decision testable without a Linux-only test gate.
+//   - The real `#[cfg(target_os = "linux")]`-gated `accessibility_warn_key`/
+//     `accessibility_ok_key` wrappers are exercised indirectly by the tray call sites; they
+//     are not unit-tested directly since their body is a one-line delegation with no branch.
+#[cfg(test)]
+mod accessibility_key_selection_tests {
+    use super::*;
+
+    #[test]
+    fn warn_key_for_linux_is_xdotool_missing() {
+        assert_eq!(warn_key_for(true), "tray-xdotool-missing");
+    }
+
+    #[test]
+    fn warn_key_for_non_linux_is_grant_accessibility() {
+        assert_eq!(warn_key_for(false), "tray-grant-accessibility");
+    }
+
+    #[test]
+    fn ok_key_for_linux_is_xdotool_ok() {
+        assert_eq!(ok_key_for(true), "tray-xdotool-ok");
+    }
+
+    #[test]
+    fn ok_key_for_non_linux_is_accessibility_ok() {
+        assert_eq!(ok_key_for(false), "tray-accessibility-ok");
+    }
 }

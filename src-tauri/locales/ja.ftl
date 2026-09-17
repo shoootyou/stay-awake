@@ -65,3 +65,10 @@ settings-wifi-registered = 登録済みネットワーク
 settings-wifi-none = 登録されたネットワークはありません
 settings-wifi-disconnected = 未接続
 settings-wifi-hint = 有効にすると、登録されたネットワークでのみStay Awakeが動作します。
+settings-wifi-nm-required = LinuxでWiFiモードを使用するにはNetworkManagerが必要です。
+
+# Linuxのxdotool
+tray-xdotool-missing = xdotoolが見つかりません — マウス揺動モードにはxdotoolをインストールしてください
+tray-xdotool-ok = xdotool 正常
+settings-xdotool-banner = マウスモードにはxdotoolが必要です。次でインストールしてください: sudo apt install xdotool
+settings-xdotool-install-btn = 再確認

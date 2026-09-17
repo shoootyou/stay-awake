@@ -6,6 +6,35 @@ let originalConfig = {};
 
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
 
+// Linux platform signal, resolved via a backend-sourced command rather than UA-sniffing.
+// `isMac` above is a `navigator.platform` heuristic kept only for hotkey-glyph rendering
+// (⌘ vs Ctrl) — it cannot reliably distinguish Linux from Windows across webview engines
+// (both fail the "MAC" substring test identically), so it is unsuitable for the
+// xdotool-specific accessibility copy below, which needs a genuine Linux/non-Linux split.
+let isLinux = false;
+
+// Resolve the real platform from the backend and, on Linux, swap the accessibility
+// banner's static data-i18n keys to the xdotool-specific ones before the first
+// applyTranslations() call renders them. Must run before checkAccessibility()/
+// applyTranslations() in loadConfig() so the correct key is already in place.
+async function detectPlatform() {
+  try {
+    const os = await invoke("get_platform_os");
+    isLinux = os === "linux";
+  } catch (_) {
+    isLinux = false;
+  }
+
+  if (isLinux) {
+    const bannerText = document.querySelector(
+      '#accessibility-banner [data-i18n="settings-accessibility-banner"]'
+    );
+    if (bannerText) bannerText.setAttribute("data-i18n", "settings-xdotool-banner");
+    const grantBtn = document.getElementById("grant-btn");
+    if (grantBtn) grantBtn.setAttribute("data-i18n", "settings-xdotool-install-btn");
+  }
+}
+
 function formatHotkeyDisplay(hotkey) {
   return hotkey
     .replace("CmdOrCtrl", isMac ? "\u2318 Cmd" : "Ctrl")
@@ -33,6 +62,8 @@ async function applyTranslations() {
 
 async function loadConfig() {
   try {
+    await detectPlatform();
+
     const cfg = await invoke("get_config");
     originalConfig = cfg;
 
@@ -120,14 +151,25 @@ async function checkAccessibility() {
 const MODE_DESCRIPTIONS = {
   Manual:   "Engine starts and stops manually via the tray toggle or global hotkey.",
   AlwaysOn: "Engine runs continuously while Stay Awake is open.",
-  WiFi:     "Engine activates automatically on registered networks. Requires Location Services.",
 };
+
+// Location Services is only required on macOS (CoreWLAN SSID detection). On Linux, WiFi
+// mode is gated on NetworkManager instead — surfaced separately via the NM banner below.
+// Resolved at call time (not module load) so it can consult the backend-sourced `isLinux`
+// signal instead of the unreliable module-load-time `isMac` UA-sniff.
+function wifiModeDescription() {
+  return isLinux
+    ? "Engine activates automatically on registered networks."
+    : "Engine activates automatically on registered networks. Requires Location Services.";
+}
 
 function updateModeDescription() {
   const select = document.getElementById("app-mode");
   const desc = document.getElementById("app-mode-desc");
   if (!select || !desc) return;
-  desc.textContent = MODE_DESCRIPTIONS[select.value] || "";
+  desc.textContent = select.value === "WiFi"
+    ? wifiModeDescription()
+    : (MODE_DESCRIPTIONS[select.value] || "");
 }
 
 async function autoSave() {
@@ -177,6 +219,17 @@ async function autoSave() {
 }
 
 async function grantAccessibility() {
+  // On Linux there is no OS permission dialog to request — the gating condition is
+  // whether `xdotool` is present on PATH, fixable only from a terminal (`apt install
+  // xdotool`). The 6-attempt/30 s poll below can never succeed there since nothing about
+  // the system changes without that terminal action, so the button is a plain Recheck
+  // that re-runs checkAccessibility() directly and returns — no request_accessibility()
+  // call, no poll.
+  if (isLinux) {
+    await checkAccessibility();
+    return;
+  }
+
   try {
     await invoke("request_accessibility");
   } catch (e) {
@@ -276,6 +329,9 @@ async function loadWifiState(cfg) {
     updateLocationBanner(locStatus);
   } catch (_) {}
 
+  // Check NetworkManager availability (Linux-meaningful; "not_applicable" elsewhere).
+  await updateNetworkManagerBanner();
+
   // Fetch current SSID
   try {
     currentSsid = await invoke("get_current_wifi");
@@ -283,6 +339,57 @@ async function loadWifiState(cfg) {
     currentSsid = null;
   }
   updateWifiDisplay(cfg);
+}
+
+// Show/hide the WiFi-unavailable banner sourced from E1's `get_networkmanager_status`
+// command, mirroring the get_location_status → updateLocationBanner creation pattern above
+// (dynamically inserted into #wifi-details). Unlike updateLocationBanner's hardcoded-English
+// wart, this banner's text is routed through data-i18n/get_translation.
+async function updateNetworkManagerBanner() {
+  let status;
+  try {
+    status = await invoke("get_networkmanager_status");
+  } catch (_) {
+    status = "not_applicable";
+  }
+
+  if (status !== "unavailable") {
+    const banner = document.getElementById("wifi-nm-banner");
+    if (banner) banner.style.display = "none";
+    return;
+  }
+
+  // Fetch the translation *before* checking for an existing banner. This function has
+  // three concurrent callers (one fire-and-forget: the `wifi-state-changed` listener), so
+  // an await sitting between the `getElementById` check and the `insertBefore` opens a
+  // check-then-act window where two interleaved calls can both see no banner and both
+  // insert one (the second becomes a permanently orphaned, unhideable duplicate). Hoisting
+  // the only await above the check means the check + create + insert below run in a single
+  // uninterrupted synchronous turn once we resume, so a second concurrent call always sees
+  // the first call's banner already in the DOM.
+  //
+  // On IPC failure, fall back to a hardcoded English string rather than leaving the banner
+  // blank — this is a genuine error path (get_translation only fails on a poisoned-mutex/IPC
+  // fault, not a missing key), so a plain-English fallback is preferable to a silent empty box.
+  const translated = await invoke("get_translation", { key: "settings-wifi-nm-required" }).catch(
+    () => "NetworkManager is required for WiFi mode on Linux."
+  );
+
+  let banner = document.getElementById("wifi-nm-banner");
+  if (!banner) {
+    const details = document.getElementById("wifi-details");
+    if (!details) return;
+    banner = document.createElement("div");
+    banner.id = "wifi-nm-banner";
+    banner.className = "wifi-location-banner";
+    const text = document.createElement("span");
+    text.setAttribute("data-i18n", "settings-wifi-nm-required");
+    text.textContent = translated;
+    banner.appendChild(text);
+    details.insertBefore(banner, details.firstChild);
+  }
+
+  banner.style.display = "";
 }
 
 function updateLocationBanner(status) {
@@ -547,6 +654,7 @@ window.addEventListener("DOMContentLoaded", () => {
         }
         updateLocationBanner(locStatus);
       } catch (_) {}
+      await updateNetworkManagerBanner();
       // Load current SSID and network list.
       try {
         const cfg = await invoke("get_config");
@@ -594,5 +702,8 @@ window.addEventListener("DOMContentLoaded", () => {
     invoke("get_location_status").then((status) => {
       updateLocationBanner(status);
     }).catch(() => {});
+    // Also refresh NetworkManager availability (Linux) so the banner clears/appears
+    // without requiring a Settings-window restart.
+    updateNetworkManagerBanner();
   });
 });
