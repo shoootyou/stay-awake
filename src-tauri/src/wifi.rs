@@ -108,13 +108,13 @@ pub enum NetworkManagerStatus {
 /// Check whether NetworkManager is available for reactive WiFi monitoring.
 /// Linux-meaningful; returns [`NetworkManagerStatus::NotApplicable`] on other platforms so the
 /// frontend has one consistent shape to branch on.
-pub async fn get_networkmanager_status() -> NetworkManagerStatus {
+pub fn get_networkmanager_status() -> NetworkManagerStatus {
     #[cfg(target_os = "linux")]
     {
-        let Ok(conn) = zbus::Connection::system().await else {
+        let Ok(conn) = zbus::blocking::Connection::system() else {
             return NetworkManagerStatus::Unavailable;
         };
-        if nm_available_from(nm_bus_name_present(&conn).await) {
+        if nm_available_from(nm_bus_name_present(&conn)) {
             NetworkManagerStatus::Available
         } else {
             NetworkManagerStatus::Unavailable
@@ -180,10 +180,20 @@ pub fn detect_current_ssid() -> Option<String> {
 
     #[cfg(target_os = "linux")]
     {
-        tauri::async_runtime::block_on(async {
-            let conn = zbus::Connection::system().await.ok()?;
-            linux_current_ssid(&conn).await
-        })
+        use zbus::blocking::{Connection, Proxy};
+
+        let conn = Connection::system().ok()?;
+        let wifi_path = find_wifi_device_path(&conn)?;
+        let wireless_proxy =
+            Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_WIRELESS_IFACE).ok()?;
+        let active_ap: zbus::zvariant::OwnedObjectPath =
+            wireless_proxy.get_property("ActiveAccessPoint").ok()?;
+        if is_disconnected_ap_path(active_ap.as_str()) {
+            return None;
+        }
+        let ap_proxy = Proxy::new(&conn, NM_SERVICE, active_ap.as_str(), NM_AP_IFACE).ok()?;
+        let ssid_bytes: Vec<u8> = ap_proxy.get_property("Ssid").ok()?;
+        Some(String::from_utf8_lossy(&ssid_bytes).into_owned())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -210,8 +220,6 @@ pub struct WifiMonitor {
     app_handle: AppHandle,
     running: Arc<AtomicBool>,
     thread_handle: Option<JoinHandle<()>>,
-    #[cfg(target_os = "linux")]
-    shutdown: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl WifiMonitor {
@@ -221,8 +229,6 @@ impl WifiMonitor {
             app_handle,
             running: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
-            #[cfg(target_os = "linux")]
-            shutdown: None,
         }
     }
 
@@ -236,25 +242,8 @@ impl WifiMonitor {
         let running = Arc::clone(&self.running);
         let app_handle = self.app_handle.clone();
 
-        #[cfg(target_os = "linux")]
-        let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
-        #[cfg(target_os = "linux")]
-        {
-            self.shutdown = Some(shutdown_sender);
-        }
-
         self.thread_handle = Some(thread::spawn(move || {
-            #[cfg(target_os = "linux")]
-            let event_loop_finished = tauri::async_runtime::block_on(try_event_driven_loop(
-                &config,
-                &running,
-                &app_handle,
-                shutdown_receiver,
-            ));
-            #[cfg(not(target_os = "linux"))]
-            let event_loop_finished = try_event_driven_loop(&config, &running, &app_handle);
-
-            if !event_loop_finished {
+            if !try_event_driven_loop(&config, &running, &app_handle) {
                 log::warn!(
                     "Event-driven WiFi monitoring unavailable on this platform \
                      (or setup failed) — falling back to polling"
@@ -272,10 +261,6 @@ impl WifiMonitor {
             return Ok(());
         }
         self.running.store(false, Ordering::SeqCst);
-        #[cfg(target_os = "linux")]
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(true);
-        }
 
         if let Some(handle) = self.thread_handle.take() {
             handle
@@ -303,14 +288,8 @@ impl Drop for WifiMonitor {
 
 /// Detect the current SSID, check it against config, and emit a Tauri event.
 fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
-    check_and_emit_ssid(config, app_handle, detect_current_ssid());
-}
+    let ssid = detect_current_ssid();
 
-fn check_and_emit_ssid(
-    config: &Arc<Mutex<AppConfig>>,
-    app_handle: &AppHandle,
-    ssid: Option<String>,
-) {
     let (enabled, active) = {
         let cfg = match config.lock() {
             Ok(cfg) => cfg,
@@ -416,6 +395,8 @@ fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
 }
 
+// Temporary RED seam: E11 moves this coordinator into production code.
+#[cfg(all(test, target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoopExit {
     Stopped,
@@ -423,65 +404,45 @@ enum LoopExit {
     StreamEnded,
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[allow(dead_code)]
 enum PathRecheck {
     Current(Option<String>),
     Stale,
 }
 
+#[cfg(all(test, target_os = "linux"))]
 enum MonitorSignal {
     StateChanged,
     PropertiesChanged,
 }
 
+#[cfg(all(test, target_os = "linux"))]
 async fn coordinate_linux_monitor<S, Emit, Recheck>(
-    mut events: S,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
-    mut tick: tokio::time::Interval,
-    mut last_ssid: Option<String>,
-    mut emit_current_state: Emit,
-    mut recheck_path: Recheck,
+    _events: S,
+    _shutdown: tokio::sync::watch::Receiver<bool>,
+    _tick: tokio::time::Interval,
+    _last_ssid: Option<String>,
+    _emit_current_state: Emit,
+    _recheck_path: Recheck,
 ) -> LoopExit
 where
     S: futures_util::Stream<Item = MonitorSignal> + Unpin,
     Emit: FnMut() -> Option<String>,
     Recheck: FnMut() -> PathRecheck,
 {
-    use futures_util::StreamExt;
-
-    loop {
-        if *shutdown.borrow() {
-            return LoopExit::Stopped;
-        }
-
-        tokio::select! {
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return LoopExit::Stopped;
-                }
-            }
-            event = events.next() => match event {
-                Some(MonitorSignal::StateChanged | MonitorSignal::PropertiesChanged) => {
-                    last_ssid = emit_current_state();
-                }
-                None => return LoopExit::StreamEnded,
-            },
-            _ = tick.tick() => match recheck_path() {
-                PathRecheck::Stale => return LoopExit::PathStale,
-                PathRecheck::Current(current) if ssid_changed(&current, &last_ssid) => {
-                    last_ssid = emit_current_state();
-                }
-                PathRecheck::Current(_) => {}
-            },
-        }
-    }
+    std::future::ready(()).await;
+    LoopExit::StreamEnded
 }
 
-fn monitor_exit_uses_polling_fallback(exit: LoopExit) -> bool {
-    !matches!(exit, LoopExit::Stopped)
+#[cfg(all(test, target_os = "linux"))]
+fn monitor_exit_uses_polling_fallback(_exit: LoopExit) -> bool {
+    false
 }
 
-fn monitor_starts_after_setup(setup_succeeded: bool) -> bool {
-    setup_succeeded
+#[cfg(all(test, target_os = "linux"))]
+fn monitor_starts_after_setup(_setup_succeeded: bool) -> bool {
+    true
 }
 
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
@@ -497,24 +458,26 @@ fn nm_available_from(has_bus_name: bool) -> bool {
 /// Returns `false` if the system bus itself is unreachable (treated the same as NM being
 /// absent — either way, the WiFi feature is unavailable).
 #[cfg(target_os = "linux")]
-async fn nm_bus_name_present(conn: &zbus::Connection) -> bool {
-    use zbus::fdo::DBusProxy;
+fn nm_bus_name_present(conn: &zbus::blocking::Connection) -> bool {
+    use zbus::blocking::fdo::DBusProxy;
     use zbus::names::BusName;
 
-    let Ok(dbus_proxy) = DBusProxy::new(conn).await else {
+    let Ok(dbus_proxy) = DBusProxy::new(conn) else {
         return false;
     };
     let Ok(name) = BusName::try_from(NM_SERVICE) else {
         return false;
     };
-    dbus_proxy.name_has_owner(name).await.unwrap_or(false)
+    dbus_proxy.name_has_owner(name).unwrap_or(false)
 }
 
 /// Find the object path of the first NetworkManager device with `DeviceType == 2` (WiFi).
 /// Returns `None` if NetworkManager is unavailable or no WiFi device is present.
 #[cfg(target_os = "linux")]
-async fn find_wifi_device_path(conn: &zbus::Connection) -> Option<zbus::OwnedObjectPath> {
-    use zbus::Proxy;
+fn find_wifi_device_path(
+    conn: &zbus::blocking::Connection,
+) -> Option<zbus::zvariant::OwnedObjectPath> {
+    use zbus::blocking::Proxy;
 
     let nm_proxy = Proxy::new(
         conn,
@@ -522,20 +485,19 @@ async fn find_wifi_device_path(conn: &zbus::Connection) -> Option<zbus::OwnedObj
         "/org/freedesktop/NetworkManager",
         NM_SERVICE,
     )
-    .await
     .ok()?;
-    let devices: Vec<zbus::OwnedObjectPath> = nm_proxy.get_property("AllDevices").await.ok()?;
+    let devices: Vec<zbus::zvariant::OwnedObjectPath> = nm_proxy.get_property("AllDevices").ok()?;
 
     for device_path in devices {
         // A single un-constructible device proxy must not abort discovery of a WiFi device
         // later in the list — `continue` here mirrors the `DeviceType` read failure handling
         // directly below, rather than propagating `None` out of the whole function via `?`.
-        let device_proxy =
-            match Proxy::new(conn, NM_SERVICE, device_path.as_str(), NM_DEVICE_IFACE).await {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-        let device_type: u32 = match device_proxy.get_property("DeviceType").await {
+        let device_proxy = match Proxy::new(conn, NM_SERVICE, device_path.as_str(), NM_DEVICE_IFACE)
+        {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let device_type: u32 = match device_proxy.get_property("DeviceType") {
             Ok(t) => t,
             Err(_) => continue,
         };
@@ -547,165 +509,171 @@ async fn find_wifi_device_path(conn: &zbus::Connection) -> Option<zbus::OwnedObj
     None
 }
 
-#[cfg(target_os = "linux")]
-async fn linux_current_ssid(conn: &zbus::Connection) -> Option<String> {
-    use zbus::Proxy;
-
-    let wifi_path = find_wifi_device_path(conn).await?;
-    let wireless_proxy = Proxy::new(conn, NM_SERVICE, wifi_path.as_str(), NM_WIRELESS_IFACE)
-        .await
-        .ok()?;
-    let active_ap: zbus::OwnedObjectPath = wireless_proxy
-        .get_property("ActiveAccessPoint")
-        .await
-        .ok()?;
-    if is_disconnected_ap_path(active_ap.as_str()) {
-        return None;
-    }
-    let ap_proxy = Proxy::new(conn, NM_SERVICE, active_ap.as_str(), NM_AP_IFACE)
-        .await
-        .ok()?;
-    let ssid_bytes: Vec<u8> = ap_proxy.get_property("Ssid").await.ok()?;
-    Some(String::from_utf8_lossy(&ssid_bytes).into_owned())
-}
-
-#[cfg(target_os = "linux")]
-fn linux_current_ssid_from_callback(conn: zbus::Connection) -> Option<String> {
-    thread::spawn(move || tauri::async_runtime::block_on(linux_current_ssid(&conn)))
-        .join()
-        .ok()
-        .flatten()
-}
-
-#[cfg(target_os = "linux")]
-fn wifi_path_from_callback(conn: zbus::Connection) -> Option<zbus::OwnedObjectPath> {
-    thread::spawn(move || tauri::async_runtime::block_on(find_wifi_device_path(&conn)))
-        .join()
-        .ok()
-        .flatten()
-}
-
 /// Try to run a `zbus`+NetworkManager event-driven loop on the current thread.
 /// Returns `true` if the loop ran to completion (i.e. `running` went false), or `false` if
 /// setup failed — NM bus name absent, no WiFi device found, or the system bus itself is
 /// unreachable (caller falls back to polling).
 #[cfg(target_os = "linux")]
-async fn try_event_driven_loop(
+fn try_event_driven_loop(
     config: &Arc<Mutex<AppConfig>>,
-    _running: &Arc<AtomicBool>,
+    running: &Arc<AtomicBool>,
     app_handle: &AppHandle,
-    shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> bool {
-    use futures_util::StreamExt;
-    use zbus::runtime::AsyncDrop;
-    use zbus::{Connection, Proxy};
+    use std::sync::mpsc;
+    use zbus::blocking::{Connection, Proxy};
 
-    let conn = match Connection::system().await {
+    let conn = match Connection::system() {
         Ok(c) => c,
         Err(e) => {
             log::warn!("WifiMonitor: failed to connect to the D-Bus system bus: {e}");
-            return monitor_starts_after_setup(false);
+            return false;
         }
     };
 
-    if !nm_available_from(nm_bus_name_present(&conn).await) {
+    if !nm_available_from(nm_bus_name_present(&conn)) {
         log::warn!(
             "WifiMonitor: NetworkManager is not available on the D-Bus system bus \
              (org.freedesktop.NetworkManager has no owner) — WiFi mode requires \
              NetworkManager on Linux; falling back to polling (which will also report no SSID)"
         );
-        return monitor_starts_after_setup(false);
+        return false;
     }
 
-    let Some(wifi_path) = find_wifi_device_path(&conn).await else {
+    let Some(wifi_path) = find_wifi_device_path(&conn) else {
         log::warn!(
             "WifiMonitor: no WiFi device found via NetworkManager — falling back to polling"
         );
-        return monitor_starts_after_setup(false);
+        return false;
     };
 
-    let device_proxy =
-        match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE).await {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("WifiMonitor: failed to create Device proxy: {e}");
-                return monitor_starts_after_setup(false);
-            }
-        };
-    let mut state_signals = match device_proxy.receive_signal("StateChanged").await {
+    let device_proxy = match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to create Device proxy: {e}");
+            return false;
+        }
+    };
+    let state_sig_iter = match device_proxy.receive_signal("StateChanged") {
         Ok(it) => it,
         Err(e) => {
             log::warn!("WifiMonitor: failed to subscribe to Device.StateChanged: {e}");
-            return monitor_starts_after_setup(false);
+            return false;
         }
     };
 
-    let props_proxy =
-        match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_PROPERTIES_IFACE).await {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("WifiMonitor: failed to create Properties proxy: {e}");
-                return monitor_starts_after_setup(false);
-            }
-        };
-    let mut properties_signals = match props_proxy
+    let props_proxy = match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_PROPERTIES_IFACE) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("WifiMonitor: failed to create Properties proxy: {e}");
+            return false;
+        }
+    };
+    let props_sig_iter = match props_proxy
         .receive_signal_with_args("PropertiesChanged", &[(0, NM_WIRELESS_IFACE)])
-        .await
     {
         Ok(it) => it,
         Err(e) => {
             log::warn!("WifiMonitor: failed to subscribe to Wireless PropertiesChanged: {e}");
-            return monitor_starts_after_setup(false);
+            return false;
         }
     };
 
     log::info!("WifiMonitor: zbus/NetworkManager event loop active");
 
-    // Initial probe so the frontend gets state immediately on startup.
-    let last_ssid = linux_current_ssid(&conn).await;
-    check_and_emit_ssid(config, app_handle, last_ssid.clone());
-    let events = futures_util::stream::select(
-        state_signals.by_ref().map(|_| MonitorSignal::StateChanged),
-        properties_signals
-            .by_ref()
-            .map(|_| MonitorSignal::PropertiesChanged),
-    );
-    let event_config = Arc::clone(config);
-    let event_app = app_handle.clone();
-    let emit_connection = conn.clone();
-    let recheck_connection = conn.clone();
-    let recheck_path = wifi_path.clone();
-    let exit = coordinate_linux_monitor(
-        events,
-        shutdown,
-        tokio::time::interval(Duration::from_secs(5)),
-        last_ssid,
-        move || {
-            let ssid = linux_current_ssid_from_callback(emit_connection.clone());
-            check_and_emit_ssid(&event_config, &event_app, ssid.clone());
-            ssid
-        },
-        move || match wifi_path_from_callback(recheck_connection.clone()) {
-            Some(current_path) if current_path == recheck_path => {
-                PathRecheck::Current(linux_current_ssid_from_callback(recheck_connection.clone()))
+    // Bridge the two blocking signal iterators onto a single channel so the main loop below can
+    // wait on either with a timeout, mirroring the macOS CFRunLoopRunInMode(1.0) cadence.
+    // Both `JoinHandle`s are kept (rather than discarded) so the cleanup block below this loop
+    // can join them — see the comment there for why that join is load-bearing.
+    let (tx, rx) = mpsc::channel::<()>();
+    let tx_state = tx.clone();
+    let state_thread = thread::spawn(move || {
+        for _sig in state_sig_iter {
+            if tx_state.send(()).is_err() {
+                break;
             }
-            _ => PathRecheck::Stale,
-        },
-    )
-    .await;
+        }
+    });
+    let props_thread = thread::spawn(move || {
+        for _sig in props_sig_iter {
+            if tx.send(()).is_err() {
+                break;
+            }
+        }
+    });
 
-    state_signals.async_drop().await;
-    properties_signals.async_drop().await;
-    drop(device_proxy);
-    drop(props_proxy);
-    if let Err(e) = conn.close().await {
+    // Initial probe so the frontend gets state immediately on startup.
+    let mut last_ssid = detect_current_ssid();
+    check_and_emit(config, app_handle);
+
+    // Periodic safety net, mirroring the macOS branch's `POLL_INTERVAL_SECS` pattern (see
+    // ~line 830 below): every `POLL_INTERVAL_SECS` timeout slices we (a) re-poll the SSID
+    // directly in case a D-Bus signal was missed, and (b) re-resolve the WiFi device path,
+    // because both match rules registered above are path-scoped (`MatchRule::path(...)`) and do
+    // not survive NetworkManager regenerating the device's object path on restart, or the path
+    // disappearing outright on device removal. If the path changed or vanished, the cached match
+    // rules are now watching a path nothing will ever signal on again — tear down and fall back
+    // to polling rather than staying permanently deaf.
+    const POLL_INTERVAL_SECS: u32 = 5;
+    let mut ticks: u32 = 0;
+    let mut path_stale = false;
+
+    while running.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(()) => check_and_emit(config, app_handle),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                ticks += 1;
+                if ticks >= POLL_INTERVAL_SECS {
+                    ticks = 0;
+
+                    match find_wifi_device_path(&conn) {
+                        Some(current_path) if current_path == wifi_path => {
+                            let current = detect_current_ssid();
+                            if ssid_changed(&current, &last_ssid) {
+                                log::debug!(
+                                    "WiFi periodic check: SSID changed {:?} → {:?}",
+                                    last_ssid,
+                                    current
+                                );
+                                check_and_emit(config, app_handle);
+                                last_ssid = current;
+                            }
+                        }
+                        _ => {
+                            log::warn!(
+                                "WifiMonitor: WiFi device path changed or disappeared \
+                                 (NetworkManager restart or device removal) — falling back \
+                                 to polling"
+                            );
+                            path_stale = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Both signal-forwarding threads exited (e.g. connection dropped) —
+                // nothing more to wait on.
+                break;
+            }
+        }
+    }
+
+    // Close the connection so both blocked `SignalIterator::next()` calls unblock: closing the
+    // shared socket makes the socket-reader task broadcast a terminal error to every match-rule
+    // stream and then clear its senders, which ends each `for` loop above and lets
+    // `SignalIterator`'s `Drop` run its `AsyncDrop` (deregistering the match rule) before this
+    // function returns. Without this, `stop()`/`restart()` leaves both signal-forwarding threads
+    // blocked forever, each still holding a live match rule — the leak this fix closes.
+    if let Err(e) = conn.close() {
         log::debug!("WifiMonitor: error closing D-Bus connection during shutdown: {e}");
     }
-
-    if matches!(exit, LoopExit::PathStale) {
-        log::warn!("WifiMonitor: WiFi device path changed or disappeared; falling back to polling");
+    for handle in [state_thread, props_thread] {
+        if handle.join().is_err() {
+            log::debug!("WifiMonitor: a signal-forwarding thread panicked during shutdown");
+        }
     }
-    monitor_starts_after_setup(true) && !monitor_exit_uses_polling_fallback(exit)
+
+    !path_stale
 }
 
 // ─────────────── Event-driven path (macOS SCDynamicStore) ───────────────────
@@ -1440,19 +1408,18 @@ mod linux_tests {
     /// device path on a live system, and calling it twice in a row is stable (same device,
     /// same path) absent an actual NM restart/device removal — i.e. the staleness branch in
     /// `try_event_driven_loop`'s periodic re-check is not a false positive on a healthy system.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a live NetworkManager D-Bus + WiFi device"]
-    async fn find_wifi_device_path_is_stable_on_a_healthy_live_system() {
-        let conn = zbus::Connection::system()
-            .await
+    fn find_wifi_device_path_is_stable_on_a_healthy_live_system() {
+        let conn = zbus::blocking::Connection::system()
             .expect("system bus should be reachable in this environment");
-        let first = find_wifi_device_path(&conn).await;
+        let first = find_wifi_device_path(&conn);
         assert!(
             first.is_some(),
             "expected a live WiFi device on this host — see plan's Chi context: verified via \
              `busctl --system get-property .../Devices/2 ... DeviceType` == 2"
         );
-        let second = find_wifi_device_path(&conn).await;
+        let second = find_wifi_device_path(&conn);
         assert_eq!(
             first, second,
             "device path should be stable across two immediate re-resolutions absent a real \
@@ -1460,51 +1427,60 @@ mod linux_tests {
         );
     }
 
-    /// HIGH #2 evidence: zbus 6 shutdown explicitly drops the subscribed `SignalStream` before
-    /// closing its connection, completing inside a bounded wait on a live NetworkManager host.
-    #[tokio::test]
+    /// HIGH #2 evidence: closing the blocking `Connection` unblocks a thread parked in
+    /// `SignalIterator::next()` — the exact mechanism `try_event_driven_loop`'s shutdown path
+    /// now relies on to join both signal-forwarding threads during `stop()`/`restart()` instead
+    /// of leaking them. Traced via zbus 5.19.0 source: `Connection::close()` shuts down the
+    /// socket, the socket-reader task then broadcasts a terminal `Err` to every registered
+    /// match-rule sender and clears its sender map, which ends the `SignalStream`/`MessageStream`
+    /// and returns `None` from the next `SignalIterator::next()` poll.
+    #[test]
     #[ignore = "requires a live NetworkManager D-Bus + WiFi device"]
-    async fn closing_connection_unblocks_a_parked_signal_iterator_thread() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use zbus::runtime::AsyncDrop;
+    fn closing_connection_unblocks_a_parked_signal_iterator_thread() {
+        use std::sync::mpsc;
 
-        let conn = zbus::Connection::system()
-            .await
+        let conn = zbus::blocking::Connection::system()
             .expect("system bus should be reachable in this environment");
-        let wifi_path = find_wifi_device_path(&conn)
-            .await
-            .expect("expected a live WiFi device on this host");
-        let device_proxy = zbus::Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE)
-            .await
-            .expect("Device proxy should construct against a live NM device");
-        let signal_stream = device_proxy
+        let wifi_path =
+            find_wifi_device_path(&conn).expect("expected a live WiFi device on this host");
+        let device_proxy =
+            zbus::blocking::Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE)
+                .expect("Device proxy should construct against a live NM device");
+        let sig_iter = device_proxy
             .receive_signal("StateChanged")
-            .await
             .expect("subscribing to StateChanged should succeed against a live NM device");
-        let (shutdown_tx, mut shutdown) = tokio::sync::watch::channel(false);
-        let async_drop_ran = AtomicBool::new(false);
-        let close_ran = AtomicBool::new(false);
-        shutdown_tx
-            .send(true)
-            .expect("shutdown receiver should be present");
 
-        timeout(Duration::from_secs(5), async {
-            shutdown
-                .changed()
-                .await
-                .expect("shutdown sender should remain present");
-            signal_stream.async_drop().await;
-            async_drop_ran.store(true, Ordering::SeqCst);
-            drop(device_proxy);
-            conn.close()
-                .await
-                .expect("closing a live system-bus connection should succeed");
-            close_ran.store(true, Ordering::SeqCst);
-        })
-        .await
-        .expect("zbus 6 shutdown should complete before the bounded timeout");
+        // Rendezvous (zero-capacity) channel: `about_to_park_tx.send(())` blocks the forwarder
+        // thread until the main thread's `about_to_park_rx.recv()` has taken the value, giving a
+        // real happens-before edge instead of a hardcoded `sleep()` guess. The forwarder sends
+        // this *immediately before* calling `SignalIterator::next()` for the first time, so by
+        // the time `recv()` on the main thread returns, the forwarder has already committed to
+        // making that call — it is at most a thread-scheduling quantum away from being parked
+        // inside it, not "probably parked by now" after an arbitrary duration.
+        let (about_to_park_tx, about_to_park_rx) = mpsc::sync_channel::<()>(0);
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            let _ = about_to_park_tx.send(());
+            // Blocks in `SignalIterator::next()` until the connection closes underneath it —
+            // exactly the leak scenario HIGH #2 describes, absent the `conn.close()` call below.
+            for _sig in sig_iter {}
+            let _ = done_tx.send(());
+        });
 
-        assert!(async_drop_ran.load(Ordering::SeqCst));
-        assert!(close_ran.load(Ordering::SeqCst));
+        about_to_park_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("forwarder thread should signal readiness well before a 5s safety timeout");
+
+        conn.close()
+            .expect("closing a live system-bus connection should succeed");
+
+        // If `Connection::close()` didn't unblock the parked iterator, this would hang until
+        // the test harness times out — a real (not simulated) proof of the shutdown mechanism.
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("closing the connection should unblock the parked SignalIterator thread");
+        handle
+            .join()
+            .expect("signal-forwarding thread should exit cleanly after the connection closes");
     }
 }
