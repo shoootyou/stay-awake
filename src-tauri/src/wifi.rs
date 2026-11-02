@@ -389,7 +389,6 @@ fn nm_available_from(has_bus_name: bool) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
 enum MonitorExit {
     Stopped,
     PathStale,
@@ -397,9 +396,8 @@ enum MonitorExit {
 }
 
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
 fn monitor_exit_uses_polling_fallback(reason: MonitorExit) -> bool {
-    matches!(reason, MonitorExit::PathStale)
+    matches!(reason, MonitorExit::PathStale | MonitorExit::Disconnected)
 }
 
 /// Check whether NetworkManager's well-known bus name is currently owned on the system bus.
@@ -563,7 +561,7 @@ fn try_event_driven_loop(
     // to polling rather than staying permanently deaf.
     const POLL_INTERVAL_SECS: u32 = 5;
     let mut ticks: u32 = 0;
-    let mut path_stale = false;
+    let mut exit_reason = MonitorExit::Stopped;
 
     while running.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_secs(1)) {
@@ -592,7 +590,7 @@ fn try_event_driven_loop(
                                  (NetworkManager restart or device removal) — falling back \
                                  to polling"
                             );
-                            path_stale = true;
+                            exit_reason = MonitorExit::PathStale;
                             break;
                         }
                     }
@@ -601,6 +599,9 @@ fn try_event_driven_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Both signal-forwarding threads exited (e.g. connection dropped) —
                 // nothing more to wait on.
+                if running.load(Ordering::Relaxed) {
+                    exit_reason = MonitorExit::Disconnected;
+                }
                 break;
             }
         }
@@ -621,7 +622,7 @@ fn try_event_driven_loop(
         }
     }
 
-    !path_stale
+    !monitor_exit_uses_polling_fallback(exit_reason)
 }
 
 // ─────────────── Event-driven path (macOS SCDynamicStore) ───────────────────
