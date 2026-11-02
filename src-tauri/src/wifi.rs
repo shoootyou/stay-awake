@@ -1,11 +1,25 @@
-//! WiFi SSID detection and monitoring for auto-activation.
-//!
-//! On macOS 26+, uses CoreWLAN via raw Objective-C FFI (corewlan_bridge.m)
-//! with Location Services authorization. Falls back to `networksetup` CLI
-//! for older macOS versions.
-//!
-//! The [`WifiMonitor`] uses SCDynamicStore (event-driven) on macOS, falling
-//! back to a polling loop on failure or on non-macOS platforms.
+/*!
+ * @spec-handoff
+ * @interface coordinate_linux_monitor(signals, shutdown, ticks, last_ssid, emit_current_state, recheck_path): LoopExit
+ * @behavior
+ *   - Emits current state once for either NetworkManager signal.
+ *   - Stops promptly on shutdown and returns Stopped.
+ *   - Emits on a changed safety-net SSID only; stale paths and ended streams return fallback exits.
+ *
+ * @edge-cases
+ *   - Setup failure and an ended stream while running select polling fallback.
+ *
+ * @see try_event_driven_loop
+ *
+ * WiFi SSID detection and monitoring for auto-activation.
+ *
+ * On macOS 26+, uses CoreWLAN via raw Objective-C FFI (corewlan_bridge.m)
+ * with Location Services authorization. Falls back to `networksetup` CLI
+ * for older macOS versions.
+ *
+ * The [`WifiMonitor`] uses SCDynamicStore (event-driven) on macOS, falling
+ * back to a polling loop on failure or on non-macOS platforms.
+ */
 
 use crate::config::{AppConfig, AppMode};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -377,6 +391,55 @@ fn is_disconnected_ap_path(path: &str) -> bool {
 #[cfg(target_os = "linux")]
 fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
+}
+
+// Temporary RED seam: E11 replaces this with the zbus 6 async coordinator.
+#[cfg(all(test, target_os = "linux"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopExit {
+    Stopped,
+    PathStale,
+    StreamEnded,
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[allow(dead_code)]
+enum PathRecheck {
+    Current(Option<String>),
+    Stale,
+}
+
+#[cfg(all(test, target_os = "linux"))]
+enum MonitorSignal {
+    StateChanged,
+    PropertiesChanged,
+}
+
+#[cfg(all(test, target_os = "linux"))]
+async fn coordinate_linux_monitor<Emit, Recheck>(
+    _signals: std::sync::mpsc::Receiver<MonitorSignal>,
+    _shutdown: std::sync::mpsc::Receiver<()>,
+    _ticks: std::sync::mpsc::Receiver<()>,
+    _last_ssid: Option<String>,
+    _emit_current_state: Emit,
+    _recheck_path: Recheck,
+) -> LoopExit
+where
+    Emit: FnMut() -> Option<String>,
+    Recheck: FnMut() -> PathRecheck,
+{
+    std::future::ready(()).await;
+    LoopExit::StreamEnded
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn monitor_completed(_exit: LoopExit) -> bool {
+    true
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn monitor_starts_after_setup(_setup_succeeded: bool) -> bool {
+    true
 }
 
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
@@ -1034,6 +1097,194 @@ mod tests {
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+
+    #[allow(clippy::type_complexity)]
+    fn coordinator_inputs() -> (
+        mpsc::Sender<MonitorSignal>,
+        mpsc::Sender<()>,
+        mpsc::Sender<()>,
+        mpsc::Receiver<MonitorSignal>,
+        mpsc::Receiver<()>,
+        mpsc::Receiver<()>,
+    ) {
+        let (signal_tx, signals) = mpsc::channel();
+        let (shutdown_tx, shutdown) = mpsc::channel();
+        let (tick_tx, ticks) = mpsc::channel();
+        (signal_tx, shutdown_tx, tick_tx, signals, shutdown, ticks)
+    }
+
+    #[test]
+    fn state_changed_signal_emits_current_state_once() {
+        let (signal_tx, _shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        signal_tx.send(MonitorSignal::StateChanged).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("OfficeWiFi".to_string()),
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
+                Some("OfficeWiFi".to_string())
+            },
+            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
+        ));
+
+        assert_eq!(emissions.load(Ordering::SeqCst), 1);
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn properties_changed_signal_emits_current_state_once() {
+        let (signal_tx, _shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        signal_tx.send(MonitorSignal::PropertiesChanged).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("OfficeWiFi".to_string()),
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
+                Some("OfficeWiFi".to_string())
+            },
+            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
+        ));
+
+        assert_eq!(emissions.load(Ordering::SeqCst), 1);
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn shutdown_exits_without_waiting_for_monitor_cadence() {
+        let (_signal_tx, shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        shutdown_tx.send(()).unwrap();
+
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+                signals,
+                shutdown,
+                ticks,
+                None,
+                || None,
+                || PathRecheck::Current(None),
+            ));
+            done_tx.send(exit).unwrap();
+        });
+        let exit = done_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("shutdown must not wait for the one- or five-second monitor cadence");
+
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn unchanged_safety_net_tick_emits_nothing() {
+        let (_signal_tx, _shutdown_tx, tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        tick_tx.send(()).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("OfficeWiFi".to_string()),
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
+                Some("OfficeWiFi".to_string())
+            },
+            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
+        ));
+
+        assert_eq!(emissions.load(Ordering::SeqCst), 0);
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn changed_safety_net_tick_emits_current_state_once() {
+        let (_signal_tx, _shutdown_tx, tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        tick_tx.send(()).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("HomeWiFi".to_string()),
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
+                Some("OfficeWiFi".to_string())
+            },
+            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
+        ));
+
+        assert_eq!(emissions.load(Ordering::SeqCst), 1);
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn stale_device_path_returns_path_stale_for_polling_fallback() {
+        let (_signal_tx, _shutdown_tx, tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        tick_tx.send(()).unwrap();
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("OfficeWiFi".to_string()),
+            || Some("OfficeWiFi".to_string()),
+            || PathRecheck::Stale,
+        ));
+
+        assert_eq!(exit, LoopExit::PathStale);
+        assert!(!monitor_completed(exit));
+    }
+
+    #[test]
+    fn setup_failure_selects_polling_fallback() {
+        assert!(!monitor_starts_after_setup(false));
+    }
+
+    #[test]
+    fn ended_signal_stream_while_running_selects_polling_fallback() {
+        let (signal_tx, _shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        drop(signal_tx);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            None,
+            || None,
+            || PathRecheck::Current(None),
+        ));
+
+        assert_eq!(exit, LoopExit::StreamEnded);
+        assert!(!monitor_completed(exit));
+    }
+
+    #[test]
+    fn shutdown_stops_monitor_without_polling_fallback() {
+        let (_signal_tx, shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        shutdown_tx.send(()).unwrap();
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            None,
+            || None,
+            || PathRecheck::Current(None),
+        ));
+
+        assert_eq!(exit, LoopExit::Stopped);
+        assert!(monitor_completed(exit));
+    }
 
     #[test]
     fn ssid_bytes_decode_valid_utf8() {
