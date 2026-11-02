@@ -1,9 +1,7 @@
 /*!
  * @spec-handoff
- * @interface coordinate_linux_monitor(events: Stream<MonitorSignal>, shutdown: watch::Receiver<bool>, tick: Interval, last_ssid: Option<String>, emit: Emit, recheck: Recheck): LoopExit
+ * @interface coordinate_linux_monitor(signals, shutdown, ticks, last_ssid, emit_current_state, recheck_path): LoopExit
  * @behavior
- *   - Production must call this coordinator with its combined zbus signal stream.
- *   - Production must use monitor_starts_after_setup and monitor_exit_uses_polling_fallback.
  *   - Emits current state once for either NetworkManager signal.
  *   - Stops promptly on shutdown and returns Stopped.
  *   - Emits on a changed safety-net SSID only; stale paths and ended streams return fallback exits.
@@ -395,7 +393,7 @@ fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
 }
 
-// Temporary RED seam: E11 moves this coordinator into production code.
+// Temporary RED seam: E11 replaces this with the zbus 6 async coordinator.
 #[cfg(all(test, target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoopExit {
@@ -418,16 +416,15 @@ enum MonitorSignal {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-async fn coordinate_linux_monitor<S, Emit, Recheck>(
-    _events: S,
-    _shutdown: tokio::sync::watch::Receiver<bool>,
-    _tick: tokio::time::Interval,
+async fn coordinate_linux_monitor<Emit, Recheck>(
+    _signals: std::sync::mpsc::Receiver<MonitorSignal>,
+    _shutdown: std::sync::mpsc::Receiver<()>,
+    _ticks: std::sync::mpsc::Receiver<()>,
     _last_ssid: Option<String>,
     _emit_current_state: Emit,
     _recheck_path: Recheck,
 ) -> LoopExit
 where
-    S: futures_util::Stream<Item = MonitorSignal> + Unpin,
     Emit: FnMut() -> Option<String>,
     Recheck: FnMut() -> PathRecheck,
 {
@@ -436,8 +433,8 @@ where
 }
 
 #[cfg(all(test, target_os = "linux"))]
-fn monitor_exit_uses_polling_fallback(_exit: LoopExit) -> bool {
-    false
+fn monitor_completed(_exit: LoopExit) -> bool {
+    true
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -1100,180 +1097,152 @@ mod tests {
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
-    use futures_util::stream;
-    use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use tokio::sync::{mpsc, watch};
-    use tokio::time::{advance, interval_at, timeout, Duration, Instant};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
 
-    type EventStream = Pin<Box<dyn futures_util::Stream<Item = MonitorSignal> + Send>>;
-
+    #[allow(clippy::type_complexity)]
     fn coordinator_inputs() -> (
         mpsc::Sender<MonitorSignal>,
-        watch::Sender<bool>,
-        EventStream,
+        mpsc::Sender<()>,
+        mpsc::Sender<()>,
+        mpsc::Receiver<MonitorSignal>,
+        mpsc::Receiver<()>,
+        mpsc::Receiver<()>,
     ) {
-        let (signal_tx, signals) = mpsc::channel(4);
-        let (shutdown_tx, _shutdown) = watch::channel(false);
-        let events = stream::unfold(signals, |mut signals| async move {
-            signals.recv().await.map(|signal| (signal, signals))
-        });
-        (signal_tx, shutdown_tx, Box::pin(events))
+        let (signal_tx, signals) = mpsc::channel();
+        let (shutdown_tx, shutdown) = mpsc::channel();
+        let (tick_tx, ticks) = mpsc::channel();
+        (signal_tx, shutdown_tx, tick_tx, signals, shutdown, ticks)
     }
 
-    fn safety_net_tick() -> tokio::time::Interval {
-        interval_at(
-            Instant::now() + Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-    }
+    #[test]
+    fn state_changed_signal_emits_current_state_once() {
+        let (signal_tx, _shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        signal_tx.send(MonitorSignal::StateChanged).unwrap();
+        let emissions = AtomicUsize::new(0);
 
-    async fn finish(task: tokio::task::JoinHandle<LoopExit>) -> LoopExit {
-        timeout(Duration::from_secs(1), task)
-            .await
-            .expect("monitor coordinator must not hang")
-            .expect("monitor coordinator task must not panic")
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn state_changed_signal_emits_current_state_once() {
-        let (signal_tx, shutdown_tx, events) = coordinator_inputs();
-        signal_tx.try_send(MonitorSignal::StateChanged).unwrap();
-        let emissions = Arc::new(AtomicUsize::new(0));
-        let emitted = Arc::clone(&emissions);
-        let task = tokio::spawn(coordinate_linux_monitor(
-            events,
-            shutdown_tx.subscribe(),
-            safety_net_tick(),
-            Some("OfficeWiFi".to_string()),
-            move || {
-                emitted.fetch_add(1, Ordering::SeqCst);
-                Some("OfficeWiFi".to_string())
-            },
-            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
-        ));
-        tokio::task::yield_now().await;
-        let _ = shutdown_tx.send(true);
-        let exit = finish(task).await;
-
-        assert_eq!(emissions.load(Ordering::SeqCst), 1);
-        assert_eq!(exit, LoopExit::Stopped);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn properties_changed_signal_emits_current_state_once() {
-        let (signal_tx, shutdown_tx, events) = coordinator_inputs();
-        signal_tx
-            .try_send(MonitorSignal::PropertiesChanged)
-            .unwrap();
-        let emissions = Arc::new(AtomicUsize::new(0));
-        let emitted = Arc::clone(&emissions);
-        let task = tokio::spawn(coordinate_linux_monitor(
-            events,
-            shutdown_tx.subscribe(),
-            safety_net_tick(),
-            Some("OfficeWiFi".to_string()),
-            move || {
-                emitted.fetch_add(1, Ordering::SeqCst);
-                Some("OfficeWiFi".to_string())
-            },
-            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
-        ));
-        tokio::task::yield_now().await;
-        let _ = shutdown_tx.send(true);
-        let exit = finish(task).await;
-
-        assert_eq!(emissions.load(Ordering::SeqCst), 1);
-        assert_eq!(exit, LoopExit::Stopped);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn shutdown_exits_without_waiting_for_monitor_cadence() {
-        let (_signal_tx, shutdown_tx, events) = coordinator_inputs();
-        let shutdown = shutdown_tx.subscribe();
-        shutdown_tx.send(true).unwrap();
-        let exit = finish(tokio::spawn(coordinate_linux_monitor(
-            events,
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
             shutdown,
-            safety_net_tick(),
-            None,
-            || None,
-            || PathRecheck::Current(None),
-        )))
-        .await;
-
-        assert_eq!(exit, LoopExit::Stopped);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn unchanged_safety_net_tick_emits_nothing() {
-        let (_signal_tx, shutdown_tx, events) = coordinator_inputs();
-        let emissions = Arc::new(AtomicUsize::new(0));
-        let emitted = Arc::clone(&emissions);
-        let task = tokio::spawn(coordinate_linux_monitor(
-            events,
-            shutdown_tx.subscribe(),
-            safety_net_tick(),
+            ticks,
             Some("OfficeWiFi".to_string()),
-            move || {
-                emitted.fetch_add(1, Ordering::SeqCst);
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
                 Some("OfficeWiFi".to_string())
             },
             || PathRecheck::Current(Some("OfficeWiFi".to_string())),
         ));
-        advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
-        let _ = shutdown_tx.send(true);
-        let exit = finish(task).await;
+
+        assert_eq!(emissions.load(Ordering::SeqCst), 1);
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn properties_changed_signal_emits_current_state_once() {
+        let (signal_tx, _shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        signal_tx.send(MonitorSignal::PropertiesChanged).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("OfficeWiFi".to_string()),
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
+                Some("OfficeWiFi".to_string())
+            },
+            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
+        ));
+
+        assert_eq!(emissions.load(Ordering::SeqCst), 1);
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn shutdown_exits_without_waiting_for_monitor_cadence() {
+        let (_signal_tx, shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        shutdown_tx.send(()).unwrap();
+
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+                signals,
+                shutdown,
+                ticks,
+                None,
+                || None,
+                || PathRecheck::Current(None),
+            ));
+            done_tx.send(exit).unwrap();
+        });
+        let exit = done_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("shutdown must not wait for the one- or five-second monitor cadence");
+
+        assert_eq!(exit, LoopExit::Stopped);
+    }
+
+    #[test]
+    fn unchanged_safety_net_tick_emits_nothing() {
+        let (_signal_tx, _shutdown_tx, tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        tick_tx.send(()).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
+            Some("OfficeWiFi".to_string()),
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
+                Some("OfficeWiFi".to_string())
+            },
+            || PathRecheck::Current(Some("OfficeWiFi".to_string())),
+        ));
 
         assert_eq!(emissions.load(Ordering::SeqCst), 0);
         assert_eq!(exit, LoopExit::Stopped);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn changed_safety_net_tick_emits_current_state_once() {
-        let (_signal_tx, shutdown_tx, events) = coordinator_inputs();
-        let emissions = Arc::new(AtomicUsize::new(0));
-        let emitted = Arc::clone(&emissions);
-        let task = tokio::spawn(coordinate_linux_monitor(
-            events,
-            shutdown_tx.subscribe(),
-            safety_net_tick(),
+    #[test]
+    fn changed_safety_net_tick_emits_current_state_once() {
+        let (_signal_tx, _shutdown_tx, tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        tick_tx.send(()).unwrap();
+        let emissions = AtomicUsize::new(0);
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
             Some("HomeWiFi".to_string()),
-            move || {
-                emitted.fetch_add(1, Ordering::SeqCst);
+            || {
+                emissions.fetch_add(1, Ordering::SeqCst);
                 Some("OfficeWiFi".to_string())
             },
             || PathRecheck::Current(Some("OfficeWiFi".to_string())),
         ));
-        advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
-        let _ = shutdown_tx.send(true);
-        let exit = finish(task).await;
 
         assert_eq!(emissions.load(Ordering::SeqCst), 1);
         assert_eq!(exit, LoopExit::Stopped);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn stale_device_path_returns_path_stale_for_polling_fallback() {
-        let (_signal_tx, shutdown_tx, events) = coordinator_inputs();
-        let task = tokio::spawn(coordinate_linux_monitor(
-            events,
-            shutdown_tx.subscribe(),
-            safety_net_tick(),
+    #[test]
+    fn stale_device_path_returns_path_stale_for_polling_fallback() {
+        let (_signal_tx, _shutdown_tx, tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        tick_tx.send(()).unwrap();
+
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
             Some("OfficeWiFi".to_string()),
             || Some("OfficeWiFi".to_string()),
             || PathRecheck::Stale,
         ));
-        advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
-        let _ = shutdown_tx.send(true);
-        let exit = finish(task).await;
 
         assert_eq!(exit, LoopExit::PathStale);
-        assert!(monitor_exit_uses_polling_fallback(exit));
+        assert!(!monitor_completed(exit));
     }
 
     #[test]
@@ -1281,43 +1250,40 @@ mod linux_tests {
         assert!(!monitor_starts_after_setup(false));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn ended_signal_stream_while_running_selects_polling_fallback() {
-        let (signal_tx, shutdown_tx, events) = coordinator_inputs();
+    #[test]
+    fn ended_signal_stream_while_running_selects_polling_fallback() {
+        let (signal_tx, _shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
         drop(signal_tx);
 
-        let exit = finish(tokio::spawn(coordinate_linux_monitor(
-            events,
-            shutdown_tx.subscribe(),
-            safety_net_tick(),
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
+            shutdown,
+            ticks,
             None,
             || None,
             || PathRecheck::Current(None),
-        )))
-        .await;
+        ));
 
         assert_eq!(exit, LoopExit::StreamEnded);
-        assert!(monitor_exit_uses_polling_fallback(exit));
+        assert!(!monitor_completed(exit));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn shutdown_stops_monitor_without_polling_fallback() {
-        let (_signal_tx, shutdown_tx, events) = coordinator_inputs();
-        let shutdown = shutdown_tx.subscribe();
-        shutdown_tx.send(true).unwrap();
+    #[test]
+    fn shutdown_stops_monitor_without_polling_fallback() {
+        let (_signal_tx, shutdown_tx, _tick_tx, signals, shutdown, ticks) = coordinator_inputs();
+        shutdown_tx.send(()).unwrap();
 
-        let exit = finish(tokio::spawn(coordinate_linux_monitor(
-            events,
+        let exit = tauri::async_runtime::block_on(coordinate_linux_monitor(
+            signals,
             shutdown,
-            safety_net_tick(),
+            ticks,
             None,
             || None,
             || PathRecheck::Current(None),
-        )))
-        .await;
+        ));
 
         assert_eq!(exit, LoopExit::Stopped);
-        assert!(!monitor_exit_uses_polling_fallback(exit));
+        assert!(monitor_completed(exit));
     }
 
     #[test]
