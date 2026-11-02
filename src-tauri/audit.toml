@@ -24,10 +24,4 @@ ignore = [
 
     # Other transitive dependencies
     "RUSTSEC-2024-0370", # proc-macro-error — unmaintained
-    "RUSTSEC-2025-0057", # fxhash — unmaintained
-    "RUSTSEC-2025-0081", # unic-char-property — unmaintained
-    "RUSTSEC-2025-0075", # unic-char-range — unmaintained
-    "RUSTSEC-2025-0080", # unic-common — unmaintained
-    "RUSTSEC-2025-0100", # unic-ucd-ident — unmaintained
-    "RUSTSEC-2025-0098", # unic-ucd-version — unmaintained
 ]
