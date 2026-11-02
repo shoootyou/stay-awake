@@ -50,7 +50,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = "5"
+zbus = { version = "=6.2.1", default-features = false, features = ["tokio", "proxy"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 

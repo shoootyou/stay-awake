@@ -353,7 +353,7 @@ fn get_platform_os() -> String {
 /// Return the SSID of the currently connected WiFi network, or `None` if
 /// disconnected. Delegates directly to the platform detection function.
 #[tauri::command]
-fn get_current_wifi() -> Result<Option<String>, String> {
+async fn get_current_wifi() -> Result<Option<String>, String> {
     Ok(wifi::detect_current_ssid())
 }
 
@@ -381,8 +381,8 @@ fn request_location_permission() -> Result<(), String> {
 /// single consistent shape the frontend can branch on without needing its own platform
 /// detection (there is no `tauri-plugin-os` dependency today).
 #[tauri::command]
-fn get_networkmanager_status() -> Result<String, String> {
-    let status = wifi::get_networkmanager_status();
+async fn get_networkmanager_status() -> Result<String, String> {
+    let status = wifi::get_networkmanager_status().await;
     match status {
         wifi::NetworkManagerStatus::Available => Ok("available".to_string()),
         wifi::NetworkManagerStatus::Unavailable => Ok("unavailable".to_string()),
