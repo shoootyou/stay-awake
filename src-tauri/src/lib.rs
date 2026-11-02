@@ -18,8 +18,6 @@ use platform::PermissionChecker;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
-// ───────────────────────────── Tauri commands ──────────────────────────────
-
 /// Return the current configuration to the frontend.
 #[tauri::command]
 fn get_config(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<AppConfig, String> {
@@ -390,8 +388,6 @@ fn get_networkmanager_status() -> Result<String, String> {
     }
 }
 
-// ───────────────────────── Hotkey string parser ────────────────────────────
-
 /// Parse a human-readable shortcut string like `"CmdOrCtrl+Shift+J"` into a
 /// [`Shortcut`] that can be registered with the global-shortcut plugin.
 #[cfg(desktop)]
@@ -487,8 +483,6 @@ fn parse_shortcut_string(s: &str) -> Option<tauri_plugin_global_shortcut::Shortc
     Some(Shortcut::new(mods, code))
 }
 
-// ──────────────────────── Settings window helper ───────────────────────────
-
 /// Show the settings window, creating it dynamically if the config-defined
 /// instance was closed by the user.
 #[cfg(desktop)]
@@ -535,8 +529,6 @@ fn show_about_window(app: &tauri::AppHandle) {
         log::error!("Failed to create about window: {}", e);
     }
 }
-
-// ──────────────────────── macOS app configuration ──────────────────────────
 
 /// Configure the macOS app as an Accessory (no Dock icon, no menu bar).
 /// Must be called before the Tauri builder runs.
@@ -596,8 +588,6 @@ fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'st
     }
     tauri::image::Image::new_owned(dimmed, icon.width(), icon.height())
 }
-
-// ──────────────────────────── Application entry ────────────────────────────
 
 /// Returns true if the current wall-clock time falls within the schedule
 /// window defined in `cfg`. Used at startup to decide whether to auto-start
@@ -705,7 +695,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // ── Configuration ──────────────────────────────────────────
             let loaded_config = AppConfig::load().unwrap_or_else(|_| {
                 log::info!("No config found; using defaults");
                 let cfg = AppConfig::default();
@@ -714,17 +703,14 @@ pub fn run() {
             });
             let shared_config: Arc<Mutex<AppConfig>> = Arc::new(Mutex::new(loaded_config.clone()));
 
-            // ── i18n bundle ────────────────────────────────────────────
             let bundle = i18n::create_bundle(&loaded_config.language);
             let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
 
-            // ── Platform implementations ───────────────────────────────
             let mouse_driver = platform::create_mouse_driver();
             let power_inhibitor = platform::create_power_inhibitor();
             let perm_checker: Arc<dyn PermissionChecker> =
                 Arc::from(platform::create_permission_checker());
 
-            // ── Accessibility check on startup ─────────────────────────
             let has_accessibility = perm_checker.check_accessibility();
             let needs_mouse = loaded_config.jiggle_mode != JiggleMode::PowerOnly;
             if needs_mouse && !has_accessibility {
@@ -734,7 +720,6 @@ pub fn run() {
                 );
             }
 
-            // ── Engine ─────────────────────────────────────────────────
             let engine = Engine::new(mouse_driver, power_inhibitor, Arc::clone(&shared_config));
             let shared_engine: Arc<Mutex<Engine>> = Arc::new(Mutex::new(engine));
 
@@ -774,7 +759,6 @@ pub fn run() {
             app.manage(Arc::clone(&perm_checker));
             app.manage(Arc::clone(&shared_bundle));
 
-            // ── WiFi monitor ───────────────────────────────────────────
             let wifi_monitor =
                 wifi::WifiMonitor::new(Arc::clone(&shared_config), app.handle().clone());
             let shared_wifi_monitor: Arc<Mutex<wifi::WifiMonitor>> =
@@ -797,7 +781,6 @@ pub fn run() {
 
             app.manage(Arc::clone(&shared_wifi_monitor));
 
-            // ── WiFi event → engine control ────────────────────────────
             // Local mirror of WifiStatePayload used only for deserialization.
             #[derive(serde::Deserialize)]
             struct WifiStateEvent {
@@ -846,7 +829,6 @@ pub fn run() {
                 });
             }
 
-            // ── System tray ────────────────────────────────────────────
             #[cfg(desktop)]
             {
                 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -973,7 +955,6 @@ pub fn run() {
                 let active_icon_for_sc = active_icon.clone();
                 let inactive_icon_for_sc = inactive_icon.clone();
 
-                // ── Panic-hook diagnostic for appindicator dlopen failures ──
                 // Under `panic = "abort"` (release profile), a missing
                 // libayatana-appindicator3 causes an unavoidable abort inside
                 // TrayIconBuilder::build(). This does NOT prevent the abort — it only
@@ -1093,7 +1074,6 @@ pub fn run() {
                     })
                     .build(app)?;
 
-                // ── Global shortcut (configurable from config.global_hotkey) ──
                 {
                     use tauri_plugin_global_shortcut::{
                         Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
@@ -1170,7 +1150,6 @@ pub fn run() {
                 }
             }
 
-            // ── Autostart plugin ───────────────────────────────────────
             #[cfg(desktop)]
             {
                 app.handle().plugin(tauri_plugin_autostart::init(

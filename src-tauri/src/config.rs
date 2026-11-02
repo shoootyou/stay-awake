@@ -71,35 +71,22 @@ pub struct AppConfig {
     pub language: String,
     /// Global keyboard shortcut string.
     pub global_hotkey: String,
-    // ── Schedule ──
     pub schedule_enabled: bool,
     pub schedule_start_hour: u8,
     pub schedule_start_minute: u8,
     pub schedule_end_hour: u8,
     pub schedule_end_minute: u8,
     pub schedule_days: Vec<String>,
-    // ── Profiles ──
     pub profiles: Vec<Profile>,
     pub active_profile: String,
-    // ── WiFi ──
     #[serde(default)]
     pub wifi: WifiConfig,
 }
 
 /// Default `jiggle_mode` for a fresh `AppConfig`.
 ///
-/// On Linux this defaults to `PowerOnly` rather than `MouseSubtle`. The RFC's A1 assumption —
-/// that `xdotool` absolute-motion injection resets the GNOME/Mutter idle timer on Wayland — was
-/// left genuinely unresolved by the implementation-phase measurement attempt (the sandbox
-/// environment used for that pass could not reliably exercise the session D-Bus/systemd-user
-/// tooling required). This is an inconclusive result, not a confirmed timer-reset failure, but
-/// per the RFC's own precautionary framing an unresolved measurement is treated as "not shown to
-/// reset" for the purposes of choosing a default. `PowerOnly` (systemd-inhibit-based) is already
-/// verified working on Linux, so it is the safe default here. Mouse-jiggle modes remain fully
-/// available and are known to work on X11 — users can opt into `MouseSubtle` / `MouseCircle` /
-/// `MouseZen` manually via Settings once they've confirmed it works for their setup. A future
-/// re-test on real hardware (outside this sandbox) may confirm the Wayland reset behavior and
-/// justify flipping this default back — see README.md § Linux prerequisites.
+/// Wayland mouse injection has not been shown to reset the idle timer, so use the verified
+/// systemd-inhibit path until a real-hardware re-test proves otherwise.
 #[cfg(target_os = "linux")]
 fn default_jiggle_mode() -> JiggleMode {
     JiggleMode::PowerOnly

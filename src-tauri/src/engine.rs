@@ -20,7 +20,6 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
 
     let now = Local::now();
 
-    // Check day of week
     let day_abbr = match now.format("%a").to_string().to_lowercase().as_str() {
         "mon" => "mon",
         "tue" => "tue",
@@ -63,12 +62,6 @@ pub enum EngineState {
     Idle,
     /// Engine is actively preventing inactivity.
     Active,
-    /// Engine is temporarily paused (reserved for future use).
-    #[allow(dead_code)]
-    Paused,
-    /// Engine encountered an error (reserved for future use).
-    #[allow(dead_code)]
-    Error(String),
 }
 
 /// Core engine that manages anti-inactivity behaviour.
@@ -156,9 +149,7 @@ impl Engine {
                     continue;
                 }
 
-                // ── Idle detection ──────────────────────────────────────────
-                // If the cursor moved since the last check the user is active
-                // and we skip the jiggle to avoid interfering.
+                // Skip jiggle when the user moved the cursor.
                 let current_pos = mouse.get_position().ok();
                 let user_active = match (last_pos, current_pos) {
                     (Some(last), Some(curr)) => last != curr,
@@ -171,7 +162,6 @@ impl Engine {
                     continue;
                 }
 
-                // ── Execute the configured jiggle pattern ───────────────────
                 let result = match cfg.jiggle_mode {
                     JiggleMode::MouseSubtle => mouse.move_relative(1, 0).and_then(|_| {
                         thread::sleep(Duration::from_millis(50));
@@ -256,8 +246,6 @@ impl Engine {
         match &self.state {
             EngineState::Idle => "idle",
             EngineState::Active => "active",
-            EngineState::Paused => "paused",
-            EngineState::Error(_) => "error",
         }
     }
 }
