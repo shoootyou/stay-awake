@@ -1313,3 +1313,50 @@ mod accessibility_key_selection_tests {
         assert_eq!(ok_key_for(false), "tray-accessibility-ok");
     }
 }
+
+#[cfg(test)]
+mod core_helper_tests {
+    /*
+     * @spec-handoff
+     * @interface parse_shortcut_string(), create_dimmed_icon(), is_within_schedule()
+     * @behavior
+     *   - Shortcut aliases produce the same registered shortcut and invalid parts are rejected.
+     *   - A dimmed icon preserves RGB bytes and scales each alpha byte to 40 percent.
+     *   - Disabled schedules do not permit scheduled autostart.
+     * @edge-cases
+     *   - Empty or unknown shortcut parts are invalid.
+     */
+    use super::*;
+
+    #[cfg(desktop)]
+    #[test]
+    fn shortcut_parser_accepts_aliases_and_rejects_unknown_parts() {
+        use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+
+        assert_eq!(
+            parse_shortcut_string("CmdOrCtrl + Shift + J"),
+            Some(Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::SHIFT),
+                Code::KeyJ
+            ))
+        );
+        assert_eq!(parse_shortcut_string("Ctrl+Hyper+J"), None);
+        assert_eq!(parse_shortcut_string(""), None);
+    }
+
+    #[test]
+    fn dimmed_icon_preserves_rgb_and_scales_alpha() {
+        let icon = tauri::image::Image::new_owned(vec![1, 2, 3, 255, 4, 5, 6, 100], 2, 1);
+        let dimmed = create_dimmed_icon(&icon);
+        assert_eq!(dimmed.rgba(), &[1, 2, 3, 102, 4, 5, 6, 40]);
+    }
+
+    #[test]
+    fn disabled_schedule_does_not_trigger_scheduled_autostart() {
+        let config = AppConfig {
+            schedule_enabled: false,
+            ..AppConfig::default()
+        };
+        assert!(!is_within_schedule(&config));
+    }
+}

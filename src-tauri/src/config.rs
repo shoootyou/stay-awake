@@ -186,6 +186,16 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    /*
+     * @spec-handoff
+     * @interface AppConfig JSON serialization and deserialization
+     * @behavior
+     *   - A Linux default serializes byte-for-byte as the committed golden JSON.
+     *   - Legacy JSON without `wifi` loads with the disabled empty WiFi default.
+     *   - Unknown JSON fields are ignored by the current migration contract.
+     * @edge-cases
+     *   - Invalid enum values remain deserialization errors.
+     */
     use super::*;
 
     #[test]
@@ -286,5 +296,42 @@ mod tests {
         assert_eq!(cfg.jiggle_mode, JiggleMode::PowerOnly);
         #[cfg(not(target_os = "linux"))]
         assert_eq!(cfg.jiggle_mode, JiggleMode::MouseSubtle);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_default_config_matches_the_serialization_golden() {
+        let actual = serde_json::to_string_pretty(&AppConfig::default())
+            .expect("default config must serialize");
+        assert_eq!(
+            actual,
+            include_str!("../tests/fixtures/default-config-linux.json").trim_end()
+        );
+    }
+
+    #[test]
+    fn unknown_config_fields_are_ignored_during_current_migration() {
+        let json = r#"{
+            "mode":"Manual", "jiggle_mode":"MouseSubtle", "interval_secs":30,
+            "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
+            "schedule_enabled":false, "schedule_start_hour":9, "schedule_start_minute":0,
+            "schedule_end_hour":17, "schedule_end_minute":0,
+            "schedule_days":[], "profiles":[], "active_profile":"Default",
+            "future_setting":"ignored"
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).expect("unknown fields are ignored");
+        assert_eq!(config.wifi, WifiConfig::default());
+    }
+
+    #[test]
+    fn unknown_jiggle_mode_is_rejected() {
+        let json = r#"{
+            "mode":"Manual", "jiggle_mode":"FutureMode", "interval_secs":30,
+            "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
+            "schedule_enabled":false, "schedule_start_hour":9, "schedule_start_minute":0,
+            "schedule_end_hour":17, "schedule_end_minute":0,
+            "schedule_days":[], "profiles":[], "active_profile":"Default"
+        }"#;
+        assert!(serde_json::from_str::<AppConfig>(json).is_err());
     }
 }

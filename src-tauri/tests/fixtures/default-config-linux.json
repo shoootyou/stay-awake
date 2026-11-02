@@ -1,0 +1,26 @@
+{
+  "mode": "Manual",
+  "jiggle_mode": "PowerOnly",
+  "interval_secs": 30,
+  "autostart": false,
+  "language": "en",
+  "global_hotkey": "CmdOrCtrl+Shift+J",
+  "schedule_enabled": false,
+  "schedule_start_hour": 9,
+  "schedule_start_minute": 0,
+  "schedule_end_hour": 17,
+  "schedule_end_minute": 0,
+  "schedule_days": [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri"
+  ],
+  "profiles": [],
+  "active_profile": "Default",
+  "wifi": {
+    "enabled": false,
+    "networks": []
+  }
+}
