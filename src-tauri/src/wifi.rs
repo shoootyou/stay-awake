@@ -388,6 +388,20 @@ fn nm_available_from(has_bus_name: bool) -> bool {
     has_bus_name
 }
 
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+enum MonitorExit {
+    Stopped,
+    PathStale,
+    Disconnected,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+fn monitor_exit_uses_polling_fallback(reason: MonitorExit) -> bool {
+    matches!(reason, MonitorExit::PathStale)
+}
+
 /// Check whether NetworkManager's well-known bus name is currently owned on the system bus.
 /// Returns `false` if the system bus itself is unreachable (treated the same as NM being
 /// absent — either way, the WiFi feature is unavailable).
@@ -966,6 +980,14 @@ mod tests {
 }
 
 /// @spec-handoff
+/// @interface fn monitor_exit_uses_polling_fallback(reason: MonitorExit) -> bool
+/// @behavior
+/// - `Stopped` returns `false`, so `try_event_driven_loop` returns `true` without polling.
+/// - `PathStale` and `Disconnected` return `true`, so it returns `false` and polls.
+///
+/// @see try_event_driven_loop
+///
+/// E16b must call `monitor_exit_uses_polling_fallback` from the Linux loop's exit path.
 ///
 /// ## `is_disconnected_ap_path`
 ///
@@ -1078,6 +1100,19 @@ mod linux_tests {
     #[test]
     fn nm_available_from_false_when_bus_name_absent() {
         assert!(!nm_available_from(false));
+    }
+
+    #[test]
+    fn monitor_exit_keeps_stopped_successful_and_path_stale_on_polling() {
+        assert!(!monitor_exit_uses_polling_fallback(MonitorExit::Stopped));
+        assert!(monitor_exit_uses_polling_fallback(MonitorExit::PathStale));
+    }
+
+    #[test]
+    fn monitor_exit_uses_polling_when_signal_forwarding_disconnects() {
+        assert!(monitor_exit_uses_polling_fallback(
+            MonitorExit::Disconnected
+        ));
     }
 
     #[test]
