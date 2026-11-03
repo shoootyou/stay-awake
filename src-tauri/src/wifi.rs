@@ -431,6 +431,33 @@ fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
 }
 
+#[cfg(all(test, target_os = "linux"))]
+struct EventState {
+    last: Option<String>,
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn publish_observation<E: FnMut(Option<&str>)>(
+    _state: &mut EventState,
+    observed: Option<String>,
+    mut emit: E,
+) {
+    emit(observed.as_deref());
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn periodic_pass<D: FnMut() -> Option<String>, E: FnMut(Option<&str>)>(
+    state: &mut EventState,
+    mut detect: D,
+    mut emit: E,
+) {
+    let current = detect();
+    if ssid_changed(&current, &state.last) {
+        emit(detect().as_deref());
+        state.last = current;
+    }
+}
+
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
 /// on the system bus. Mirrors the `xdotool_present_from` seam pattern (`platform/linux.rs`,
 /// D3a): the caller performs the real D-Bus `NameHasOwner` check and passes in the resulting
@@ -1138,7 +1165,9 @@ mod tests {
 mod linux_tests {
     /*
      * @spec-handoff
-     * @interface publish_observation(state: &mut EventState, observed: Option<String>, emit: FnMut(Option<&str>))
+     * @interface publish_observation(
+     *   state: &mut EventState, observed: Option<String>, emit: FnMut(Option<&str>)
+     * )
      * @behavior
      *   - Initial and handler paths detect once, emit that observation, then cache it.
      *   - A periodic pass detects once and emits only when the observation differs from the cache.
@@ -1148,41 +1177,6 @@ mod linux_tests {
      * @see try_event_driven_loop
      */
     use super::*;
-
-    struct LegacyEventState {
-        last: Option<String>,
-    }
-
-    fn legacy_initial_or_periodic<D, E>(state: &mut LegacyEventState, mut detect: D, mut emit: E)
-    where
-        D: FnMut() -> Option<String>,
-        E: FnMut(Option<&str>),
-    {
-        let cached = detect();
-        emit(detect().as_deref());
-        state.last = cached;
-    }
-
-    fn legacy_handler<D, E>(mut detect: D, mut emit: E)
-    where
-        D: FnMut() -> Option<String>,
-        E: FnMut(Option<&str>),
-    {
-        emit(detect().as_deref());
-    }
-
-    fn legacy_periodic_pass<D, E>(state: &mut LegacyEventState, mut detect: D, mut emit: E)
-    where
-        D: FnMut() -> Option<String>,
-        E: FnMut(Option<&str>),
-    {
-        let current = detect();
-        if ssid_changed(&current, &state.last) {
-            let published = detect();
-            emit(published.as_deref());
-            state.last = current;
-        }
-    }
 
     #[test]
     fn ssid_bytes_decode_valid_utf8() {
@@ -1275,19 +1269,20 @@ mod linux_tests {
 
     #[test]
     fn event_initial_probe_emits_and_caches_its_single_observation() {
-        let mut state = LegacyEventState { last: None };
-        let mut observations = [None, Some("OfficeWiFi")].into_iter();
+        let mut state = EventState {
+            last: Some("stale".to_string()),
+        };
+        let mut observations = [None].into_iter();
         let mut emitted = Vec::new();
         let mut calls = 0;
 
-        legacy_initial_or_periodic(
-            &mut state,
-            || {
-                calls += 1;
-                observations.next().flatten().map(str::to_owned)
-            },
-            |ssid| emitted.push(ssid.map(str::to_owned)),
-        );
+        let observed = {
+            calls += 1;
+            observations.next().flatten().map(str::to_owned)
+        };
+        publish_observation(&mut state, observed, |ssid| {
+            emitted.push(ssid.map(str::to_owned))
+        });
 
         assert_eq!(calls, 1, "the initial probe must detect once");
         assert_eq!(emitted, vec![None]);
@@ -1296,7 +1291,7 @@ mod linux_tests {
 
     #[test]
     fn event_periodic_stale_active_reproduction_repairs_every_changed_observation() {
-        let mut state = LegacyEventState {
+        let mut state = EventState {
             last: Some("OfficeWiFi".to_string()),
         };
         let mut observations = [None, Some("OfficeWiFi"), None, None].into_iter();
@@ -1304,7 +1299,7 @@ mod linux_tests {
         let mut calls = 0;
 
         for _ in 0..3 {
-            legacy_periodic_pass(
+            periodic_pass(
                 &mut state,
                 || {
                     calls += 1;
@@ -1321,27 +1316,21 @@ mod linux_tests {
 
     #[test]
     fn event_handler_updates_the_cache_before_periodic_reconciliation() {
-        let mut state = LegacyEventState { last: None };
-        let mut observations = [
-            Some("HomeWiFi"),
-            Some("HomeWiFi"),
-            Some("HomeWiFi"),
-            None,
-            None,
-        ]
-        .into_iter();
+        let mut state = EventState { last: None };
+        let mut observations = [Some("HomeWiFi"), Some("HomeWiFi"), None].into_iter();
         let mut emitted = Vec::new();
         let mut calls = 0;
 
-        legacy_handler(
-            || {
-                calls += 1;
-                observations.next().flatten().map(str::to_owned)
-            },
-            |ssid| emitted.push(ssid.map(str::to_owned)),
-        );
+        let observed = {
+            calls += 1;
+            observations.next().flatten().map(str::to_owned)
+        };
+        publish_observation(&mut state, observed, |ssid| {
+            emitted.push(ssid.map(str::to_owned))
+        });
+        assert_eq!(state.last.as_deref(), Some("HomeWiFi"));
         for _ in 0..2 {
-            legacy_periodic_pass(
+            periodic_pass(
                 &mut state,
                 || {
                     calls += 1;
