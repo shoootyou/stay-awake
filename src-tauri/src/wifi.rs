@@ -1337,6 +1337,62 @@ mod linux_tests {
     }
 
     #[test]
+    fn event_periodic_pass_skips_repeated_unchanged_observations() {
+        let mut state = EventState {
+            last: Some("OfficeWiFi".to_string()),
+        };
+        let mut observations = [Some("OfficeWiFi"), Some("OfficeWiFi"), None].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        for _ in 0..3 {
+            periodic_pass(
+                &mut state,
+                || {
+                    calls += 1;
+                    observations.next().flatten().map(str::to_owned)
+                },
+                |ssid| emitted.push(ssid.map(str::to_owned)),
+            );
+        }
+
+        assert_eq!(calls, 3, "each periodic pass must detect once");
+        assert_eq!(emitted, vec![None]);
+        assert_eq!(state.last, None);
+    }
+
+    #[test]
+    fn event_publish_observation_emits_equal_initial_and_handler_observations() {
+        let mut initial_state = EventState { last: None };
+        let mut initial_emitted = Vec::new();
+        let mut initial_calls = 0;
+        let initial_observed = {
+            initial_calls += 1;
+            None
+        };
+
+        publish_observation(&mut initial_state, initial_observed, |ssid| {
+            initial_emitted.push(ssid.map(str::to_owned))
+        });
+
+        assert_eq!(initial_calls, 1, "the initial probe must detect once");
+        assert_eq!(initial_emitted, vec![None]);
+        assert_eq!(initial_state.last, None);
+
+        // A handler signal means upstream state changed, so it publishes even when cache matches.
+        let mut handler_state = EventState {
+            last: Some("HomeWiFi".to_string()),
+        };
+        let mut handler_emitted = Vec::new();
+        publish_observation(&mut handler_state, Some("HomeWiFi".to_string()), |ssid| {
+            handler_emitted.push(ssid.map(str::to_owned))
+        });
+
+        assert_eq!(handler_emitted, vec![Some("HomeWiFi".to_string())]);
+        assert_eq!(handler_state.last.as_deref(), Some("HomeWiFi"));
+    }
+
+    #[test]
     fn event_handler_updates_the_cache_before_periodic_reconciliation() {
         let mut state = EventState { last: None };
         let mut observations = [Some("HomeWiFi"), Some("HomeWiFi"), None].into_iter();
