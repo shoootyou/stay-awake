@@ -275,8 +275,10 @@ impl Drop for WifiMonitor {
 
 /// Detect the current SSID, check it against config, and emit a Tauri event.
 fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
-    let ssid = detect_current_ssid();
+    emit_observation(config, app_handle, detect_current_ssid().as_deref());
+}
 
+fn emit_observation(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle, ssid: Option<&str>) {
     let (enabled, active) = {
         let cfg = match config.lock() {
             Ok(cfg) => cfg,
@@ -285,7 +287,7 @@ fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
         if cfg.mode != AppMode::WiFi {
             return;
         }
-        let is_registered = match &ssid {
+        let is_registered = match ssid {
             Some(s) => cfg.wifi.networks.iter().any(|n| n == s),
             None => false,
         };
@@ -294,7 +296,7 @@ fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
 
     if enabled {
         let payload = WifiStatePayload {
-            ssid: ssid.clone(),
+            ssid: ssid.map(str::to_owned),
             active,
         };
         if let Err(e) = app_handle.emit("wifi-state-changed", payload) {
@@ -310,22 +312,17 @@ fn polling_loop(
     config: &Arc<Mutex<AppConfig>>,
     running: &Arc<AtomicBool>,
     app_handle: &AppHandle,
-    mut reconcile_first: bool,
+    reconcile_first: bool,
 ) {
-    let mut last_ssid: Option<String> = None;
+    let mut state = PollingState {
+        last: None,
+        reconcile_first,
+    };
 
     while running.load(Ordering::Relaxed) {
-        let current_ssid = detect_current_ssid();
-
-        if polling_observation_should_emit(
-            last_ssid.as_deref(),
-            current_ssid.as_deref(),
-            reconcile_first,
-        ) {
-            check_and_emit(config, app_handle);
-            last_ssid = current_ssid;
-        }
-        reconcile_first = false;
+        polling_pass(&mut state, detect_current_ssid, |ssid| {
+            emit_observation(config, app_handle, ssid);
+        });
 
         // Sleep 15 seconds in 250 ms increments so we can react to stop() quickly.
         let total = Duration::from_secs(15);
@@ -341,8 +338,12 @@ fn polling_loop(
 // ─────────────────── Event-driven path (non-macOS stub) ─────────────────────
 
 enum EventLoopResult {
+    // Non-Linux/macOS stubs only return Poll.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     Stopped,
-    Poll { reconcile_first: bool },
+    Poll {
+        reconcile_first: bool,
+    },
 }
 
 fn polling_observation_should_emit(
@@ -353,14 +354,12 @@ fn polling_observation_should_emit(
     reconcile_first || current != last
 }
 
-#[cfg(all(test, target_os = "linux"))]
 struct PollingState {
     last: Option<String>,
     reconcile_first: bool,
 }
 
-#[cfg(all(test, target_os = "linux"))]
-fn legacy_polling_pass<D, E>(state: &mut PollingState, mut detect: D, mut emit: E)
+fn polling_pass<D, E>(state: &mut PollingState, mut detect: D, mut emit: E)
 where
     D: FnMut() -> Option<String>,
     E: FnMut(Option<&str>),
@@ -371,10 +370,9 @@ where
         current.as_deref(),
         state.reconcile_first,
     ) {
-        let emitted = detect();
-        emit(emitted.as_deref());
-        state.last = current;
+        emit(current.as_deref());
     }
+    state.last = current;
     state.reconcile_first = false;
 }
 
@@ -1264,7 +1262,7 @@ mod linux_tests {
         let mut emitted = Vec::new();
         let mut calls = 0;
 
-        legacy_polling_pass(
+        polling_pass(
             &mut state,
             || {
                 calls += 1;
@@ -1290,7 +1288,7 @@ mod linux_tests {
         let mut calls = 0;
 
         for _ in 0..4 {
-            legacy_polling_pass(
+            polling_pass(
                 &mut state,
                 || {
                     calls += 1;
@@ -1317,7 +1315,7 @@ mod linux_tests {
         let mut calls = 0;
 
         for _ in 0..3 {
-            legacy_polling_pass(
+            polling_pass(
                 &mut state,
                 || {
                     calls += 1;
@@ -1345,7 +1343,7 @@ mod linux_tests {
         let mut calls = 0;
 
         for _ in 0..2 {
-            legacy_polling_pass(
+            polling_pass(
                 &mut state,
                 || {
                     calls += 1;
