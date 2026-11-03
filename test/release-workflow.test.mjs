@@ -147,6 +147,15 @@ test("keeps the required Linux packages and executable installer in one reposito
   }
 });
 
+test("uses sudo only when the Linux dependency installer is not root", () => {
+  const installer = read("scripts/install-linux-dependencies.sh");
+
+  assert.match(installer, /SUDO=\(\)\s*\nif \[ "\$\(id -u\)" -ne 0 \]; then\s*\n  SUDO=\(sudo\)\s*\nfi/);
+  for (const line of installer.split("\n").filter((line) => /\bapt-get\b/.test(line))) {
+    assert.match(line, /^"\$\{SUDO\[@\]\}"\s+apt-get\b/);
+  }
+});
+
 test("makes Linux CI and tagged releases invoke the shared prerequisite installer", () => {
   const ci = read(".github/workflows/ci.yml");
   const release = read(".github/workflows/release.yml");
