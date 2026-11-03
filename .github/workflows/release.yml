@@ -18,6 +18,9 @@ concurrency:
   group: release-${{ inputs.tag_name }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 # Required secrets in the "public" GitHub environment:
 #
 # macOS code signing & notarization:
@@ -35,8 +38,45 @@ concurrency:
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — Password for the signing key
 
 jobs:
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.release.outputs.release-id }}
+    steps:
+      - name: Find or create release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release tag: $TAG_NAME"
+            exit 1
+          fi
+
+          if release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG_NAME" --jq .id 2>&1); then
+            echo "Found release $release_id for $TAG_NAME"
+          elif [[ "$release_id" == *"HTTP 404"* ]]; then
+            release_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f "tag_name=$TAG_NAME" \
+              -f "name=Stay Awake $TAG_NAME" \
+              -F draft=false \
+              -F prerelease=false \
+              --jq .id)
+            echo "Created release $release_id for $TAG_NAME"
+          else
+            printf '%s\n' "$release_id" >&2
+            exit 1
+          fi
+
+          echo "release-id=$release_id" >> "$GITHUB_OUTPUT"
+
   build-macos:
     name: Build macOS
+    needs: create-release
     runs-on: macos-latest
     timeout-minutes: 60
     environment: public
@@ -102,7 +142,7 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
       - name: Build and upload release assets
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
@@ -112,9 +152,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.create-release.outputs.release-id }}
           tagName: ${{ inputs.tag_name }}
-          releaseDraft: false
-          prerelease: false
+          uploadUpdaterJson: true
           args: --verbose
 
       - name: Clean up keychain
@@ -125,26 +165,9 @@ jobs:
 
   build-linux:
     name: Build Linux
-    # Depends on build-macos so macOS creates the GitHub release first (getOrCreateRelease's
-    # createRelease path) and this job finds it via getReleaseByTag, instead of both jobs
-    # racing to create the same tag's release concurrently (loser gets an unhandled 422
-    # already_exists from tauri-action). `needs:` implies an implicit success() gate: if
-    # build-macos is ever skipped (not just failed), build-linux is ALSO skipped by default.
-    # build-macos has no conditional skip path today, so this is safe — but if one is added,
-    # revisit this job's `if:` too, or the Linux artifact silently stops being produced.
-    needs: build-macos
+    needs: create-release
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # `environment: public` scoped only TAURI_SIGNING_PRIVATE_KEY /
-    # TAURI_SIGNING_PRIVATE_KEY_PASSWORD here, both removed below (D5: this job's
-    # tauri.linux.conf.json sets createUpdaterArtifacts: false, so sign_updaters returns
-    # before ever touching the key — provably unused, confirmed against tauri-bundler
-    # source). No other secret/var used by this job comes from the "public" environment,
-    # so the `environment:` key itself is dropped too.
-    # Bake-in period: a build-linux failure must not block the working macOS → Homebrew-cask
-    # chain, since release-please.yml's `distribute` job gates on this entire workflow
-    # succeeding. Revisit removing this once Linux release builds have proven stable across a
-    # few real releases (RFC 048, release-train coupling risk note).
     continue-on-error: true
     permissions:
       contents: write
@@ -183,17 +206,33 @@ jobs:
         run: scripts/install-linux-dependencies.sh
 
       - name: Build and upload release assets
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_LINUX_AYATANA_APPINDICATOR: true
         with:
+          releaseId: ${{ needs.create-release.outputs.release-id }}
           tagName: ${{ inputs.tag_name }}
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: false
+          uploadUpdaterJson: false
           args: --verbose
 
-      - name: Warn on Linux build failure
-        if: failure()
-        run: echo "::warning::build-linux failed - this release will ship without a Linux .deb artifact"
+  report-linux:
+    name: Report Linux build
+    if: always()
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Summarize Linux build
+        env:
+          LINUX_RESULT: ${{ needs.build-linux.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ "$LINUX_RESULT" == success ]]; then
+            echo "## Linux build" >> "$GITHUB_STEP_SUMMARY"
+            echo "Linux .deb build succeeded." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Linux build failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "build-linux result: $LINUX_RESULT. See $RUN_URL." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::build-linux result: $LINUX_RESULT. See $RUN_URL."
+          fi
