@@ -274,6 +274,8 @@ impl Drop for WifiMonitor {
 // ──────────────────────────── Shared logic ─────────────────────────────────
 
 /// Detect the current SSID, check it against config, and emit a Tauri event.
+// Only the Linux and macOS event-driven paths call this helper.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
     emit_observation(config, app_handle, detect_current_ssid().as_deref());
 }
