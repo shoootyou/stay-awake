@@ -273,13 +273,6 @@ impl Drop for WifiMonitor {
 
 // ──────────────────────────── Shared logic ─────────────────────────────────
 
-/// Detect the current SSID, check it against config, and emit a Tauri event.
-// Only the Linux and macOS event-driven paths call this helper.
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
-fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
-    emit_observation(config, app_handle, detect_current_ssid().as_deref());
-}
-
 fn emit_observation(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle, ssid: Option<&str>) {
     let (enabled, active) = {
         let cfg = match config.lock() {
@@ -427,35 +420,35 @@ fn is_disconnected_ap_path(path: &str) -> bool {
 /// `current != last_ssid` check (line ~831), just named and seamed for Linux's periodic
 /// safety-net re-check.
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 struct EventState {
     last: Option<String>,
 }
 
-#[cfg(all(test, target_os = "linux"))]
 fn publish_observation<E: FnMut(Option<&str>)>(
-    _state: &mut EventState,
+    state: &mut EventState,
     observed: Option<String>,
     mut emit: E,
 ) {
+    state.last = observed.clone();
     emit(observed.as_deref());
 }
 
-#[cfg(all(test, target_os = "linux"))]
 fn periodic_pass<D: FnMut() -> Option<String>, E: FnMut(Option<&str>)>(
     state: &mut EventState,
     mut detect: D,
     mut emit: E,
 ) {
     let current = detect();
-    if ssid_changed(&current, &state.last) {
-        emit(detect().as_deref());
-        state.last = current;
+    if current != state.last {
+        emit(current.as_deref());
     }
+    state.last = current;
 }
 
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
@@ -641,8 +634,10 @@ fn try_event_driven_loop(
     });
 
     // Initial probe so the frontend gets state immediately on startup.
-    let mut last_ssid = detect_current_ssid();
-    check_and_emit(config, app_handle);
+    let mut state = EventState { last: None };
+    publish_observation(&mut state, detect_current_ssid(), |ssid| {
+        emit_observation(config, app_handle, ssid);
+    });
 
     // Periodic safety net, mirroring the macOS branch's `POLL_INTERVAL_SECS` pattern (see
     // ~line 830 below): every `POLL_INTERVAL_SECS` timeout slices we (a) re-poll the SSID
@@ -658,7 +653,9 @@ fn try_event_driven_loop(
 
     while running.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(()) => check_and_emit(config, app_handle),
+            Ok(()) => publish_observation(&mut state, detect_current_ssid(), |ssid| {
+                emit_observation(config, app_handle, ssid);
+            }),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 ticks += 1;
                 if ticks >= POLL_INTERVAL_SECS {
@@ -666,16 +663,15 @@ fn try_event_driven_loop(
 
                     match find_wifi_device_path(&conn) {
                         Some(current_path) if current_path == wifi_path => {
-                            let current = detect_current_ssid();
-                            if ssid_changed(&current, &last_ssid) {
+                            let previous = state.last.clone();
+                            periodic_pass(&mut state, detect_current_ssid, |ssid| {
                                 log::debug!(
                                     "WiFi periodic check: SSID changed {:?} → {:?}",
-                                    last_ssid,
-                                    current
+                                    previous,
+                                    ssid
                                 );
-                                check_and_emit(config, app_handle);
-                                last_ssid = current;
-                            }
+                                emit_observation(config, app_handle, ssid);
+                            });
                         }
                         _ => {
                             log::warn!(
@@ -880,7 +876,11 @@ unsafe extern "C" fn wifi_change_callback(
     // entire duration of `try_event_driven_loop` (guaranteed by the loop
     // structure — we only release the store after the run loop exits).
     let data = &*(info as *const WifiCallbackData);
-    check_and_emit(&data.config, &data.app_handle);
+    emit_observation(
+        &data.config,
+        &data.app_handle,
+        detect_current_ssid().as_deref(),
+    );
 }
 
 /// Try to run an SCDynamicStore-based event loop on the current thread.
@@ -1014,7 +1014,7 @@ fn try_event_driven_loop(
 
     // Initial probe so the frontend gets state immediately on startup.
     let mut last_ssid = detect_current_ssid();
-    check_and_emit(config, app_handle);
+    emit_observation(config, app_handle, detect_current_ssid().as_deref());
 
     // ── Run loop — 1 s slices so we can react to stop() quickly ──────────
     // Also poll every POLL_INTERVAL_SECS to catch missed SC events (macOS 26+).
@@ -1036,7 +1036,7 @@ fn try_event_driven_loop(
                     last_ssid,
                     current
                 );
-                check_and_emit(config, app_handle);
+                emit_observation(config, app_handle, detect_current_ssid().as_deref());
                 last_ssid = current;
             }
         }
