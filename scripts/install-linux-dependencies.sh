@@ -7,6 +7,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 packages=(
+  build-essential
   libgtk-3-dev
   libwebkit2gtk-4.1-dev
   libayatana-appindicator3-dev
