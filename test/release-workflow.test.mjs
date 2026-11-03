@@ -21,14 +21,16 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(new URL(path, `file://${root}/`), "utf8");
 
-const jobBlock = (workflow, name) => {
+const rawJobBlock = (workflow, name) => {
   const header = new RegExp(`^  ${name}:\\s*$`, "m");
   const match = header.exec(workflow);
   assert.notEqual(match, null, `missing ${name} job`);
   const start = match.index;
   const next = workflow.slice(start + match[0].length).search(/^  [\w-]+:/m);
-  return withoutYamlComments(workflow.slice(start, next === -1 ? undefined : start + match[0].length + next));
+  return workflow.slice(start, next === -1 ? undefined : start + match[0].length + next);
 };
+
+const jobBlock = (workflow, name) => withoutYamlComments(rawJobBlock(workflow, name));
 
 const runBodies = (job) => [...job.matchAll(/^([ \t]*)(?:-\s+)?run:[ \t]*(.*)$/gm)].flatMap((match) => {
   const indentation = match[1].length;
@@ -209,12 +211,14 @@ test("keeps CI builds independent from commitlint while retaining commitlint as 
 });
 
 test("runs Node contract tests independently in pull request CI", () => {
-  const contractTests = jobBlock(read(".github/workflows/ci.yml"), "contract-tests");
+  const workflow = read(".github/workflows/ci.yml");
+  const contractTests = jobBlock(workflow, "contract-tests");
+  const rawContractTests = rawJobBlock(workflow, "contract-tests");
   const runs = runBodies(contractTests);
 
   assert.match(contractTests, /^ {4}runs-on: ubuntu-24\.04$/m);
-  assert.match(contractTests, /actions\/checkout@[0-9a-f]{40} # v[\d.]+/);
-  assert.match(contractTests, /actions\/setup-node@[0-9a-f]{40} # v[\d.]+/);
+  assert.match(rawContractTests, /actions\/checkout@[0-9a-f]{40} # v[\d.]+/);
+  assert.match(rawContractTests, /actions\/setup-node@[0-9a-f]{40} # v[\d.]+/);
   assert.match(contractTests, /node-version: 26/);
   assertNodeTestCommandsAreOrdered(runs);
 });
