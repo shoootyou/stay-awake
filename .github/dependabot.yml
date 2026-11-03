@@ -9,7 +9,7 @@ updates:
       day: "monday"
     open-pull-requests-limit: 3
     commit-message:
-      prefix: "ci(deps)"
+      prefix: "ci"
       include: "scope"
     labels:
       - "dependencies"
@@ -28,7 +28,7 @@ updates:
       day: "monday"
     open-pull-requests-limit: 3
     commit-message:
-      prefix: "build(deps)"
+      prefix: "build"
       include: "scope"
     labels:
       - "dependencies"
@@ -47,7 +47,7 @@ updates:
       day: "monday"
     open-pull-requests-limit: 3
     commit-message:
-      prefix: "build(deps)"
+      prefix: "build"
       include: "scope"
     labels:
       - "dependencies"
