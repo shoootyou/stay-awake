@@ -8,14 +8,15 @@ This guide is written around macOS. See [Linux](#linux) for the Linux-specific n
 - The default hotkey is `Ctrl+Shift+J`.
 - Power Only is the default mode and uses `systemd-inhibit`.
 - Mouse Subtle, Mouse Zen, and Mouse Circle need `xdotool`.
-- The tray icon needs an appindicator host. Install `libayatana-appindicator3-1` if the app reports that the system tray library is missing.
+- The tray icon requires the `libayatana-appindicator3-1` library. The `.deb` installs it;
+  source builds need `libayatana-appindicator3-dev`.
 - WiFi app mode uses NetworkManager.
 
 ---
 
 ## macOS requirements
 
-macOS 12 Monterey or later. Apple Silicon runs natively; Intel uses Rosetta 2.
+macOS 12 Monterey or later on Apple Silicon.
 
 ---
 
@@ -39,7 +40,7 @@ open the same menu.
 | Power Only mode | None |
 | Mouse modes (Subtle, Zen, Circle) | Accessibility |
 | WiFi activation mode | Location Services (macOS 26+) |
-| Launch at Login | None (managed by LaunchAgent) |
+| Launch at Login | None (registered as a Login Item) |
 
 ---
 
@@ -167,7 +168,7 @@ Open from the tray menu via **Settings**. Changes save automatically as you make
 | **Jiggle Mode** | How the engine keeps the computer awake (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 s). Default: 30 s. |
 | **App Mode** | When the engine activates: Manual, Always On, or WiFi. |
-| **Launch at Login** | On macOS, start Stay Awake automatically at login via a LaunchAgent. |
+| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. |
 | **Language** | UI display language (8 languages available). |
 | **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
 
@@ -252,7 +253,8 @@ on or off without opening the tray menu.
 
 **Homebrew install:** run `brew upgrade shoootyou/tap/stay-awake`.
 
-**Manual DMG install:** macOS releases include signed update metadata.
+**Manual DMG install:** macOS releases publish signed update metadata. To update, install the
+new DMG.
 
 **Linux `.deb`:** Download each new `.deb` from GitHub Releases and install it with
 `sudo apt install ./<downloaded-file>.deb`. Linux `.deb` installs do not use the

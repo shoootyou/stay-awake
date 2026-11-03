@@ -51,7 +51,6 @@ sudo apt install ./<downloaded-file>.deb
 ```
 
 The package declares `systemd` as a dependency and `xdotool` as a recommendation.
-The packager adds library dependencies automatically.
 
 ### Linux prerequisites
 
@@ -67,7 +66,8 @@ Mouse Circle, or Mouse Zen in Settings if mouse jiggle works for your setup.
 
 **Homebrew (macOS)**: run `brew upgrade shoootyou/tap/stay-awake`.
 
-**Manual DMG install (macOS)**: macOS releases include signed update metadata.
+**Manual DMG install (macOS)**: macOS releases publish signed update metadata. To update,
+install the new DMG.
 
 **Linux (.deb)**: Linux `.deb` installs do not use the in-app updater. Download the new `.deb` from [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) and install it with `sudo apt install ./<downloaded-file>.deb`.
 
@@ -75,7 +75,7 @@ Mouse Circle, or Mouse Zen in Settings if mouse jiggle works for your setup.
 
 **macOS**
 - macOS 12 Monterey or later
-- Apple Silicon (native) or Intel (via Rosetta 2)
+- Apple Silicon
 
 **Linux**
 - A `systemd`-based distribution (Debian/Ubuntu and derivatives, via the `.deb` package)
