@@ -1,10 +1,22 @@
-# Stay Awake — User Guide
+# Stay Awake user guide
 
-Stay Awake is a macOS-only menu bar utility that prevents your computer from
-sleeping or going idle. It lives in the menu bar and stays out of your way —
-no Dock icon, no persistent window. Configure it once and forget it.
+Stay Awake prevents your computer from sleeping or going idle on macOS and Linux.
+This guide is written around macOS. See [Linux](#linux) for the Linux-specific notes.
 
-**Requirements:** macOS 12 Monterey or later · Apple Silicon (native) or Intel (via Rosetta 2)
+## Linux
+
+- The default hotkey is `Ctrl+Shift+J`.
+- Power Only is the default mode and uses `systemd-inhibit`.
+- Mouse Subtle, Mouse Zen, and Mouse Circle need `xdotool`.
+- The tray icon requires the `libayatana-appindicator3-1` library. The `.deb` installs it;
+  source builds need `libayatana-appindicator3-dev`.
+- WiFi app mode uses NetworkManager.
+
+---
+
+## macOS requirements
+
+macOS 12 Monterey or later on Apple Silicon.
 
 ---
 
@@ -28,7 +40,7 @@ open the same menu.
 | Power Only mode | None |
 | Mouse modes (Subtle, Zen, Circle) | Accessibility |
 | WiFi activation mode | Location Services (macOS 26+) |
-| Launch at Login | None (managed by LaunchAgent) |
+| Launch at Login | None (registered as a Login Item) |
 
 ---
 
@@ -156,7 +168,7 @@ Open from the tray menu via **Settings**. Changes save automatically as you make
 | **Jiggle Mode** | How the engine keeps the computer awake (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 s). Default: 30 s. |
 | **App Mode** | When the engine activates: Manual, Always On, or WiFi. |
-| **Launch at Login** | Start Stay Awake automatically at login via a macOS LaunchAgent. |
+| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. |
 | **Language** | UI display language (8 languages available). |
 | **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
 
@@ -241,9 +253,12 @@ on or off without opening the tray menu.
 
 **Homebrew install:** run `brew upgrade shoootyou/tap/stay-awake`.
 
-**Manual DMG install:** Stay Awake checks for new versions on each launch. When an
-update is available on GitHub Releases, a prompt appears in the menu bar — click it
-to install in one step.
+**Manual DMG install:** macOS releases publish signed update metadata. To update, install the
+new DMG.
+
+**Linux `.deb`:** Download each new `.deb` from GitHub Releases and install it with
+`sudo apt install ./<downloaded-file>.deb`. Linux `.deb` installs do not use the
+in-app updater.
 
 ---
 
