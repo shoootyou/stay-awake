@@ -353,6 +353,31 @@ fn polling_observation_should_emit(
     reconcile_first || current != last
 }
 
+#[cfg(all(test, target_os = "linux"))]
+struct PollingState {
+    last: Option<String>,
+    reconcile_first: bool,
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn legacy_polling_pass<D, E>(state: &mut PollingState, mut detect: D, mut emit: E)
+where
+    D: FnMut() -> Option<String>,
+    E: FnMut(Option<&str>),
+{
+    let current = detect();
+    if polling_observation_should_emit(
+        state.last.as_deref(),
+        current.as_deref(),
+        state.reconcile_first,
+    ) {
+        let emitted = detect();
+        emit(emitted.as_deref());
+        state.last = current;
+    }
+    state.reconcile_first = false;
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn try_event_driven_loop(
     _config: &Arc<Mutex<AppConfig>>,
@@ -1226,6 +1251,113 @@ mod linux_tests {
             Some("OfficeWiFi"),
             false,
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn polling_pass_emits_and_caches_the_same_single_observation() {
+        let mut state = PollingState {
+            last: None,
+            reconcile_first: true,
+        };
+        let mut observations = [None, Some("OfficeWiFi")].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        legacy_polling_pass(
+            &mut state,
+            || {
+                calls += 1;
+                observations.next().flatten().map(str::to_owned)
+            },
+            |ssid| emitted.push(ssid.map(str::to_owned)),
+        );
+
+        assert_eq!(calls, 1, "one pass must detect once");
+        assert_eq!(emitted, vec![None]);
+        assert_eq!(emitted.last().unwrap().as_deref(), state.last.as_deref());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn polling_pass_reconciles_transient_ssid_without_stale_cached_state() {
+        let mut state = PollingState {
+            last: None,
+            reconcile_first: true,
+        };
+        let mut observations = [None, Some("OfficeWiFi"), None, None].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        for _ in 0..4 {
+            legacy_polling_pass(
+                &mut state,
+                || {
+                    calls += 1;
+                    observations.next().flatten().map(str::to_owned)
+                },
+                |ssid| emitted.push(ssid.map(str::to_owned)),
+            );
+        }
+
+        assert_eq!(calls, 4, "every pass must use one detection");
+        assert_eq!(emitted, vec![None, Some("OfficeWiFi".to_string()), None]);
+        assert_eq!(state.last, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn polling_pass_skips_unchanged_none_on_normal_start() {
+        let mut state = PollingState {
+            last: None,
+            reconcile_first: false,
+        };
+        let mut observations = [None, None, None].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        for _ in 0..3 {
+            legacy_polling_pass(
+                &mut state,
+                || {
+                    calls += 1;
+                    observations.next().flatten().map(str::to_owned)
+                },
+                |ssid| emitted.push(ssid.map(str::to_owned)),
+            );
+        }
+
+        assert_eq!(calls, 3);
+        assert!(emitted.is_empty());
+        assert_eq!(state.last, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn polling_pass_does_not_reemit_an_unchanged_ssid_after_reconciliation() {
+        let mut state = PollingState {
+            last: None,
+            reconcile_first: true,
+        };
+        let mut observations =
+            [Some("OfficeWiFi"), Some("OfficeWiFi"), Some("OfficeWiFi")].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        for _ in 0..2 {
+            legacy_polling_pass(
+                &mut state,
+                || {
+                    calls += 1;
+                    observations.next().flatten().map(str::to_owned)
+                },
+                |ssid| emitted.push(ssid.map(str::to_owned)),
+            );
+        }
+
+        assert_eq!(calls, 2, "every pass must use one detection");
+        assert_eq!(emitted, vec![Some("OfficeWiFi".to_string())]);
+        assert_eq!(state.last.as_deref(), Some("OfficeWiFi"));
     }
 
     // ── Live-verification tests against a real NetworkManager D-Bus (HIGH #1/#2) ───────────
