@@ -40,7 +40,7 @@ permissions:
 jobs:
   create-release:
     name: Create release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     outputs:
@@ -166,7 +166,7 @@ jobs:
   build-linux:
     name: Build Linux
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     continue-on-error: true
     permissions:
@@ -200,9 +200,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: release-cargo-ubuntu-latest-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: release-cargo-ubuntu-24.04-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            release-cargo-ubuntu-latest-
+            release-cargo-ubuntu-24.04-
 
       - name: Install Linux dependencies
         run: scripts/install-linux-dependencies.sh
@@ -223,7 +223,7 @@ jobs:
     name: Report Linux build
     if: always()
     needs: [build-linux]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - name: Summarize Linux build

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   commitlint:
     name: "Commit Style (conventional commits)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,7 +29,7 @@ jobs:
 
   lint-and-check:
     name: "Rust: Fmt & Clippy"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -64,7 +64,7 @@ jobs:
 
   cargo-audit:
     name: "Rust: Security Audit (CVE)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: src-tauri
@@ -82,12 +82,12 @@ jobs:
 
   build:
     name: "Build: ${{ matrix.os }}"
-    needs: [commitlint, lint-and-check, cargo-audit]
+    needs: [lint-and-check, cargo-audit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-24.04]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
