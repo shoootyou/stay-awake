@@ -165,6 +165,19 @@ test("keeps CI builds independent from commitlint while retaining commitlint as 
   assert.deepEqual(needsJobs(jobBlock(ci, "lint-and-check")), []);
   assert.deepEqual(needsJobs(jobBlock(ci, "cargo-audit")), []);
   assert.deepEqual(needsJobs(build).sort(), ["cargo-audit", "lint-and-check"]);
+  assert.deepEqual(needsJobs(jobBlock(ci, "contract-tests")), []);
+});
+
+test("runs Node contract tests independently in pull request CI", () => {
+  const contractTests = jobBlock(read(".github/workflows/ci.yml"), "contract-tests");
+  const runs = runBodies(contractTests);
+
+  assert.match(contractTests, /^ {4}runs-on: ubuntu-24\.04$/m);
+  assert.match(contractTests, /actions\/checkout@[0-9a-f]{40} # v[\d.]+/);
+  assert.match(contractTests, /actions\/setup-node@[0-9a-f]{40} # v[\d.]+/);
+  assert.match(contractTests, /node-version: 26/);
+  assert.equal(runs.indexOf("npm ci") < runs.indexOf("npm test"), true,
+    "npm ci must run before npm test");
 });
 
 test("parses flow-style needs with trailing whitespace and comments", () => {
@@ -176,7 +189,7 @@ test("parses flow-style needs with trailing whitespace and comments", () => {
 
 test("resolves the expected number of runner labels in CI and release workflows", () => {
   for (const [path, expectedCount] of [
-    [".github/workflows/ci.yml", 5],
+    [".github/workflows/ci.yml", 6],
     [".github/workflows/release.yml", 4],
   ]) {
     const workflow = read(path);
@@ -206,7 +219,7 @@ test("pins every Linux CI and release runner, including matrix Linux, to ubuntu-
 test("pins every external workflow action to a SHA with a version comment", () => {
   for (const [path, expectedExternalActions] of [
     [".github/workflows/release.yml", 10],
-    [".github/workflows/ci.yml", 11],
+    [".github/workflows/ci.yml", 13],
     [".github/workflows/distribute.yml", 1],
     [".github/workflows/release-please.yml", 1],
   ]) {
