@@ -7,12 +7,18 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "ci"
       include: "scope"
     labels:
       - "dependencies"
       - "ci"
+    groups:
+      all-dependencies:
+        applies-to: "version-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # npm — frontend dependencies
   - package-ecosystem: "npm"
@@ -20,12 +26,18 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "build"
       include: "scope"
     labels:
       - "dependencies"
       - "javascript"
+    groups:
+      all-dependencies:
+        applies-to: "version-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # Cargo — Rust backend dependencies
   - package-ecosystem: "cargo"
@@ -33,9 +45,19 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "build"
       include: "scope"
     labels:
       - "dependencies"
       - "rust"
+    groups:
+      all-dependencies:
+        applies-to: "version-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # zbus 6 deferred: tauri-plugin-single-instance requires zbus 5; revisit when it supports zbus 6
+    ignore:
+      - dependency-name: "zbus"
+        update-types: ["version-update:semver-major"]
