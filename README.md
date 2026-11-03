@@ -28,8 +28,8 @@ Stay Awake is a tray utility that prevents your computer from sleeping on macOS 
 - **Profiles**: save and load named settings profiles
 - **Global hotkey**: toggle active/inactive from anywhere
 - **Idle detection**: skips jiggle while you are using the mouse
-- **Launch at Login**: configurable macOS autostart
-- **Auto-updater (macOS)**: checks for releases on launch and offers installation
+- **Launch at Login**: configurable on desktop
+- **macOS release metadata**: signed update metadata ships with macOS releases
 - **Internationalization**: English, Spanish, French, German, Portuguese (BR), Japanese, Chinese (Simplified), and Korean
 
 ## Installation
@@ -50,8 +50,8 @@ brew install shoootyou/tap/stay-awake
 sudo apt install ./<downloaded-file>.deb
 ```
 
-The package includes `Depends` entries for `systemd`, `libayatana-appindicator3-1`,
-`libwebkit2gtk-4.1-0`, and `libgtk-3-0` in local builds. It recommends `xdotool`.
+The package declares `systemd` as a dependency and `xdotool` as a recommendation.
+The packager adds library dependencies automatically.
 
 ### Linux prerequisites
 
@@ -67,9 +67,9 @@ Mouse Circle, or Mouse Zen in Settings if mouse jiggle works for your setup.
 
 **Homebrew (macOS)**: run `brew upgrade shoootyou/tap/stay-awake`.
 
-**Manual DMG install (macOS)**: Stay Awake checks for new versions on launch. When an update is available on [GitHub Releases](https://github.com/shoootyou/stay-awake/releases), a prompt appears in the menu bar.
+**Manual DMG install (macOS)**: macOS releases include signed update metadata.
 
-**Linux (.deb)**: the in-app updater is not provided for the `.deb`. Download the new `.deb` from [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) and install it with `sudo apt install ./<downloaded-file>.deb`.
+**Linux (.deb)**: Linux `.deb` installs do not use the in-app updater. Download the new `.deb` from [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) and install it with `sudo apt install ./<downloaded-file>.deb`.
 
 ## System Requirements
 

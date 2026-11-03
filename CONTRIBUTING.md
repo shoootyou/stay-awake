@@ -10,7 +10,7 @@ This guide covers local setup, checks, and contribution conventions.
 
 ### Linux system dependencies
 
-On Linux, run the same prerequisite installer used by CI and release builds:
+On Linux, run the same prerequisite installer used by CI and release builds from the repository root:
 
 ```sh
 scripts/install-linux-dependencies.sh
@@ -22,7 +22,7 @@ Runtime notes for Linux users/contributors testing the app:
 
 - NetworkManager is required for WiFi mode.
 - `xdotool` is recommended for mouse-jiggle modes. `Power Only` works without it.
-- Linux `.deb` installs do not use the in-app updater.
+- Linux `.deb` installs do not include an in-app updater.
 
 ## Run checks locally
 
@@ -34,7 +34,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-Run the frontend and release-workflow contract tests from the repository root:
+Run the release-workflow contract tests from the repository root:
 
 ```sh
 npm ci && npm test
@@ -95,8 +95,7 @@ This project uses semantic versioning. Version bumps are determined automaticall
 - `feat:` commits trigger a **minor** bump (0.X.0)
 - `BREAKING CHANGE` or `!` commits trigger a **major** bump (X.0.0)
 
-Release Please updates the versions in `src-tauri/Cargo.toml`,
-`src-tauri/tauri.conf.json`, and `package.json`. A release-workflow contract test checks that the frontend and Tauri versions match.
+Release Please updates the versions in `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and `package.json`. A release-workflow contract test checks that the frontend and Tauri versions match.
 
 ## Releases
 
@@ -108,5 +107,5 @@ The macOS build uploads the signed, notarized DMG and updater metadata. The Linu
 
 1. Fork and create a feature branch from `main`.
 2. Make your changes with conventional commit messages.
-3. Ensure `cargo fmt --check` and `cargo clippy` pass in `src-tauri/`.
+3. Run `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked` in `src-tauri/`, then run `npm test` from the repository root. On Linux, first run `scripts/install-linux-dependencies.sh` from the repository root.
 4. Open a PR against `main`. CI will validate your commits automatically.

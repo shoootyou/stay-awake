@@ -1,9 +1,21 @@
 # Stay Awake user guide
 
 Stay Awake prevents your computer from sleeping or going idle on macOS and Linux.
-The macOS guidance below uses the menu bar. On Linux, use the system tray.
+This guide is written around macOS. See [Linux](#linux) for the Linux-specific notes.
 
-**macOS requirements:** macOS 12 Monterey or later. Apple Silicon runs natively; Intel uses Rosetta 2.
+## Linux
+
+- The default hotkey is `Ctrl+Shift+J`.
+- Power Only is the default mode and uses `systemd-inhibit`.
+- Mouse Subtle, Mouse Zen, and Mouse Circle need `xdotool`.
+- The tray icon needs an appindicator host. Install `libayatana-appindicator3-1` if the app reports that the system tray library is missing.
+- WiFi app mode uses NetworkManager.
+
+---
+
+## macOS requirements
+
+macOS 12 Monterey or later. Apple Silicon runs natively; Intel uses Rosetta 2.
 
 ---
 
@@ -155,7 +167,7 @@ Open from the tray menu via **Settings**. Changes save automatically as you make
 | **Jiggle Mode** | How the engine keeps the computer awake (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 s). Default: 30 s. |
 | **App Mode** | When the engine activates: Manual, Always On, or WiFi. |
-| **Launch at Login** | Start Stay Awake automatically at login via a macOS LaunchAgent. |
+| **Launch at Login** | On macOS, start Stay Awake automatically at login via a LaunchAgent. |
 | **Language** | UI display language (8 languages available). |
 | **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
 
@@ -240,13 +252,11 @@ on or off without opening the tray menu.
 
 **Homebrew install:** run `brew upgrade shoootyou/tap/stay-awake`.
 
-**Manual DMG install:** Stay Awake checks for new versions on each launch. When an
-update is available on GitHub Releases, a prompt appears in the menu bar. Click it
-to install in one step.
+**Manual DMG install:** macOS releases include signed update metadata.
 
 **Linux `.deb`:** Download each new `.deb` from GitHub Releases and install it with
-`sudo apt install ./<downloaded-file>.deb`. The in-app updater is not available for
-the Linux package.
+`sudo apt install ./<downloaded-file>.deb`. Linux `.deb` installs do not use the
+in-app updater.
 
 ---
 

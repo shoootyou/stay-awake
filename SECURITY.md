@@ -24,25 +24,25 @@ To help us investigate quickly, please include:
 - A clear description of the vulnerability
 - Steps to reproduce
 - Affected Stay Awake version
-- Your macOS version and architecture (Apple Silicon / Intel)
+- Your operating system, version, and architecture
 - Potential impact and any suggested mitigation
 
 ## Response Expectations
 
 - **Acknowledgement:** within 72 hours of your report
 - **Status update:** within 7 days
-- **Fix timeline:** depends on severity — critical issues are prioritized for the next patch release
+- **Fix timeline:** depends on severity. Critical issues are prioritized for the next patch release.
 
 ## Scope
 
-Stay Awake is a local-only macOS desktop application. It has no server component, no remote backend, and does not transmit user data. The scope of this policy covers:
+Stay Awake is a local-only desktop application for macOS and Linux amd64 `.deb` installs. It has no server component, no remote backend, and does not transmit user data. The scope of this policy covers:
 
-- The Stay Awake macOS application binary
+- The Stay Awake application binaries
 - The Tauri shell and Rust backend
 - The bundled frontend assets
-- The auto-updater channel (latest.json signature validation)
+- The macOS updater channel (`latest.json` signature validation)
 
-Out of scope: third-party dependencies (please report those upstream), and the user's macOS system configuration.
+Out of scope: third-party dependencies (please report those upstream) and the user's operating system configuration.
 
 ## Disclosure
 
