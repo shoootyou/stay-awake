@@ -6,6 +6,7 @@
  *   - Requires the release workflow to create one release and build both platforms in parallel.
  *   - Requires the Linux failure report to read the action outcome rather than job result.
  *   - Keeps CI builds independent of commitlint and pins CI/release Linux runners to Ubuntu 24.04.
+ *   - Requires uncommented, SHA-pinned checkout and setup-node steps in the contract-tests job.
  * @edge-cases
  *   - Release tags flow through environment variables, not shell-expanded workflow expressions.
  *   - Linux build failure remains observable despite job-level continue-on-error.
@@ -78,6 +79,15 @@ const assertNodeTestCommandsAreOrdered = (runs) => {
   assert.ok(installIndex >= 0, "npm ci must be present");
   assert.ok(testIndex >= 0, "npm test must be present");
   assert.equal(installIndex < testIndex, true, "npm ci must run before npm test");
+};
+
+const contractTestActionPin = (job, action) => {
+  const match = new RegExp(
+    `^\\s*(?:-\\s+)?uses:\\s*${action}@([0-9a-f]{40})\\s+#\\s+v[\\d.]+\\s*$`,
+    "m",
+  ).exec(job);
+  assert.notEqual(match, null, `contract-tests must use uncommented ${action} pin`);
+  return match[1];
 };
 
 const matrixOs = (job) => {
@@ -217,10 +227,47 @@ test("runs Node contract tests independently in pull request CI", () => {
   const runs = runBodies(contractTests);
 
   assert.match(contractTests, /^ {4}runs-on: ubuntu-24\.04$/m);
-  assert.match(rawContractTests, /actions\/checkout@[0-9a-f]{40} # v[\d.]+/);
-  assert.match(rawContractTests, /actions\/setup-node@[0-9a-f]{40} # v[\d.]+/);
+  assert.equal(
+    contractTestActionPin(rawContractTests, "actions/checkout"),
+    contractTestActionPin(rawJobBlock(workflow, "build"), "actions/checkout"),
+  );
+  assert.equal(
+    contractTestActionPin(rawContractTests, "actions/setup-node"),
+    contractTestActionPin(rawJobBlock(workflow, "build"), "actions/setup-node"),
+  );
   assert.match(contractTests, /node-version: 26/);
   assertNodeTestCommandsAreOrdered(runs);
+});
+
+test("rejects commented contract-test action pins and missing pin comments", () => {
+  const checkout = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+  const setupNode = "949feb2413d6458794dcd2491c4babbbce0c15c1";
+  const valid = `
+      - uses: actions/checkout@${checkout} # v7.0.1
+      - uses: actions/setup-node@${setupNode} # v7.1.0
+`;
+  const commentedCheckout = `
+      # uses: actions/checkout@${checkout} # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/setup-node@${setupNode} # v7.1.0
+`;
+  const checkoutWithoutVersionComment = `
+      - uses: actions/checkout@${checkout}
+      - uses: actions/setup-node@${setupNode} # v7.1.0
+`;
+
+  assert.doesNotThrow(() => {
+    contractTestActionPin(valid, "actions/checkout");
+    contractTestActionPin(valid, "actions/setup-node");
+  });
+  assert.throws(
+    () => contractTestActionPin(commentedCheckout, "actions/checkout"),
+    /contract-tests must use uncommented actions\/checkout pin/,
+  );
+  assert.throws(
+    () => contractTestActionPin(checkoutWithoutVersionComment, "actions/checkout"),
+    /contract-tests must use uncommented actions\/checkout pin/,
+  );
 });
 
 test("parses list and indented run bodies", () => {
