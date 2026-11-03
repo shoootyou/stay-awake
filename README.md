@@ -44,7 +44,7 @@ brew install shoootyou/tap/stay-awake
 
 **macOS**: Download the signed and notarized `.dmg` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, open it, and drag **Stay Awake** to your Applications folder.
 
-**Linux (amd64)**: Download the `.deb` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, then install the file you downloaded:
+**Linux (amd64)**: The published `.deb` is built and tested on Ubuntu 24.04. Older distributions are not validated. Download the `.deb` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, then install the file you downloaded:
 
 ```sh
 sudo apt install ./<downloaded-file>.deb
@@ -78,7 +78,7 @@ install the new DMG.
 - Apple Silicon
 
 **Linux**
-- A `systemd`-based distribution (Debian/Ubuntu and derivatives, via the `.deb` package)
+- A `systemd`-based distribution (Debian/Ubuntu and derivatives, via the `.deb` package; see the [Ubuntu 24.04 baseline](#manual-download))
 - NetworkManager (for WiFi mode)
 - `xdotool` (recommended, for mouse-jiggle modes)
 
