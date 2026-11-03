@@ -25,7 +25,7 @@ const jsPaths = readdirSync(join(root, "src"))
   .map((name) => `src/${name}`);
 const cssPaths = readdirSync(join(root, "src"), { recursive: true })
   .filter((path) => path.endsWith(".css"))
-  .map((path) => `src/${path}`);
+  .map((path) => `src/${path.replaceAll("\\", "/")}`);
 const html = Object.fromEntries(htmlPaths.map((path) => [path, read(path)]));
 const js = Object.fromEntries(jsPaths.map((path) => [path, read(path)]));
 const css = Object.fromEntries(cssPaths.map((path) => [path, read(path)]));
@@ -90,10 +90,30 @@ const resourcePaths = (source) => [...source.matchAll(/(?:href|src)=["']([^"']+)
   .map((match) => match[1])
   .filter((value) => !value.startsWith("/") && !value.includes(":") && value !== "#");
 
-// Regex literals are not special-cased; settings.js and about.js have neither quotes nor // in regexes.
+// This handles common regex starts; ambiguity after ) or ] and nested template interpolation remain unsupported.
 const stripComments = (source) => {
   let state = "code";
+  let regexClass = false;
+  let token = "";
+  let previousToken = null;
   let output = "";
+  const finishToken = () => {
+    if (token) previousToken = token;
+    token = "";
+  };
+  const recordCodeCharacter = (character) => {
+    if (/[\w$]/.test(character)) {
+      token += character;
+    } else if (!/\s/.test(character)) {
+      finishToken();
+      previousToken = character;
+    } else {
+      finishToken();
+    }
+  };
+  const beginsRegex = () => previousToken === null
+    || "(,=:[!&|?{};".includes(previousToken)
+    || ["return", "typeof", "case", "in", "of", "delete", "void", "yield", "await", "throw", "new", "else", "do"].includes(previousToken);
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
     const next = source[index + 1];
@@ -111,14 +131,24 @@ const stripComments = (source) => {
       }
       continue;
     }
-    if (state === "single" || state === "double" || state === "template") {
+    if (state === "single" || state === "double" || state === "template" || state === "regex") {
       output += character;
       if (character === "\\") {
         output += next ?? "";
         index += 1;
+      } else if (state === "regex" && character === "[") {
+        regexClass = true;
+      } else if (state === "regex" && character === "]") {
+        regexClass = false;
+      } else if (state === "regex" && character === "/" && !regexClass) {
+        state = "code";
+        previousToken = "literal";
       } else if ((state === "single" && character === "'")
         || (state === "double" && character === '"')
-        || (state === "template" && character === "`")) state = "code";
+        || (state === "template" && character === "`")) {
+        state = "code";
+        previousToken = "literal";
+      }
       continue;
     }
     if (character === "/" && next === "/") {
@@ -129,11 +159,25 @@ const stripComments = (source) => {
       output += "  ";
       index += 1;
       state = "blockComment";
+    } else if (character === "/" && beginsRegex()) {
+      finishToken();
+      output += character;
+      state = "regex";
+      regexClass = false;
     } else {
       output += character;
-      if (character === "'") state = "single";
-      if (character === '"') state = "double";
-      if (character === "`") state = "template";
+      if (character === "'") {
+        finishToken();
+        state = "single";
+      } else if (character === '"') {
+        finishToken();
+        state = "double";
+      } else if (character === "`") {
+        finishToken();
+        state = "template";
+      } else {
+        recordCodeCharacter(character);
+      }
     }
   }
   return output;
@@ -220,10 +264,6 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
   const csp = config.app.security.csp;
   assert.equal(csp, expectedCsp);
-  for (const directive of ["style-src 'self'", "font-src 'self'", "script-src 'self'", "img-src 'self'"]) {
-    assert.ok(csp.includes(directive), `CSP must permit local ${directive.split("-")[0]} resources`);
-  }
-
   assert.deepEqual(config.app.windows, [], "Tauri windows are created dynamically");
   const dynamicPages = [...read("src-tauri/src/lib.rs").matchAll(/WebviewUrl::App\("([^"\\]+)"/g)]
     .map((match) => match[1]);
@@ -248,7 +288,6 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
     const target = join(root, dirname(face.path), face.url);
     assert.ok(existsSync(target), `${face.path} references missing ${face.url}`);
   }
-  assert.ok(csp.includes("font-src 'self'"), "CSP must permit shipped fonts");
   const inter = faces.find((face) => face.family === "Inter");
   // Characterization only: Inter is removable, so its later absence remains valid.
   if (inter) {
@@ -272,8 +311,6 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
   assert.throws(() => validateIconCss(trimmedCss.replace(/@font-face\s*\{[^}]*\}/s, ""), usedIcons),
     /font face/, "the trimming validator must reject a missing font face");
 
-  assert.match(stripComments(settingsJs), /\bph-x\b/,
-    "settings.js retains the literal ph-x icon contract");
   for (const [path, source] of Object.entries(js)) {
     const uncommented = stripComments(source);
     assert.deepEqual([...incompleteIconFragments(uncommented, new Set(expectedIcons))], [],
@@ -282,12 +319,44 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
 });
 
 test("strips JavaScript comments without losing later frontend contracts", () => {
-  const uncommented = stripComments(settingsJs);
-  for (const anchor of ["ph-x", "update_global_hotkey", 'getElementById("mode-info-panel")']) {
-    assert.ok(uncommented.includes(anchor), `settings.js loses ${anchor} after comment stripping`);
+  let strippedCharacters = 0;
+  let fullLineCommentCharacters = 0;
+  for (const [path, source] of Object.entries({ "src/settings.js": settingsJs, "src/about.js": js["src/about.js"] })) {
+    const uncommented = stripComments(source);
+    const sourceLines = source.split("\n");
+    const strippedLines = uncommented.split("\n");
+    const fullLineComments = sourceLines.filter((line) => line.trimStart().startsWith("//"));
+    assert.equal(uncommented.length, source.length, `${path} preserves character positions`);
+    assert.equal(strippedLines.length, sourceLines.length, `${path} preserves line count`);
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === "\n") assert.equal(uncommented[index], "\n", `${path} preserves newline ${index}`);
+    }
+    assert.equal(strippedLines.filter((line) => line.trimStart().startsWith("//")).length, 0,
+      `${path} retains no full-line comments`);
+    assert.doesNotMatch(uncommented, /\/\*|\*\//, `${path} retains no block comment delimiters`);
+    strippedCharacters += [...source].filter((character, index) => character !== "\n" && uncommented[index] !== character).length;
+    fullLineCommentCharacters += fullLineComments.reduce((total, line) => total + line.length, 0);
   }
-  const synthetic = "const label = '// don\\'t'; // don't swallow\nconst retained = true;";
-  assert.match(stripComments(synthetic), /const retained = true;/);
+  assert.ok(strippedCharacters > fullLineCommentCharacters, "strips more than its full-line comments");
+  const uncommentedSettingsJs = stripComments(settingsJs);
+  for (const line of [489, 586]) assert.equal(uncommentedSettingsJs.split("\n")[line - 1].trim(), "", `settings.js line ${line} is stripped`);
+  for (const anchor of ["substring(0, 64)", "ph-x", "invoke("]) {
+    assert.ok(uncommentedSettingsJs.includes(anchor), `settings.js loses ${anchor} after comment stripping`);
+  }
+  const cases = [
+    ["const label = '// don\\'t'; // don't swallow\nconst retained = true;", "const retained = true;", "// don't swallow"],
+    ["const quote = /[\"']/g; // comment\nconst retained = true;", "const quote = /[\"']/g;", "// comment"],
+    ["const quotient = a / b; // c\nconst retained = true;", "const quotient = a / b;", "// c"],
+    ["const slash = /[\\/]/;", "const slash = /[\\/]/;"],
+    ['const url = "http://x.y";', 'const url = "http://x.y";'],
+    ["/* it's */\nconst retained = true;", "const retained = true;", "/* it's */"],
+    ["const template = `// stays`;", "const template = `// stays`;"],
+  ];
+  for (const [source, retained, removed] of cases) {
+    const stripped = stripComments(source);
+    assert.ok(stripped.includes(retained), source);
+    if (removed) assert.ok(!stripped.includes(removed), source);
+  }
 });
 
 test("rejects dynamic icon assembly while accepting the shipped literal icons", () => {
@@ -301,6 +370,10 @@ test("rejects dynamic icon assembly while accepting the shipped literal icons", 
     '"ph-" + name',
   ];
   for (const mutant of mutants) assert.ok(incompleteIconFragments(mutant, allowedIcons).size > 0, mutant);
+  for (const literal of ["'ph-x'", '<i class="ph ph-gear">']) {
+    assert.equal(incompleteIconFragments(literal, allowedIcons).size, 0, literal);
+  }
+  // HTML classes are static and pinned by expectedIcons; only JavaScript can assemble one dynamically.
   for (const [path, source] of Object.entries(js)) {
     assert.deepEqual([...incompleteIconFragments(stripComments(source), allowedIcons)], [], path);
   }
