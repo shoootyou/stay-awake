@@ -319,8 +319,8 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
 });
 
 test("strips JavaScript comments without losing later frontend contracts", () => {
-  let strippedCharacters = 0;
-  let fullLineCommentCharacters = 0;
+  let strippedCodeUnits = 0;
+  let fullLineCommentTextCodeUnits = 0;
   for (const [path, source] of Object.entries({ "src/settings.js": settingsJs, "src/about.js": js["src/about.js"] })) {
     const uncommented = stripComments(source);
     const sourceLines = source.split("\n");
@@ -334,10 +334,16 @@ test("strips JavaScript comments without losing later frontend contracts", () =>
     assert.equal(strippedLines.filter((line) => line.trimStart().startsWith("//")).length, 0,
       `${path} retains no full-line comments`);
     assert.doesNotMatch(uncommented, /\/\*|\*\//, `${path} retains no block comment delimiters`);
-    strippedCharacters += [...source].filter((character, index) => character !== "\n" && uncommented[index] !== character).length;
-    fullLineCommentCharacters += fullLineComments.reduce((total, line) => total + line.length, 0);
+    for (let index = 0; index < source.length; index += 1) {
+      strippedCodeUnits += Number(source[index] !== "\n" && uncommented[index] !== source[index]);
+    }
+    fullLineCommentTextCodeUnits += fullLineComments.reduce(
+      (total, line) => total + line.trimStart().replaceAll(/\s/g, "").length,
+      0
+    );
   }
-  assert.ok(strippedCharacters > fullLineCommentCharacters, "strips more than its full-line comments");
+  assert.equal(strippedCodeUnits, fullLineCommentTextCodeUnits,
+    "strips exactly the non-whitespace full-line comment text after indentation");
   const uncommentedSettingsJs = stripComments(settingsJs);
   for (const line of [489, 586]) assert.equal(uncommentedSettingsJs.split("\n")[line - 1].trim(), "", `settings.js line ${line} is stripped`);
   for (const anchor of ["substring(0, 64)", "ph-x", "invoke("]) {

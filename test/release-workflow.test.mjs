@@ -5,6 +5,7 @@
  *   - Keeps release metadata, shared Linux prerequisites, and SHA-pinned actions aligned.
  *   - Requires the release workflow to create one release and build both platforms in parallel.
  *   - Requires the Linux failure report to read the action outcome rather than job result.
+ *   - Keeps CI builds independent of commitlint and pins CI/release Linux runners to Ubuntu 24.04.
  * @edge-cases
  *   - Release tags flow through environment variables, not shell-expanded workflow expressions.
  *   - Linux build failure remains observable despite job-level continue-on-error.
@@ -49,6 +50,23 @@ const needsJobs = (job) => {
 
   return job.slice(match.index + match[0].length)
     .match(/^ {6}- ([\w-]+)$/gm)?.map((line) => line.trim().slice(2)) ?? [];
+};
+
+const matrixOs = (job) => {
+  const match = /^ {8}os:[ \t]*(.*)$/m.exec(job);
+  if (!match) return [];
+  if (match[1]) return match[1].replace(/^\[|\]$/g, "").split(",").map((label) => label.trim());
+
+  return job.slice(match.index + match[0].length)
+    .match(/^ {10}- ([\w.-]+)$/gm)?.map((line) => line.trim().slice(2)) ?? [];
+};
+
+// CI and release artifact builds use Ubuntu 24.04; macOS remains macos-latest for its Apple Silicon DMG.
+const runnerLabels = (job) => {
+  const match = /^ {4}runs-on:[ \t]*(.*)$/m.exec(job);
+  assert.notEqual(match, null, "job must declare runs-on");
+  const label = match[1].trim();
+  return label === "${{ matrix.os }}" ? matrixOs(job) : [label];
 };
 
 // This small YAML scanner does not distinguish block scalar contents from YAML comments.
@@ -111,6 +129,29 @@ test("makes Linux CI and tagged releases invoke the shared prerequisite installe
   for (const workflow of [ci, release]) {
     assert.match(workflow, /scripts\/install-linux-dependencies\.sh/);
     assert.doesNotMatch(workflow, /apt-get install/);
+  }
+});
+
+test("keeps CI builds independent from commitlint while retaining commitlint as a separate check", () => {
+  const ci = read(".github/workflows/ci.yml");
+  const build = jobBlock(ci, "build");
+
+  jobBlock(ci, "commitlint");
+  assert.deepEqual(needsJobs(build).sort(), ["cargo-audit", "lint-and-check"]);
+});
+
+test("pins every Linux CI and release runner, including matrix Linux, to ubuntu-24.04", () => {
+  for (const path of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
+    const workflow = read(path);
+    const jobs = [...workflow.slice(workflow.indexOf("\njobs:\n")).matchAll(/^ {2}([\w-]+):\s*$/gm)]
+      .map((match) => match[1]);
+    for (const name of jobs) {
+      for (const label of runnerLabels(jobBlock(workflow, name))) {
+        if (label.startsWith("ubuntu-")) assert.equal(label, "ubuntu-24.04", `${path} ${name}`);
+        if (label.startsWith("macos-")) assert.equal(label, "macos-latest", `${path} ${name}`);
+      }
+    }
+    assert.doesNotMatch(workflow, /ubuntu-latest/, `${path} must not use ubuntu-latest`);
   }
 });
 
