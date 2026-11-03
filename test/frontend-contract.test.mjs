@@ -90,19 +90,67 @@ const resourcePaths = (source) => [...source.matchAll(/(?:href|src)=["']([^"']+)
   .map((match) => match[1])
   .filter((value) => !value.startsWith("/") && !value.includes(":") && value !== "#");
 
-// This preserves strings but does not parse comment markers in template interpolations.
+// Regex literals are not special-cased; settings.js and about.js have neither quotes nor // in regexes.
 const stripComments = (source) => {
-  const strings = [];
-  const withoutStrings = source.replace(/(["'`])(?:\\.|(?!\1)[\s\S])*?\1/g, (match) => {
-    strings.push(match);
-    return `__STRING_${strings.length - 1}__`;
-  });
-  const withoutComments = withoutStrings
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/^\s*#.*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/[^\n]*/g, "");
-  return withoutComments.replace(/__STRING_(\d+)__/g, (_, index) => strings[Number(index)]);
+  let state = "code";
+  let output = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (state === "lineComment") {
+      output += character === "\n" ? "\n" : " ";
+      if (character === "\n") state = "code";
+      continue;
+    }
+    if (state === "blockComment") {
+      output += character === "\n" ? "\n" : " ";
+      if (character === "*" && next === "/") {
+        output += " ";
+        index += 1;
+        state = "code";
+      }
+      continue;
+    }
+    if (state === "single" || state === "double" || state === "template") {
+      output += character;
+      if (character === "\\") {
+        output += next ?? "";
+        index += 1;
+      } else if ((state === "single" && character === "'")
+        || (state === "double" && character === '"')
+        || (state === "template" && character === "`")) state = "code";
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      output += "  ";
+      index += 1;
+      state = "lineComment";
+    } else if (character === "/" && next === "*") {
+      output += "  ";
+      index += 1;
+      state = "blockComment";
+    } else {
+      output += character;
+      if (character === "'") state = "single";
+      if (character === '"') state = "double";
+      if (character === "`") state = "template";
+    }
+  }
+  return output;
+};
+
+const stripHtmlComments = (source) => source.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "));
+const stripCssComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "));
+const stripFtlComments = (source) => source.replace(/^\s*#.*$/gm, (comment) => " ".repeat(comment.length));
+const incompleteIconFragments = (source, allowedIcons) => {
+  const fragments = new Set([...source.matchAll(/\bph-[a-z0-9-]*/g)]
+    .map((match) => match[0])
+    .filter((icon) => !allowedIcons.has(icon)));
+  if (/["']ph["']\s*\+\s*["']-["']/.test(source)) fragments.add("ph + -");
+  if (/\[\s*["']ph["']\s*,[\s\S]*?\]\s*\.join\(\s*["']-["']\s*\)/.test(source)) {
+    fragments.add("ph.join(-)");
+  }
+  return fragments;
 };
 
 const iconRule = (source, icon) => source.match(
@@ -125,13 +173,14 @@ const usedFontFamilies = (source) => new Set([...source.replace(/@font-face\s*\{
   .matchAll(/font-family:\s*["']([^"']+)/g)].map((match) => match[1]));
 
 test("keeps JavaScript DOM hooks and CSS-toggled classes backed by settings markup", () => {
-  const settingsIds = new Set([...ids(settingsHtml), ...dynamicIds(settingsJs), ...markupIds(settingsJs)]);
-  const selectorIds = new Set([...settingsJs.matchAll(/(?:getElementById\(\s*["']|querySelector\(\s*["']#)([\w-]+)/g)]
+  const uncommentedSettingsJs = stripComments(settingsJs);
+  const settingsIds = new Set([...ids(stripHtmlComments(settingsHtml)), ...dynamicIds(uncommentedSettingsJs), ...markupIds(uncommentedSettingsJs)]);
+  const selectorIds = new Set([...uncommentedSettingsJs.matchAll(/(?:getElementById\(\s*["']|querySelector\(\s*["']#)([\w-]+)/g)]
     .map((match) => match[1]));
   assert.deepEqual(sorted(selectorIds), expectedSelectorIds);
   for (const id of selectorIds) assert.ok(settingsIds.has(id), `settings.js references missing #${id}`);
 
-  const toggledClasses = new Set([...settingsJs.matchAll(/classList\.(?:add|remove|toggle)\(\s*["']([\w-]+)/g)]
+  const toggledClasses = new Set([...uncommentedSettingsJs.matchAll(/classList\.(?:add|remove|toggle)\(\s*["']([\w-]+)/g)]
     .map((match) => match[1]));
   const toggleTargets = {
     current: "wifi-network-name", disconnected: "wifi-current-ssid", hidden: "accessibility-banner",
@@ -141,27 +190,27 @@ test("keeps JavaScript DOM hooks and CSS-toggled classes backed by settings mark
   for (const className of toggledClasses) {
     assert.match(css["src/settings.css"], new RegExp(`\\.${className}(?:\\b|[.#[:])`), `missing CSS for .${className}`);
     const target = toggleTargets[className];
-    assert.ok(settingsIds.has(target) || dynamicClasses(settingsJs).has(target),
+    assert.ok(settingsIds.has(target) || dynamicClasses(uncommentedSettingsJs).has(target),
       `.${className} needs its ${target} target`);
   }
 });
 
 test("keeps frontend translation keys defined in English and every shipped locale", () => {
   const keys = new Set();
-  for (const source of Object.values(html)) for (const key of attributeValues(source, "data-i18n")) keys.add(key);
-  for (const source of Object.values(js)) for (const key of source.matchAll(/(?:data-i18n["']?\s*,?\s*["']|key:\s*["'])([\w-]+)/g)) keys.add(key[1]);
+  for (const source of Object.values(html)) for (const key of attributeValues(stripHtmlComments(source), "data-i18n")) keys.add(key);
+  for (const source of Object.values(js)) for (const key of stripComments(source).matchAll(/(?:data-i18n["']?\s*,?\s*["']|key:\s*["'])([\w-]+)/g)) keys.add(key[1]);
   assert.deepEqual(sorted(keys), expectedTranslationKeys);
 
   const localeDir = join(root, "src-tauri/locales");
-  const english = fluentKeys(read("src-tauri/locales/en.ftl"));
+  const english = fluentKeys(stripFtlComments(read("src-tauri/locales/en.ftl")));
   for (const key of keys) assert.ok(english.has(key), `English locale is missing ${key}`);
   for (const locale of readdirSync(localeDir).filter((name) => name.endsWith(".ftl"))) {
-    assert.deepEqual(fluentKeys(read(`src-tauri/locales/${locale}`)), english, `${locale} key set differs from English`);
+    assert.deepEqual(fluentKeys(stripFtlComments(read(`src-tauri/locales/${locale}`))), english, `${locale} key set differs from English`);
   }
 });
 
 test("keeps frontend IPC calls registered by Tauri", () => {
-  const commands = new Set(Object.values(js).flatMap((source) => [...commandNames(source)]));
+  const commands = new Set(Object.values(js).flatMap((source) => [...commandNames(stripComments(source))]));
   assert.deepEqual(sorted(commands), expectedCommands);
   const registered = registeredCommands(read("src-tauri/src/lib.rs"));
   for (const command of commands) assert.ok(registered.has(command), `frontend invokes unregistered Tauri command ${command}`);
@@ -181,12 +230,18 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
   assert.deepEqual(sorted(dynamicPages), ["about.html", "settings.html"]);
   for (const page of dynamicPages) assert.ok(existsSync(join(root, "src", page)), `missing dynamic Tauri page ${page}`);
 
-  const resources = new Set(Object.values(html).flatMap(resourcePaths));
+  const scripts = new Set(Object.values(html).flatMap((source) => [...stripHtmlComments(source).matchAll(
+    /<script[^>]+src=["']\/?([^"']+\.js)["']/g
+  )].map((match) => match[1])));
+  assert.deepEqual(sorted(scripts), ["about.js", "settings.js"]);
+  for (const script of scripts) assert.ok(existsSync(join(root, "src", script)), `missing frontend script ${script}`);
+
+  const resources = new Set(Object.values(html).flatMap((source) => resourcePaths(stripHtmlComments(source))));
   assert.deepEqual(sorted(resources), expectedResources);
   for (const resource of resources) assert.ok(existsSync(join(root, "src", resource)), `missing frontend resource ${resource}`);
 
-  const faces = Object.entries(css).flatMap(([path, source]) => fontFaces(source).map((face) => ({ ...face, path })));
-  const consumers = new Set(Object.values(css).flatMap((source) => [...usedFontFamilies(source)]));
+  const faces = Object.entries(css).flatMap(([path, source]) => fontFaces(stripCssComments(source)).map((face) => ({ ...face, path })));
+  const consumers = new Set(Object.values(css).flatMap((source) => [...usedFontFamilies(stripCssComments(source))]));
   assert.ok(consumers.has("Geist"), "Geist must remain used by shipped CSS");
   assert.ok(consumers.has("Phosphor"), "Phosphor must remain used by shipped CSS");
   for (const face of faces.filter((face) => face.family !== "Inter")) {
@@ -212,14 +267,41 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
   validateIconCss(trimmedCss, usedIcons);
   assert.throws(() => validateIconCss(trimmedCss.replace(iconRule(trimmedCss, "ph-x"), ""), usedIcons),
     /ph-x/, "the trimming validator must reject a missing used icon");
+  assert.throws(() => validateIconCss(trimmedCss.replace(/\.ph\s*\{[^}]*\}/s, ""), usedIcons),
+    /base .ph/, "the trimming validator must reject a missing base rule");
+  assert.throws(() => validateIconCss(trimmedCss.replace(/@font-face\s*\{[^}]*\}/s, ""), usedIcons),
+    /font face/, "the trimming validator must reject a missing font face");
 
   assert.match(stripComments(settingsJs), /\bph-x\b/,
     "settings.js retains the literal ph-x icon contract");
   for (const [path, source] of Object.entries(js)) {
     const uncommented = stripComments(source);
-    assert.doesNotMatch(uncommented, /["'`]ph-\s*(?:["'`+]|\$\{)/,
+    assert.deepEqual([...incompleteIconFragments(uncommented, new Set(expectedIcons))], [],
       `${path} dynamically assembles an icon class`);
-    assert.doesNotMatch(uncommented, /\[\s*["']ph["']\s*,[\s\S]*?\]\s*\.join\(\s*["']-["']\s*\)/,
-      `${path} dynamically joins an icon class`);
+  }
+});
+
+test("strips JavaScript comments without losing later frontend contracts", () => {
+  const uncommented = stripComments(settingsJs);
+  for (const anchor of ["ph-x", "update_global_hotkey", 'getElementById("mode-info-panel")']) {
+    assert.ok(uncommented.includes(anchor), `settings.js loses ${anchor} after comment stripping`);
+  }
+  const synthetic = "const label = '// don\\'t'; // don't swallow\nconst retained = true;";
+  assert.match(stripComments(synthetic), /const retained = true;/);
+});
+
+test("rejects dynamic icon assembly while accepting the shipped literal icons", () => {
+  const allowedIcons = new Set(expectedIcons);
+  const mutants = [
+    '`<i class="ph ph-${name}"></i>`',
+    "'<i class=\"ph ph-' + name + '\"></i>'",
+    '"ph"+"-"+name',
+    '["ph", name].join("-")',
+    '`ph-${name}`',
+    '"ph-" + name',
+  ];
+  for (const mutant of mutants) assert.ok(incompleteIconFragments(mutant, allowedIcons).size > 0, mutant);
+  for (const [path, source] of Object.entries(js)) {
+    assert.deepEqual([...incompleteIconFragments(stripComments(source), allowedIcons)], [], path);
   }
 });
