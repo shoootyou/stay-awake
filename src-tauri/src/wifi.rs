@@ -1136,7 +1136,53 @@ mod tests {
 /// - `Some(a)` → `Some(b)` where `a != b` (roamed to a different network) → `true`.
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
+    /*
+     * @spec-handoff
+     * @interface publish_observation(state: &mut EventState, observed: Option<String>, emit: FnMut(Option<&str>))
+     * @behavior
+     *   - Initial and handler paths detect once, emit that observation, then cache it.
+     *   - A periodic pass detects once and emits only when the observation differs from the cache.
+     *   - After every emission, the cache equals the most recently emitted observation.
+     * @edge-cases
+     *   - A transient None must emit None rather than a second read's stale SSID.
+     * @see try_event_driven_loop
+     */
     use super::*;
+
+    struct LegacyEventState {
+        last: Option<String>,
+    }
+
+    fn legacy_initial_or_periodic<D, E>(state: &mut LegacyEventState, mut detect: D, mut emit: E)
+    where
+        D: FnMut() -> Option<String>,
+        E: FnMut(Option<&str>),
+    {
+        let cached = detect();
+        emit(detect().as_deref());
+        state.last = cached;
+    }
+
+    fn legacy_handler<D, E>(mut detect: D, mut emit: E)
+    where
+        D: FnMut() -> Option<String>,
+        E: FnMut(Option<&str>),
+    {
+        emit(detect().as_deref());
+    }
+
+    fn legacy_periodic_pass<D, E>(state: &mut LegacyEventState, mut detect: D, mut emit: E)
+    where
+        D: FnMut() -> Option<String>,
+        E: FnMut(Option<&str>),
+    {
+        let current = detect();
+        if ssid_changed(&current, &state.last) {
+            let published = detect();
+            emit(published.as_deref());
+            state.last = current;
+        }
+    }
 
     #[test]
     fn ssid_bytes_decode_valid_utf8() {
@@ -1225,6 +1271,89 @@ mod linux_tests {
             &Some("HomeWiFi".to_string()),
             &Some("OfficeWiFi".to_string())
         ));
+    }
+
+    #[test]
+    fn event_initial_probe_emits_and_caches_its_single_observation() {
+        let mut state = LegacyEventState { last: None };
+        let mut observations = [None, Some("OfficeWiFi")].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        legacy_initial_or_periodic(
+            &mut state,
+            || {
+                calls += 1;
+                observations.next().flatten().map(str::to_owned)
+            },
+            |ssid| emitted.push(ssid.map(str::to_owned)),
+        );
+
+        assert_eq!(calls, 1, "the initial probe must detect once");
+        assert_eq!(emitted, vec![None]);
+        assert_eq!(state.last, None);
+    }
+
+    #[test]
+    fn event_periodic_stale_active_reproduction_repairs_every_changed_observation() {
+        let mut state = LegacyEventState {
+            last: Some("OfficeWiFi".to_string()),
+        };
+        let mut observations = [None, Some("OfficeWiFi"), None, None].into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        for _ in 0..3 {
+            legacy_periodic_pass(
+                &mut state,
+                || {
+                    calls += 1;
+                    observations.next().flatten().map(str::to_owned)
+                },
+                |ssid| emitted.push(ssid.map(str::to_owned)),
+            );
+        }
+
+        assert_eq!(calls, 3, "each periodic pass must detect once");
+        assert_eq!(emitted, vec![None, Some("OfficeWiFi".to_string()), None]);
+        assert_eq!(state.last, None);
+    }
+
+    #[test]
+    fn event_handler_updates_the_cache_before_periodic_reconciliation() {
+        let mut state = LegacyEventState { last: None };
+        let mut observations = [
+            Some("HomeWiFi"),
+            Some("HomeWiFi"),
+            Some("HomeWiFi"),
+            None,
+            None,
+        ]
+        .into_iter();
+        let mut emitted = Vec::new();
+        let mut calls = 0;
+
+        legacy_handler(
+            || {
+                calls += 1;
+                observations.next().flatten().map(str::to_owned)
+            },
+            |ssid| emitted.push(ssid.map(str::to_owned)),
+        );
+        for _ in 0..2 {
+            legacy_periodic_pass(
+                &mut state,
+                || {
+                    calls += 1;
+                    observations.next().flatten().map(str::to_owned)
+                },
+                |ssid| emitted.push(ssid.map(str::to_owned)),
+            );
+        }
+
+        assert_eq!(calls, 3, "handler and periodic paths must each detect once");
+        assert_eq!(emitted, vec![Some("HomeWiFi".to_string()), None]);
+        assert_eq!(state.last, None);
     }
 
     #[test]
