@@ -1,10 +1,10 @@
 # Stay Awake
 
-> Keep your macOS awake and active — no sleep, no idle, no interruptions.
+> Keep your computer awake and active: no sleep, no idle, no interruptions.
 
-![License](https://img.shields.io/github/license/shoootyou/stay-awake) ![Release](https://img.shields.io/github/v/release/shoootyou/stay-awake) ![macOS](https://img.shields.io/badge/macOS-12%2B-blue)
+![License](https://img.shields.io/github/license/shoootyou/stay-awake) ![Release](https://img.shields.io/github/v/release/shoootyou/stay-awake) ![macOS](https://img.shields.io/badge/macOS-12%2B-blue) ![Linux](https://img.shields.io/badge/Linux-supported-blue)
 
-Stay Awake is a macOS-only tray utility that prevents your computer from sleeping. It lives in the menu bar and stays out of your way — configure it once and forget it. Built with Rust and Tauri v2.
+Stay Awake is a tray utility that prevents your computer from sleeping on macOS and Linux. It lives in the menu bar or system tray and stays out of your way. Built with Rust and Tauri v2.
 
 ## Screenshots
 
@@ -19,22 +19,22 @@ Stay Awake is a macOS-only tray utility that prevents your computer from sleepin
 
 ## Features
 
-- **Power Only** — prevents sleep via macOS IOKit power assertions; no mouse movement, no Accessibility permission required
-- **Mouse Subtle** — moves the cursor 1 px right and back; barely perceptible
-- **Mouse Zen** — fires a zero-delta mouse event that resets the idle timer with no visible movement
-- **Mouse Circle** — traces a small square pattern (right, down, left, up; 1 pixel per step)
-- **WiFi mode** — automatically activates the engine when you join a registered network and stops it when you disconnect (App Mode; reads SSID locally, never toggles your WiFi)
-- **Scheduling** — set start/end times and active days (Mon–Sun); supports overnight spans (e.g. 22:00–06:00)
-- **Profiles** — save and load named settings profiles for different use cases
-- **Global hotkey** — toggle active/inactive from anywhere (default: `⌘+Shift+J`, customizable)
-- **Idle detection** — skips jiggle automatically when you are actively using the mouse
-- **Launch at Login** — configurable autostart via macOS LaunchAgent
-- **Auto-updater** — checks for new versions on launch; prompts to install when a release is available
-- **Internationalization** — available in English, Spanish, French, German, Portuguese (BR), Japanese, Chinese (Simplified), and Korean
+- **Power Only**: prevents sleep without moving the mouse
+- **Mouse Subtle**: moves the cursor 1 px right and back
+- **Mouse Zen**: sends a zero-delta mouse event without visible movement
+- **Mouse Circle**: traces a small square pattern, 1 pixel per step
+- **WiFi mode**: starts the engine on a registered network and stops it on disconnect
+- **Scheduling**: set start/end times and active days; overnight spans are supported
+- **Profiles**: save and load named settings profiles
+- **Global hotkey**: toggle active/inactive from anywhere
+- **Idle detection**: skips jiggle while you are using the mouse
+- **Launch at Login**: configurable on desktop
+- **macOS release metadata**: signed update metadata ships with macOS releases
+- **Internationalization**: English, Spanish, French, German, Portuguese (BR), Japanese, Chinese (Simplified), and Korean
 
 ## Installation
 
-### Homebrew (recommended)
+### Homebrew (macOS, recommended)
 
 ```sh
 brew install shoootyou/tap/stay-awake
@@ -42,26 +42,57 @@ brew install shoootyou/tap/stay-awake
 
 ### Manual download
 
-Download the latest `.dmg` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, open it, and drag **Stay Awake** to your Applications folder.
+**macOS**: Download the signed and notarized `.dmg` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, open it, and drag **Stay Awake** to your Applications folder.
+
+**Linux (amd64)**: The published `.deb` is built and tested on Ubuntu 24.04. Older distributions are not validated. Download the `.deb` from the [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) page, then install the file you downloaded:
+
+```sh
+sudo apt install ./<downloaded-file>.deb
+```
+
+The package declares `systemd` as a dependency and `xdotool` as a recommendation.
+
+### Linux prerequisites
+
+- **NetworkManager**: required for WiFi mode. Other modes work without it.
+- **`xdotool`**: recommended for the mouse-jiggle modes (Subtle, Zen, Circle). `Power Only` works without it. The `.deb` declares `xdotool` as a `Recommends`.
+
+**Why `Power Only` is the default on Linux:** mouse-jiggle modes use `xdotool` to inject absolute
+mouse motion. The project could not confirm that this resets GNOME/Mutter's idle timer under
+Wayland, so the default uses `systemd-inhibit` instead. On X11, you can choose Mouse Subtle,
+Mouse Circle, or Mouse Zen in Settings if mouse jiggle works for your setup.
 
 ## Updates
 
-**Homebrew** — run `brew upgrade shoootyou/tap/stay-awake`.
+**Homebrew (macOS)**: run `brew upgrade shoootyou/tap/stay-awake`.
 
-**Manual DMG install** — Stay Awake checks for new versions on launch. When an update is available on [GitHub Releases](https://github.com/shoootyou/stay-awake/releases), a prompt appears in the menu bar letting you install it in one click.
+**Manual DMG install (macOS)**: macOS releases publish signed update metadata. To update,
+install the new DMG.
+
+**Linux (.deb)**: Linux `.deb` installs do not use the in-app updater. Download the new `.deb` from [GitHub Releases](https://github.com/shoootyou/stay-awake/releases) and install it with `sudo apt install ./<downloaded-file>.deb`.
 
 ## System Requirements
 
+**macOS**
 - macOS 12 Monterey or later
-- Apple Silicon (native) or Intel (via Rosetta 2)
+- Apple Silicon
+
+**Linux**
+- A `systemd`-based distribution (Debian/Ubuntu and derivatives, via the `.deb` package; see the [Ubuntu 24.04 baseline](#manual-download))
+- NetworkManager (for WiFi mode)
+- `xdotool` (recommended, for mouse-jiggle modes)
 
 ## Development
 
 ### Prerequisites
 
-- Rust (stable) — install via [rustup](https://rustup.rs)
-- Node.js 22+
-- Tauri CLI — `cargo install tauri-cli`
+- Rust `1.99.1` (pinned in `rust-toolchain.toml`)
+- Node.js 26, matching CI
+- Tauri CLI: `cargo install tauri-cli`
+- Linux only: install the repository's build dependencies:
+  ```sh
+  scripts/install-linux-dependencies.sh
+  ```
 
 ### Setup
 

@@ -65,3 +65,10 @@ settings-wifi-registered = 등록된 네트워크
 settings-wifi-none = 등록된 네트워크 없음
 settings-wifi-disconnected = 연결되지 않음
 settings-wifi-hint = 활성화하면 등록된 네트워크에서만 Stay Awake가 작동합니다.
+settings-wifi-nm-required = Linux에서 WiFi 모드를 사용하려면 NetworkManager가 필요합니다.
+
+# Linux의 xdotool
+tray-xdotool-missing = xdotool을 찾을 수 없습니다 — 마우스 흔들기 모드를 사용하려면 xdotool을 설치하세요
+tray-xdotool-ok = xdotool 정상
+settings-xdotool-banner = 마우스 모드에는 xdotool이 필요합니다. 설치 방법: sudo apt install xdotool
+settings-xdotool-install-btn = 다시 확인

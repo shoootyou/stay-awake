@@ -71,26 +71,38 @@ pub struct AppConfig {
     pub language: String,
     /// Global keyboard shortcut string.
     pub global_hotkey: String,
-    // ── Schedule ──
     pub schedule_enabled: bool,
     pub schedule_start_hour: u8,
     pub schedule_start_minute: u8,
     pub schedule_end_hour: u8,
     pub schedule_end_minute: u8,
     pub schedule_days: Vec<String>,
-    // ── Profiles ──
     pub profiles: Vec<Profile>,
     pub active_profile: String,
-    // ── WiFi ──
     #[serde(default)]
     pub wifi: WifiConfig,
+}
+
+/// Default `jiggle_mode` for a fresh `AppConfig`.
+///
+/// Wayland mouse injection has not been shown to reset the idle timer, so use the verified
+/// systemd-inhibit path until a real-hardware re-test proves otherwise.
+#[cfg(target_os = "linux")]
+fn default_jiggle_mode() -> JiggleMode {
+    JiggleMode::PowerOnly
+}
+
+/// Default `jiggle_mode` for a fresh `AppConfig` on non-Linux targets.
+#[cfg(not(target_os = "linux"))]
+fn default_jiggle_mode() -> JiggleMode {
+    JiggleMode::MouseSubtle
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             mode: AppMode::Manual,
-            jiggle_mode: JiggleMode::MouseSubtle,
+            jiggle_mode: default_jiggle_mode(),
             interval_secs: 30,
             autostart: false,
             language: String::from("en"),
@@ -161,6 +173,16 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    /*
+     * @spec-handoff
+     * @interface AppConfig JSON serialization and deserialization
+     * @behavior
+     *   - A Linux default serializes byte-for-byte as the committed golden JSON.
+     *   - Legacy JSON without `wifi` loads with the disabled empty WiFi default.
+     *   - Unknown JSON fields are ignored by the current migration contract.
+     * @edge-cases
+     *   - Invalid enum values remain deserialization errors.
+     */
     use super::*;
 
     #[test]
@@ -249,5 +271,54 @@ mod tests {
         let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
         assert_eq!(decoded.mode, AppMode::WiFi);
         assert!(decoded.wifi_enabled());
+    }
+
+    /// E8 fallback: on Linux, `AppConfig::default()` must default `jiggle_mode` to
+    /// `PowerOnly` (A1 — Wayland idle-timer reset — was left inconclusive), while all other
+    /// targets keep the original `MouseSubtle` default.
+    #[test]
+    fn default_jiggle_mode_is_power_only_on_linux_and_mouse_subtle_elsewhere() {
+        let cfg = AppConfig::default();
+        #[cfg(target_os = "linux")]
+        assert_eq!(cfg.jiggle_mode, JiggleMode::PowerOnly);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(cfg.jiggle_mode, JiggleMode::MouseSubtle);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_default_config_matches_the_serialization_golden() {
+        let actual = serde_json::to_string_pretty(&AppConfig::default())
+            .expect("default config must serialize");
+        assert_eq!(
+            actual,
+            include_str!("../tests/fixtures/default-config-linux.json").trim_end()
+        );
+    }
+
+    #[test]
+    fn unknown_config_fields_are_ignored_during_current_migration() {
+        let json = r#"{
+            "mode":"Manual", "jiggle_mode":"MouseSubtle", "interval_secs":30,
+            "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
+            "schedule_enabled":false, "schedule_start_hour":9, "schedule_start_minute":0,
+            "schedule_end_hour":17, "schedule_end_minute":0,
+            "schedule_days":[], "profiles":[], "active_profile":"Default",
+            "future_setting":"ignored"
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).expect("unknown fields are ignored");
+        assert_eq!(config.wifi, WifiConfig::default());
+    }
+
+    #[test]
+    fn unknown_jiggle_mode_is_rejected() {
+        let json = r#"{
+            "mode":"Manual", "jiggle_mode":"FutureMode", "interval_secs":30,
+            "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
+            "schedule_enabled":false, "schedule_start_hour":9, "schedule_start_minute":0,
+            "schedule_end_hour":17, "schedule_end_minute":0,
+            "schedule_days":[], "profiles":[], "active_profile":"Default"
+        }"#;
+        assert!(serde_json::from_str::<AppConfig>(json).is_err());
     }
 }

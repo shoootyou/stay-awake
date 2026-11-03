@@ -1,7 +1,7 @@
 [package]
 name = "stay-awake"
 version = "1.0.1"
-description = "macOS mouse jiggler and anti-inactivity tool"
+description = "Stay Awake is a tray utility that prevents your computer from sleeping on macOS and Linux."
 authors = ["Rodolfo Castelo <shoootyou>"]
 edition = "2021"
 license = "MIT"
@@ -22,7 +22,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-dirs = "6"
+dirs = "7"
 sys-locale = "0.3"
 log = "0.4"
 env_logger = "0.11"
@@ -48,6 +48,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_Foundation",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
 
 [profile.release]
 strip = true

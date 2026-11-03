@@ -1,0 +1,6 @@
+{
+  "bundle": {
+    "targets": ["deb"],
+    "createUpdaterArtifacts": false
+  }
+}

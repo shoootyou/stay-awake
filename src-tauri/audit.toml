@@ -17,17 +17,10 @@ ignore = [
     "RUSTSEC-2024-0420", # gtk-sys — unmaintained
     "RUSTSEC-2024-0419", # gtk3-macros — unmaintained
     # RUSTSEC-2024-0429 — glib VariantStrIter unsoundness.
-    # glib is a transitive Linux-only dependency (pulled by Tauri's GTK backend).
-    # Stay Awake ships macOS-only builds; the affected code path is never compiled.
-    # Re-evaluate if/when Stay Awake adds Linux targets.
+    # glib 0.18 is pinned by Tauri 2.12.5's Linux GTK stack; reachability is unproven.
+    # User accepted the risk on 2026-11-02; re-evaluate when Tauri moves the GTK stack.
     "RUSTSEC-2024-0429",
 
     # Other transitive dependencies
     "RUSTSEC-2024-0370", # proc-macro-error — unmaintained
-    "RUSTSEC-2025-0057", # fxhash — unmaintained
-    "RUSTSEC-2025-0081", # unic-char-property — unmaintained
-    "RUSTSEC-2025-0075", # unic-char-range — unmaintained
-    "RUSTSEC-2025-0080", # unic-common — unmaintained
-    "RUSTSEC-2025-0100", # unic-ucd-ident — unmaintained
-    "RUSTSEC-2025-0098", # unic-ucd-version — unmaintained
 ]

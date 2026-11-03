@@ -20,7 +20,6 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
 
     let now = Local::now();
 
-    // Check day of week
     let day_abbr = match now.format("%a").to_string().to_lowercase().as_str() {
         "mon" => "mon",
         "tue" => "tue",
@@ -63,12 +62,6 @@ pub enum EngineState {
     Idle,
     /// Engine is actively preventing inactivity.
     Active,
-    /// Engine is temporarily paused (reserved for future use).
-    #[allow(dead_code)]
-    Paused,
-    /// Engine encountered an error (reserved for future use).
-    #[allow(dead_code)]
-    Error(String),
 }
 
 /// Core engine that manages anti-inactivity behaviour.
@@ -156,9 +149,7 @@ impl Engine {
                     continue;
                 }
 
-                // ── Idle detection ──────────────────────────────────────────
-                // If the cursor moved since the last check the user is active
-                // and we skip the jiggle to avoid interfering.
+                // Skip jiggle when the user moved the cursor.
                 let current_pos = mouse.get_position().ok();
                 let user_active = match (last_pos, current_pos) {
                     (Some(last), Some(curr)) => last != curr,
@@ -171,7 +162,6 @@ impl Engine {
                     continue;
                 }
 
-                // ── Execute the configured jiggle pattern ───────────────────
                 let result = match cfg.jiggle_mode {
                     JiggleMode::MouseSubtle => mouse.move_relative(1, 0).and_then(|_| {
                         thread::sleep(Duration::from_millis(50));
@@ -256,8 +246,6 @@ impl Engine {
         match &self.state {
             EngineState::Idle => "idle",
             EngineState::Active => "active",
-            EngineState::Paused => "paused",
-            EngineState::Error(_) => "error",
         }
     }
 }
@@ -265,5 +253,105 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /*
+     * @spec-handoff
+     * @interface Engine::start(), Engine::stop(), Engine::toggle(), Engine::state_name()
+     * @behavior
+     *   - Starting inhibits sleep once and enters active state.
+     *   - Stopping releases sleep once and returns to idle state.
+     *   - Repeated start and stop calls are idempotent.
+     * @edge-cases
+     *   - An inhibitor error leaves the engine idle.
+     */
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Mouse;
+
+    impl MouseDriver for Mouse {
+        fn move_relative(&self, _: i32, _: i32) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn get_position(&self) -> Result<(i32, i32), String> {
+            Ok((0, 0))
+        }
+
+        fn jiggle_zen(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct Power {
+        inhibits: Arc<AtomicUsize>,
+        releases: Arc<AtomicUsize>,
+        fail_start: bool,
+    }
+
+    impl PowerInhibitor for Power {
+        fn inhibit_sleep(&mut self, _: &str) -> Result<(), String> {
+            self.inhibits.fetch_add(1, Ordering::SeqCst);
+            if self.fail_start {
+                Err("inhibit failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn release(&mut self) -> Result<(), String> {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            true
+        }
+    }
+
+    fn engine(fail_start: bool) -> (Engine, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let inhibits = Arc::new(AtomicUsize::new(0));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let power = Power {
+            inhibits: Arc::clone(&inhibits),
+            releases: Arc::clone(&releases),
+            fail_start,
+        };
+        let config = Arc::new(Mutex::new(AppConfig {
+            interval_secs: 1,
+            ..AppConfig::default()
+        }));
+        (
+            Engine::new(Box::new(Mouse), Box::new(power), config),
+            inhibits,
+            releases,
+        )
+    }
+
+    #[test]
+    fn start_and_stop_are_idempotent_state_transitions() {
+        let (mut engine, inhibits, releases) = engine(false);
+        engine.start().expect("first start must work");
+        engine.start().expect("second start must be a no-op");
+        assert_eq!(engine.state_name(), "active");
+        assert_eq!(inhibits.load(Ordering::SeqCst), 1);
+
+        engine.stop().expect("first stop must work");
+        engine.stop().expect("second stop must be a no-op");
+        assert_eq!(engine.state_name(), "idle");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn failed_inhibition_does_not_activate_the_engine() {
+        let (mut engine, inhibits, releases) = engine(true);
+        assert_eq!(engine.start(), Err("inhibit failed".to_string()));
+        assert_eq!(engine.state_name(), "idle");
+        assert_eq!(inhibits.load(Ordering::SeqCst), 1);
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
     }
 }

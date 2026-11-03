@@ -71,3 +71,45 @@ pub fn t(bundle: &Bundle, id: &str) -> String {
         })
         .unwrap_or_else(|| id.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    /*
+     * @spec-handoff
+     * @interface create_bundle(locale: &str) -> Bundle; t(bundle, id) -> String
+     * @behavior
+     *   - Every English message key resolves for every shipped locale.
+     *   - An unsupported locale and missing message return the current English/key fallbacks.
+     * @edge-cases
+     *   - Fluent text is returned without format arguments.
+     */
+    use super::*;
+
+    const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
+
+    fn english_message_ids() -> Vec<String> {
+        LOCALE_EN
+            .lines()
+            .filter_map(|line| line.split_once(" =").map(|(id, _)| id.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn every_english_key_resolves_for_every_shipped_locale() {
+        let ids = english_message_ids();
+        assert!(!ids.is_empty());
+        for locale in LOCALES {
+            let bundle = create_bundle(locale);
+            for id in &ids {
+                assert_ne!(t(&bundle, id), *id, "{locale} must resolve {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_locale_uses_english_and_missing_key_returns_its_id() {
+        let bundle = create_bundle("unknown-locale");
+        assert_eq!(t(&bundle, "tray-start"), "Start");
+        assert_eq!(t(&bundle, "missing-message"), "missing-message");
+    }
+}
