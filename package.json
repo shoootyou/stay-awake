@@ -2,7 +2,7 @@
   "name": "stay-awake",
   "private": true,
   "version": "1.0.1",
-  "description": "macOS mouse jiggler and anti-inactivity tool",
+  "description": "Stay Awake is a tray utility that prevents your computer from sleeping on macOS and Linux.",
   "author": "Rodolfo Castelo",
   "type": "module",
   "scripts": {
@@ -12,8 +12,6 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
-    "@phosphor-icons/core": "^2.1.1",
-    "@resvg/resvg-js": "^2.6.2",
     "@tauri-apps/cli": "^2.12.4"
   },
   "dependencies": {
