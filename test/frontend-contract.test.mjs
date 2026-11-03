@@ -77,7 +77,7 @@ const fluentKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].m
 const commandNames = (source) => new Set([...source.matchAll(/invoke\(\s*["']([\w-]+)["']/g)]
   .map((match) => match[1]));
 const registeredCommands = (source) => {
-  const handler = source.match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
+  const handler = stripComments(source).match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
   return new Set([...handler.matchAll(/\b([a-z][a-z0-9_]*)\b/g)].map((match) => match[1]));
 };
 const iconClasses = (source) => new Set([...source.matchAll(/\b(ph-[\w-]+)\b/g)].map((match) => match[1]));
@@ -258,6 +258,12 @@ test("keeps frontend IPC calls registered by Tauri", () => {
   assert.deepEqual(sorted(commands), expectedCommands);
   const registered = registeredCommands(read("src-tauri/src/lib.rs"));
   for (const command of commands) assert.ok(registered.has(command), `frontend invokes unregistered Tauri command ${command}`);
+});
+
+test("does not treat commented Rust handler entries as registrations", () => {
+  const source = "generate_handler![\n  // update_global_hotkey,\n  /// update_global_hotkey\n  //! update_global_hotkey\n  /* update_global_hotkey */\n]";
+
+  assert.equal(registeredCommands(source).has("update_global_hotkey"), false);
 });
 
 test("keeps bundled pages, local resources, CSP, and used icons available", () => {
