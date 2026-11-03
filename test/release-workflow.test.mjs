@@ -2,7 +2,7 @@
  * @spec-handoff
  * @interface releaseWorkflowContracts(): void
  * @behavior
- *   - Keeps release metadata, shared Linux prerequisites, and SHA-pinned actions aligned.
+ *   - Keeps release metadata, release-please paths, and Linux packaging configuration aligned.
  *   - Requires the release workflow to create one release and build both platforms in parallel.
  *   - Requires the Linux failure report to read the action outcome rather than job result.
  *   - Keeps CI builds independent of commitlint and pins CI/release Linux runners to Ubuntu 24.04.
@@ -92,8 +92,27 @@ const withoutYamlComments = (yaml) => yaml.split("\n").map((line) => {
 test("keeps the frontend and Tauri release versions synchronized", () => {
   const packageVersion = JSON.parse(read("package.json")).version;
   const tauriVersion = JSON.parse(read("src-tauri/tauri.conf.json")).version;
+  const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(read("src-tauri/Cargo.toml"))?.[1];
 
   assert.equal(packageVersion, tauriVersion);
+  assert.equal(packageVersion, cargoVersion);
+});
+
+test("keeps release-please extra files inside the package path and synchronized", () => {
+  const extraFiles = JSON.parse(read("release-please-config.json")).packages["src-tauri"]["extra-files"];
+  const packageFile = extraFiles.find((file) => file.path === "/package.json");
+  const tauriFile = extraFiles.find((file) => file.path === "tauri.conf.json");
+
+  assert.deepEqual(packageFile, { type: "json", path: "/package.json", jsonpath: "$.version" });
+  assert.deepEqual(tauriFile, { type: "json", path: "tauri.conf.json", jsonpath: "$.version" });
+  for (const file of extraFiles) assert.doesNotMatch(file.path, /\.\./, "release-please paths cannot escape src-tauri");
+});
+
+test("keeps Linux packaging limited to deb without updater artifacts", () => {
+  const linux = JSON.parse(read("src-tauri/tauri.linux.conf.json"));
+
+  assert.deepEqual(linux.bundle.targets, ["deb"]);
+  assert.equal(linux.bundle.createUpdaterArtifacts, false);
 });
 
 test("keeps the required Linux packages and executable installer in one repository-owned script", (t) => {
