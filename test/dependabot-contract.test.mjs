@@ -12,10 +12,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const expectedUpdates = {
   "github-actions": {
     directory: "/",
@@ -70,12 +68,11 @@ const assertDependabotPolicy = (config) => {
     assert.deepEqual(update.schedule, { interval: "weekly", day: "monday" }, `${ecosystem} schedule`);
     assert.equal(update["open-pull-requests-limit"], 3, `${ecosystem} limit`);
     assert.deepEqual(update["commit-message"], { prefix: expected.prefix, include: "scope" }, `${ecosystem} commit message`);
-    assert.equal(
-      /[()]/.test(update["commit-message"].prefix),
-      false,
-      `${ecosystem} commit-message prefix must not contain parentheses`,
+    assert.deepEqual(
+      update.groups,
+      { "all-dependencies": expectedGroup },
+      `${ecosystem} groups`,
     );
-    assert.deepEqual(update.groups?.["all-dependencies"], expectedGroup, `${ecosystem} group`);
     for (const forbidden of ["time", "timezone"]) assert.equal(update.schedule[forbidden], undefined, `${ecosystem} schedule.${forbidden}`);
     for (const forbidden of ["cooldown", "dependency-type"]) assert.equal(update[forbidden], undefined, `${ecosystem} must not set ${forbidden}`);
     if (ecosystem !== "cargo") assert.equal(update.ignore, undefined, `${ecosystem} must not have ignore`);
@@ -84,8 +81,8 @@ const assertDependabotPolicy = (config) => {
   assert.deepEqual(updates.get("cargo").ignore, expectedCargoIgnore, "cargo zbus ignore");
 };
 
-test("keeps Dependabot version updates grouped, bounded, and separately secure", () => {
-  const document = parseDocument(readFileSync(new URL(".github/dependabot.yml", `file://${root}/`), "utf8"));
+test("keeps Dependabot version updates grouped and bounded", () => {
+  const document = parseDocument(readFileSync(new URL("../.github/dependabot.yml", import.meta.url), "utf8"));
 
   assert.deepEqual(document.errors, [], "dependabot.yml must parse without errors");
   assertDependabotPolicy(document.toJS());
@@ -100,6 +97,11 @@ test("rejects weakened Dependabot grouping policy", () => {
     (config) => config.updates[0].cooldown = { "default-days": 7 },
     (config) => config.updates[1]["open-pull-requests-limit"] = 1,
     (config) => delete config.updates[2].groups["all-dependencies"]["applies-to"],
+    (config) => config.updates[0].groups.security = {
+      "applies-to": "security-updates",
+      patterns: ["*"],
+    },
+    (config) => config.updates[1].groups["all-dependencies"].unexpected = true,
     (config) => config.updates[0]["commit-message"].prefix = "ci(deps)",
     (config) => config.updates[2]["commit-message"].prefix = "build(deps)",
   ];
