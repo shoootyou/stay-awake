@@ -227,12 +227,15 @@ impl WifiMonitor {
         let app_handle = self.app_handle.clone();
 
         self.thread_handle = Some(thread::spawn(move || {
-            if !try_event_driven_loop(&config, &running, &app_handle) {
-                log::warn!(
-                    "Event-driven WiFi monitoring unavailable on this platform \
-                     (or setup failed) — falling back to polling"
-                );
-                polling_loop(&config, &running, &app_handle);
+            match try_event_driven_loop(&config, &running, &app_handle) {
+                EventLoopResult::Stopped => {}
+                EventLoopResult::Poll { reconcile_first } => {
+                    log::warn!(
+                        "Event-driven WiFi monitoring unavailable on this platform \
+                         (or setup failed) — falling back to polling"
+                    );
+                    polling_loop(&config, &running, &app_handle, reconcile_first);
+                }
             }
         }));
 
@@ -303,17 +306,26 @@ fn check_and_emit(config: &Arc<Mutex<AppConfig>>, app_handle: &AppHandle) {
 
 // ──────────────────────────── Polling fallback ──────────────────────────────
 
-fn polling_loop(config: &Arc<Mutex<AppConfig>>, running: &Arc<AtomicBool>, app_handle: &AppHandle) {
+fn polling_loop(
+    config: &Arc<Mutex<AppConfig>>,
+    running: &Arc<AtomicBool>,
+    app_handle: &AppHandle,
+    mut reconcile_first: bool,
+) {
     let mut last_ssid: Option<String> = None;
 
     while running.load(Ordering::Relaxed) {
         let current_ssid = detect_current_ssid();
 
-        // Only emit when SSID changes
-        if current_ssid != last_ssid {
+        if polling_observation_should_emit(
+            last_ssid.as_deref(),
+            current_ssid.as_deref(),
+            reconcile_first,
+        ) {
             check_and_emit(config, app_handle);
             last_ssid = current_ssid;
         }
+        reconcile_first = false;
 
         // Sleep 15 seconds in 250 ms increments so we can react to stop() quickly.
         let total = Duration::from_secs(15);
@@ -328,13 +340,28 @@ fn polling_loop(config: &Arc<Mutex<AppConfig>>, running: &Arc<AtomicBool>, app_h
 
 // ─────────────────── Event-driven path (non-macOS stub) ─────────────────────
 
+enum EventLoopResult {
+    Stopped,
+    Poll { reconcile_first: bool },
+}
+
+fn polling_observation_should_emit(
+    last: Option<&str>,
+    current: Option<&str>,
+    reconcile_first: bool,
+) -> bool {
+    reconcile_first || current != last
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn try_event_driven_loop(
     _config: &Arc<Mutex<AppConfig>>,
     _running: &Arc<AtomicBool>,
     _app_handle: &AppHandle,
-) -> bool {
-    false // Always falls back to polling on non-macOS, non-Linux platforms (e.g. Windows)
+) -> EventLoopResult {
+    EventLoopResult::Poll {
+        reconcile_first: false,
+    }
 }
 
 // ─────────────── Event-driven path (Linux NetworkManager D-Bus) ─────────────
@@ -377,15 +404,6 @@ fn is_disconnected_ap_path(path: &str) -> bool {
 #[cfg(target_os = "linux")]
 fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
-}
-
-#[cfg(all(test, target_os = "linux"))]
-fn polling_observation_should_emit(
-    last: Option<&str>,
-    current: Option<&str>,
-    _reconcile_first: bool,
-) -> bool {
-    last != current
 }
 
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
@@ -473,7 +491,7 @@ fn try_event_driven_loop(
     config: &Arc<Mutex<AppConfig>>,
     running: &Arc<AtomicBool>,
     app_handle: &AppHandle,
-) -> bool {
+) -> EventLoopResult {
     use std::sync::mpsc;
     use zbus::blocking::{Connection, Proxy};
 
@@ -481,7 +499,9 @@ fn try_event_driven_loop(
         Ok(c) => c,
         Err(e) => {
             log::warn!("WifiMonitor: failed to connect to the D-Bus system bus: {e}");
-            return false;
+            return EventLoopResult::Poll {
+                reconcile_first: false,
+            };
         }
     };
 
@@ -491,28 +511,36 @@ fn try_event_driven_loop(
              (org.freedesktop.NetworkManager has no owner) — WiFi mode requires \
              NetworkManager on Linux; falling back to polling (which will also report no SSID)"
         );
-        return false;
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
     }
 
     let Some(wifi_path) = find_wifi_device_path(&conn) else {
         log::warn!(
             "WifiMonitor: no WiFi device found via NetworkManager — falling back to polling"
         );
-        return false;
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
     };
 
     let device_proxy = match Proxy::new(&conn, NM_SERVICE, wifi_path.as_str(), NM_DEVICE_IFACE) {
         Ok(p) => p,
         Err(e) => {
             log::warn!("WifiMonitor: failed to create Device proxy: {e}");
-            return false;
+            return EventLoopResult::Poll {
+                reconcile_first: false,
+            };
         }
     };
     let state_sig_iter = match device_proxy.receive_signal("StateChanged") {
         Ok(it) => it,
         Err(e) => {
             log::warn!("WifiMonitor: failed to subscribe to Device.StateChanged: {e}");
-            return false;
+            return EventLoopResult::Poll {
+                reconcile_first: false,
+            };
         }
     };
 
@@ -520,7 +548,9 @@ fn try_event_driven_loop(
         Ok(p) => p,
         Err(e) => {
             log::warn!("WifiMonitor: failed to create Properties proxy: {e}");
-            return false;
+            return EventLoopResult::Poll {
+                reconcile_first: false,
+            };
         }
     };
     let props_sig_iter = match props_proxy
@@ -529,7 +559,9 @@ fn try_event_driven_loop(
         Ok(it) => it,
         Err(e) => {
             log::warn!("WifiMonitor: failed to subscribe to Wireless PropertiesChanged: {e}");
-            return false;
+            return EventLoopResult::Poll {
+                reconcile_first: false,
+            };
         }
     };
 
@@ -631,7 +663,13 @@ fn try_event_driven_loop(
         }
     }
 
-    !monitor_exit_uses_polling_fallback(exit_reason)
+    if monitor_exit_uses_polling_fallback(exit_reason) {
+        EventLoopResult::Poll {
+            reconcile_first: true,
+        }
+    } else {
+        EventLoopResult::Stopped
+    }
 }
 
 // ─────────────── Event-driven path (macOS SCDynamicStore) ───────────────────
@@ -801,7 +839,7 @@ fn try_event_driven_loop(
     config: &Arc<Mutex<AppConfig>>,
     running: &Arc<AtomicBool>,
     app_handle: &AppHandle,
-) -> bool {
+) -> EventLoopResult {
     use sc_sys::*;
     use std::ffi::c_void;
 
@@ -829,7 +867,9 @@ fn try_event_driven_loop(
     };
     if name_cf.is_null() {
         log::error!("CFStringCreateWithCString failed for store name");
-        return false;
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
     }
 
     let store = unsafe {
@@ -844,7 +884,9 @@ fn try_event_driven_loop(
 
     if store.is_null() {
         log::error!("SCDynamicStoreCreate returned null");
-        return false;
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
     }
 
     // ── Register notification keys ────────────────────────────────────────
@@ -898,7 +940,9 @@ fn try_event_driven_loop(
     if !registered {
         log::error!("SCDynamicStoreSetNotificationKeys failed");
         unsafe { CFRelease(store as *const c_void) };
-        return false;
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
     }
 
     // ── Attach store to the current thread's run loop ─────────────────────
@@ -906,7 +950,9 @@ fn try_event_driven_loop(
     if source.is_null() {
         log::error!("SCDynamicStoreCreateRunLoopSource returned null");
         unsafe { CFRelease(store as *const c_void) };
-        return false;
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
     }
 
     let run_loop = unsafe { CFRunLoopGetCurrent() };
@@ -950,7 +996,7 @@ fn try_event_driven_loop(
         CFRelease(store as *const c_void);
     }
 
-    true
+    EventLoopResult::Stopped
 }
 
 // ───────────────────────────────── Tests ───────────────────────────────────
