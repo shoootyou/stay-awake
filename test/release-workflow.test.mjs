@@ -30,10 +30,15 @@ const jobBlock = (workflow, name) => {
   return withoutYamlComments(workflow.slice(start, next === -1 ? undefined : start + match[0].length + next));
 };
 
-const runBodies = (job) => [...job.matchAll(/^(\s+)(?:-\s+)?run:[ \t]*(.*)$/gm)].map((match) => {
+const runBodies = (job) => [...job.matchAll(/^([ \t]*)(?:-\s+)?run:[ \t]*(.*)$/gm)].flatMap((match) => {
   const indentation = match[1].length;
   const value = match[2];
-  if (!/^[>|][+-]?[ \t]*(?:#.*)?$/.test(value)) return value;
+  if (!/^[>|][+-]?[ \t]*(?:#.*)?$/.test(value)) {
+    if (value) return [value];
+    const child = job.slice(match.index + match[0].length).match(/^([ \t]*)(\w[\w-]*):/m);
+    if (child && child[1].length > indentation) return [];
+    return [value];
+  }
 
   const lines = job.slice(match.index + match[0].length).split(/(?<=\n)/);
   if (lines[0] === "\n") lines.shift();
@@ -42,7 +47,7 @@ const runBodies = (job) => [...job.matchAll(/^(\s+)(?:-\s+)?run:[ \t]*(.*)$/gm)]
     if (!/^[ \t]*\n$/.test(line) && !(line.match(/^ */)?.[0].length > indentation)) break;
     body.push(line);
   }
-  return body.join("");
+  return [body.join("")];
 });
 
 const needsJobs = (job) => {
@@ -58,9 +63,10 @@ const needsJobs = (job) => {
 };
 
 const cargoPackageVersion = (cargo) => {
-  const start = cargo.indexOf("[package]\n");
-  if (start === -1) return undefined;
-  const end = cargo.indexOf("\n[", start + 1);
+  const packageHeader = /^\[package\]\s*(#.*)?$/m.exec(cargo);
+  if (!packageHeader) return undefined;
+  const start = packageHeader.index;
+  const end = cargo.indexOf("\n[", start + packageHeader[0].length);
   return /^version\s*=\s*"([^"]+)"/m.exec(cargo.slice(start, end === -1 ? undefined : end))?.[1];
 };
 
@@ -118,6 +124,7 @@ test("keeps the frontend and Tauri release versions synchronized", () => {
 
 test("reads the Cargo version only from the package table", () => {
   assert.equal(cargoPackageVersion("[package]\nname = \"stay-awake\"\n[dependencies]\nexample = { version = \"9.9.9\" }\n"), undefined);
+  assert.equal(cargoPackageVersion("[package] # package metadata\r\nversion = \"1.2.3\"\r\n"), "1.2.3");
 });
 
 test("keeps release-please extra files inside the package path and synchronized", () => {
@@ -216,6 +223,9 @@ test("parses list and indented run bodies", () => {
   assert.deepEqual(runBodies("        - run: npm ci\n          run: npm test\n"), ["npm ci", "npm test"]);
   assert.deepEqual(runBodies("        - run: |\n            npm ci\n            npm test\n"), ["            npm ci\n            npm test\n"]);
   assert.deepEqual(runBodies("          run: >\n            npm test\n"), ["            npm test\n"]);
+  assert.deepEqual(runBodies("\n\n        - run: |\n            npm ci\n"), ["            npm ci\n"]);
+  assert.deepEqual(runBodies("    defaults:\n      run:\n        working-directory: src\n"), []);
+  assert.deepEqual(runBodies("        - run: npm ci\n"), ["npm ci"]);
 });
 
 test("rejects a contract-test command list without npm ci", () => {

@@ -77,7 +77,7 @@ const fluentKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].m
 const commandNames = (source) => new Set([...source.matchAll(/invoke\(\s*["']([\w-]+)["']/g)]
   .map((match) => match[1]));
 const registeredCommands = (source) => {
-  const handler = stripComments(source).match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
+  const handler = stripComments(source, "rust").match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
   return new Set([...handler.matchAll(/^\s*([a-z][a-z0-9_]*)\s*,/gm)].map((match) => match[1]));
 };
 const iconClasses = (source) => new Set([...source.matchAll(/\b(ph-[\w-]+)\b/g)].map((match) => match[1]));
@@ -90,8 +90,8 @@ const resourcePaths = (source) => [...source.matchAll(/(?:href|src)=["']([^"']+)
   .map((match) => match[1])
   .filter((value) => !value.startsWith("/") && !value.includes(":") && value !== "#");
 
-// This handles common regex starts; ambiguity after ) or ] and nested template interpolation remain unsupported.
-const stripComments = (source) => {
+// This handles common JavaScript regex starts; ambiguity after ) or ] and nested template interpolation remain unsupported.
+const stripComments = (source, language = "js") => {
   let state = "code";
   let blockCommentDepth = 0;
   let regexClass = false;
@@ -125,7 +125,7 @@ const stripComments = (source) => {
     }
     if (state === "blockComment") {
       output += character === "\n" ? "\n" : " ";
-      if (character === "/" && next === "*") {
+      if (language === "rust" && character === "/" && next === "*") {
         output += " ";
         index += 1;
         blockCommentDepth += 1;
@@ -157,6 +157,19 @@ const stripComments = (source) => {
       }
       continue;
     }
+    if (language === "rust" && character === "r") {
+      const rawString = /^r(#+)?"/.exec(source.slice(index));
+      if (rawString) {
+        const hashes = rawString[1] ?? "";
+        const end = source.indexOf(`"${hashes}`, index + rawString[0].length);
+        if (end !== -1) {
+          const raw = source.slice(index, end + hashes.length + 1);
+          output += raw;
+          index += raw.length - 1;
+          continue;
+        }
+      }
+    }
     if (character === "/" && next === "/") {
       output += "  ";
       index += 1;
@@ -166,20 +179,20 @@ const stripComments = (source) => {
       index += 1;
       state = "blockComment";
       blockCommentDepth = 1;
-    } else if (character === "/" && beginsRegex()) {
+    } else if (language === "js" && character === "/" && beginsRegex()) {
       finishToken();
       output += character;
       state = "regex";
       regexClass = false;
     } else {
       output += character;
-      if (character === "'") {
+      if (character === "'" && (language === "js" || /^'(?:[^\\'\n]|\\(?:[nrt0\\'\"]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}))'/.test(source.slice(index)))) {
         finishToken();
         state = "single";
       } else if (character === '"') {
         finishToken();
         state = "double";
-      } else if (character === "`") {
+      } else if (language === "js" && character === "`") {
         finishToken();
         state = "template";
       } else {
@@ -279,6 +292,17 @@ test("ignores nested Rust block comments when extracting handler registrations",
   assert.equal(registeredCommands(source).has("update_global_hotkey"), true);
 });
 
+test("does not let Rust lifetimes, raw strings, or comments register handler entries", () => {
+  const source = `fn borrow(value: &'_ str) { let raw = r#"// not a comment /* either */"#; }
+generate_handler![
+  /*
+    update_global_hotkey,
+  */
+]`;
+
+  assert.equal(registeredCommands(source).has("update_global_hotkey"), false);
+});
+
 test("keeps bundled pages, local resources, CSP, and used icons available", () => {
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
   const csp = config.app.security.csp;
@@ -375,6 +399,7 @@ test("strips JavaScript comments without losing later frontend contracts", () =>
     ["const slash = /[\\/]/;", "const slash = /[\\/]/;"],
     ['const url = "http://x.y";', 'const url = "http://x.y";'],
     ["/* it's */\nconst retained = true;", "const retained = true;", "/* it's */"],
+    ["/* see dir/*.js */ const retained = true;", "const retained = true;", "/* see dir/*.js */"],
     ["const template = `// stays`;", "const template = `// stays`;"],
   ];
   for (const [source, retained, removed] of cases) {
