@@ -15,4 +15,4 @@ packages=(
 )
 
 "${SUDO[@]}" apt-get update
-"${SUDO[@]}" apt-get install -y --no-install-recommends "${packages[@]}"
+"${SUDO[@]}" apt-get install -y "${packages[@]}"
