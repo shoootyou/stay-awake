@@ -379,6 +379,15 @@ fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
 }
 
+#[cfg(all(test, target_os = "linux"))]
+fn polling_observation_should_emit(
+    last: Option<&str>,
+    current: Option<&str>,
+    _reconcile_first: bool,
+) -> bool {
+    last != current
+}
+
 /// Pure decision function over whether NetworkManager's well-known bus name is currently owned
 /// on the system bus. Mirrors the `xdotool_present_from` seam pattern (`platform/linux.rs`,
 /// D3a): the caller performs the real D-Bus `NameHasOwner` check and passes in the resulting
@@ -1144,6 +1153,32 @@ mod linux_tests {
         assert!(ssid_changed(
             &Some("HomeWiFi".to_string()),
             &Some("OfficeWiFi".to_string())
+        ));
+    }
+
+    #[test]
+    fn polling_fallback_reconciles_the_first_observation_then_only_changes() {
+        assert!(polling_observation_should_emit(None, None, true));
+        assert!(!polling_observation_should_emit(None, None, false));
+        assert!(polling_observation_should_emit(
+            Some("OfficeWiFi"),
+            None,
+            false
+        ));
+        assert!(polling_observation_should_emit(
+            None,
+            Some("OfficeWiFi"),
+            false
+        ));
+        assert!(polling_observation_should_emit(
+            Some("OfficeWiFi"),
+            Some("OfficeWiFi"),
+            true,
+        ));
+        assert!(!polling_observation_should_emit(
+            Some("OfficeWiFi"),
+            Some("OfficeWiFi"),
+            false,
         ));
     }
 
