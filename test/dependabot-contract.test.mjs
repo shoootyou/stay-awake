@@ -20,17 +20,17 @@ const expectedUpdates = {
   "github-actions": {
     directory: "/",
     labels: ["dependencies", "ci"],
-    prefix: "ci(deps)",
+    prefix: "ci",
   },
   npm: {
     directory: "/",
     labels: ["dependencies", "javascript"],
-    prefix: "build(deps)",
+    prefix: "build",
   },
   cargo: {
     directory: "/src-tauri",
     labels: ["dependencies", "rust"],
-    prefix: "build(deps)",
+    prefix: "build",
   },
 };
 const expectedGroup = {
@@ -70,6 +70,11 @@ const assertDependabotPolicy = (config) => {
     assert.deepEqual(update.schedule, { interval: "weekly", day: "monday" }, `${ecosystem} schedule`);
     assert.equal(update["open-pull-requests-limit"], 3, `${ecosystem} limit`);
     assert.deepEqual(update["commit-message"], { prefix: expected.prefix, include: "scope" }, `${ecosystem} commit message`);
+    assert.equal(
+      /[()]/.test(update["commit-message"].prefix),
+      false,
+      `${ecosystem} commit-message prefix must not contain parentheses`,
+    );
     assert.deepEqual(update.groups?.["all-dependencies"], expectedGroup, `${ecosystem} group`);
     for (const forbidden of ["time", "timezone"]) assert.equal(update.schedule[forbidden], undefined, `${ecosystem} schedule.${forbidden}`);
     for (const forbidden of ["cooldown", "dependency-type"]) assert.equal(update[forbidden], undefined, `${ecosystem} must not set ${forbidden}`);
@@ -95,6 +100,8 @@ test("rejects weakened Dependabot grouping policy", () => {
     (config) => config.updates[0].cooldown = { "default-days": 7 },
     (config) => config.updates[1]["open-pull-requests-limit"] = 1,
     (config) => delete config.updates[2].groups["all-dependencies"]["applies-to"],
+    (config) => config.updates[0]["commit-message"].prefix = "ci(deps)",
+    (config) => config.updates[2]["commit-message"].prefix = "build(deps)",
   ];
 
   assert.doesNotThrow(() => assertDependabotPolicy(knownGoodConfig()));
