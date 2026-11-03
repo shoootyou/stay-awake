@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0](https://github.com/shoootyou/stay-awake/compare/v1.0.1...v1.1.0) (2026-11-03)
+
+
+### Features
+
+* **linux:** add Linux platform support with NetworkManager WiFi mode and xdotool accessibility checks ([10cb6f2](https://github.com/shoootyou/stay-awake/commit/10cb6f2838b4775cda726f8f4154f0e42decab8d))
+* **release:** build the Linux deb in parallel with the macOS dmg ([10cb6f2](https://github.com/shoootyou/stay-awake/commit/10cb6f2838b4775cda726f8f4154f0e42decab8d))
+
+
+### Bug Fixes
+
+* **linux:** move the mouse with absolute xdotool calls so jiggling works under XWayland ([10cb6f2](https://github.com/shoootyou/stay-awake/commit/10cb6f2838b4775cda726f8f4154f0e42decab8d))
+* **wifi:** fall back to polling when the NetworkManager monitor disconnects ([10cb6f2](https://github.com/shoootyou/stay-awake/commit/10cb6f2838b4775cda726f8f4154f0e42decab8d))
+
 ## [1.0.1](https://github.com/shoootyou/stay-awake/compare/v1.0.0...v1.0.1) (2026-05-25)
 
 
