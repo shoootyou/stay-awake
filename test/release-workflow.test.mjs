@@ -46,7 +46,10 @@ const runBodies = (job) => [...job.matchAll(/^ {8}run:[ \t]*(.*)$/gm)].map((matc
 const needsJobs = (job) => {
   const match = /^ {4}needs:[ \t]*(.*)$/m.exec(job);
   if (!match) return [];
-  if (match[1]) return match[1].replace(/^\[|\]$/g, "").split(",").map((name) => name.trim());
+  if (match[1]) {
+    return match[1].replace(/\s+#.*$/, "").trim().replace(/^\[|\]$/g, "")
+      .split(",").map((name) => name.trim());
+  }
 
   return job.slice(match.index + match[0].length)
     .match(/^ {6}- ([\w-]+)$/gm)?.map((line) => line.trim().slice(2)) ?? [];
@@ -140,7 +143,30 @@ test("keeps CI builds independent from commitlint while retaining commitlint as 
   const build = jobBlock(ci, "build");
 
   jobBlock(ci, "commitlint");
+  assert.deepEqual(needsJobs(jobBlock(ci, "lint-and-check")), []);
+  assert.deepEqual(needsJobs(jobBlock(ci, "cargo-audit")), []);
   assert.deepEqual(needsJobs(build).sort(), ["cargo-audit", "lint-and-check"]);
+});
+
+test("parses flow-style needs with trailing whitespace and comments", () => {
+  assert.deepEqual(
+    needsJobs("  build:\n    needs: [lint-and-check, cargo-audit]  # direct prerequisites\n"),
+    ["lint-and-check", "cargo-audit"],
+  );
+});
+
+test("resolves the expected number of runner labels in CI and release workflows", () => {
+  for (const [path, expectedCount] of [
+    [".github/workflows/ci.yml", 5],
+    [".github/workflows/release.yml", 4],
+  ]) {
+    const workflow = read(path);
+    const jobs = [...workflow.slice(workflow.indexOf("\njobs:\n")).matchAll(/^ {2}([\w-]+):\s*$/gm)]
+      .map((match) => match[1]);
+    const labels = jobs.flatMap((name) => runnerLabels(jobBlock(workflow, name)));
+
+    assert.equal(labels.length, expectedCount, `${path} resolved runner-label count`);
+  }
 });
 
 test("pins every Linux CI and release runner, including matrix Linux, to ubuntu-24.04", () => {
