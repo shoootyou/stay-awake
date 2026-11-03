@@ -1,6 +1,6 @@
 /**
  * @spec-handoff
- * @interface releaseMetadata(): { packageVersion: string, tauriVersion: string }
+ * @interface releaseWorkflowContracts(): void
  * @behavior
  *   - Keeps release metadata, shared Linux prerequisites, and SHA-pinned actions aligned.
  *   - Requires the release workflow to create one release and build both platforms in parallel.
@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -21,14 +21,52 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(new URL(path, `file://${root}/`), "utf8");
 
 const jobBlock = (workflow, name) => {
-  const header = `  ${name}:`;
-  const start = workflow.indexOf(header);
-  assert.notEqual(start, -1, `missing ${name} job`);
-  const next = workflow.slice(start + header.length).search(/^  [\w-]+:/m);
-  return workflow.slice(start, next === -1 ? undefined : start + header.length + next);
+  const header = new RegExp(`^  ${name}:\\s*$`, "m");
+  const match = header.exec(workflow);
+  assert.notEqual(match, null, `missing ${name} job`);
+  const start = match.index;
+  const next = workflow.slice(start + match[0].length).search(/^  [\w-]+:/m);
+  return withoutYamlComments(workflow.slice(start, next === -1 ? undefined : start + match[0].length + next));
 };
 
-const runBodies = (job) => [...job.matchAll(/^ {8}run: \|\n((?: {10}.*\n?)*)/gm)].map(([, body]) => body);
+const runBodies = (job) => [...job.matchAll(/^ {8}run:[ \t]*(.*)$/gm)].map((match) => {
+  const value = match[1];
+  if (!/^[>|][+-]?[ \t]*(?:#.*)?$/.test(value)) return value;
+
+  const lines = job.slice(match.index + match[0].length).split(/(?<=\n)/);
+  const body = [];
+  for (const line of lines) {
+    if (!/^[ \t]*\n$/.test(line) && !/^ {10,}/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("");
+});
+
+const needsJobs = (job) => {
+  const match = /^ {4}needs:[ \t]*(.*)$/m.exec(job);
+  if (!match) return [];
+  if (match[1]) return match[1].replace(/^\[|\]$/g, "").split(",").map((name) => name.trim());
+
+  return job.slice(match.index + match[0].length)
+    .match(/^ {6}- ([\w-]+)$/gm)?.map((line) => line.trim().slice(2)) ?? [];
+};
+
+// This small YAML scanner does not distinguish block scalar contents from YAML comments.
+const withoutYamlComments = (yaml) => yaml.split("\n").map((line) => {
+  if (/^\s*#/.test(line)) return "";
+  let quote = "";
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote) {
+      if (character === quote && (quote === "'" || line[index - 1] !== "\\")) quote = "";
+    } else if (character === "'" || character === "\"") {
+      quote = character;
+    } else if (character === "#" && /\s/.test(line[index - 1] ?? "")) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}).join("\n");
 
 test("keeps the frontend and Tauri release versions synchronized", () => {
   const packageVersion = JSON.parse(read("package.json")).version;
@@ -39,6 +77,7 @@ test("keeps the frontend and Tauri release versions synchronized", () => {
 
 test("keeps the required Linux packages and executable installer in one repository-owned script", (t) => {
   const installer = read("scripts/install-linux-dependencies.sh");
+  const installerPath = new URL("scripts/install-linux-dependencies.sh", `file://${root}/`);
 
   for (const packageName of [
     "libgtk-3-dev",
@@ -50,6 +89,7 @@ test("keeps the required Linux packages and executable installer in one reposito
     assert.match(installer, new RegExp(`\\b${packageName}\\b`));
   }
   assert.doesNotMatch(installer, /--no-install-recommends/);
+  assert.notEqual(statSync(installerPath).mode & 0o111, 0, "installer must be executable on disk");
 
   try {
     const entry = execFileSync("git", ["ls-files", "-s", "scripts/install-linux-dependencies.sh"], {
@@ -58,8 +98,9 @@ test("keeps the required Linux packages and executable installer in one reposito
     });
     assert.match(entry, /^100755\s/);
   } catch (error) {
-    if (error?.code === "ENOENT") t.skip("git is unavailable");
-    else throw error;
+    const details = `${error?.stderr ?? ""}${error?.message ?? ""}`;
+    if (/pathspec .* did not match any files/.test(details)) throw error;
+    t.skip("cannot inspect tracked executable mode");
   }
 });
 
@@ -74,17 +115,19 @@ test("makes Linux CI and tagged releases invoke the shared prerequisite installe
 });
 
 test("pins every external workflow action to a SHA with a version comment", () => {
-  for (const path of [
-    ".github/workflows/release.yml",
-    ".github/workflows/ci.yml",
-    ".github/workflows/distribute.yml",
-    ".github/workflows/release-please.yml",
+  for (const [path, expectedExternalActions] of [
+    [".github/workflows/release.yml", 10],
+    [".github/workflows/ci.yml", 11],
+    [".github/workflows/distribute.yml", 1],
+    [".github/workflows/release-please.yml", 1],
   ]) {
-    for (const line of read(path).split("\n").filter((line) => line.includes("uses:"))) {
-      const action = line.slice(line.indexOf("uses:") + "uses:".length).trim();
-      if (!action.startsWith("./.github/workflows/")) {
-        assert.match(action, /^[\w-]+\/[\w.-]+@[0-9a-f]{40} # (v[\d.]+|action-v[\d.]+)$/);
-      }
+    const externalActions = read(path).split("\n")
+      .map((line) => /^\s*(?:-\s+)?uses:\s*(.+)$/.exec(line)?.[1])
+      .filter((action) => action && !action.startsWith("./.github/workflows/"));
+
+    assert.equal(externalActions.length, expectedExternalActions, `${path} external action count`);
+    for (const action of externalActions) {
+      assert.match(action, /^[\w-]+\/[\w.-]+@[0-9a-f]{40} # (v[\d.]+|action-v[\d.]+)$/);
     }
   }
 });
@@ -107,10 +150,8 @@ test("builds macOS and Linux in parallel after release creation", () => {
   const linux = jobBlock(release, "build-linux");
 
   for (const job of [macos, linux]) {
-    assert.match(job, /^ {4}needs: create-release$/m);
+    assert.deepEqual(needsJobs(job), ["create-release"]);
   }
-  assert.doesNotMatch(macos, /^ {4}needs: .*build-linux/m);
-  assert.doesNotMatch(linux, /^ {4}needs: .*build-macos/m);
 });
 
 test("passes the created release ID and selected tag to both release builds", () => {
