@@ -430,6 +430,7 @@ struct EventState {
     last: Option<String>,
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn publish_observation<E: FnMut(Option<&str>)>(
     state: &mut EventState,
     observed: Option<String>,
@@ -439,6 +440,7 @@ fn publish_observation<E: FnMut(Option<&str>)>(
     emit(observed.as_deref());
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn periodic_pass<D: FnMut() -> Option<String>, E: FnMut(Option<&str>)>(
     state: &mut EventState,
     mut detect: D,
@@ -855,6 +857,7 @@ mod sc_sys {
 struct WifiCallbackData {
     config: Arc<Mutex<AppConfig>>,
     app_handle: AppHandle,
+    state: std::cell::RefCell<EventState>,
 }
 
 /// SAFETY: `WifiCallbackData` is only accessed on the single monitor thread
@@ -876,11 +879,14 @@ unsafe extern "C" fn wifi_change_callback(
     // entire duration of `try_event_driven_loop` (guaranteed by the loop
     // structure — we only release the store after the run loop exits).
     let data = &*(info as *const WifiCallbackData);
-    emit_observation(
-        &data.config,
-        &data.app_handle,
-        detect_current_ssid().as_deref(),
-    );
+    let observed = detect_current_ssid();
+    let Ok(mut state) = data.state.try_borrow_mut() else {
+        log::debug!("WifiMonitor: skipped reentrant SCDynamicStore callback");
+        return;
+    };
+    publish_observation(&mut state, observed, |ssid| {
+        emit_observation(&data.config, &data.app_handle, ssid);
+    });
 }
 
 /// Try to run an SCDynamicStore-based event loop on the current thread.
@@ -899,6 +905,7 @@ fn try_event_driven_loop(
     let callback_data = WifiCallbackData {
         config: Arc::clone(config),
         app_handle: app_handle.clone(),
+        state: std::cell::RefCell::new(EventState { last: None }),
     };
     let mut context = SCDynamicStoreContext {
         version: 0,
@@ -1013,8 +1020,20 @@ fn try_event_driven_loop(
     log::info!("WifiMonitor: SCDynamicStore event loop active");
 
     // Initial probe so the frontend gets state immediately on startup.
-    let mut last_ssid = detect_current_ssid();
-    emit_observation(config, app_handle, detect_current_ssid().as_deref());
+    let Ok(mut state) = callback_data.state.try_borrow_mut() else {
+        log::error!("WifiMonitor: callback state unexpectedly unavailable during initial probe");
+        unsafe {
+            CFRelease(source as *const c_void);
+            CFRelease(store as *const c_void);
+        }
+        return EventLoopResult::Poll {
+            reconcile_first: false,
+        };
+    };
+    publish_observation(&mut state, detect_current_ssid(), |ssid| {
+        emit_observation(config, app_handle, ssid);
+    });
+    drop(state);
 
     // ── Run loop — 1 s slices so we can react to stop() quickly ──────────
     // Also poll every POLL_INTERVAL_SECS to catch missed SC events (macOS 26+).
@@ -1029,16 +1048,19 @@ fn try_event_driven_loop(
         ticks += 1;
         if ticks >= POLL_INTERVAL_SECS {
             ticks = 0;
-            let current = detect_current_ssid();
-            if current != last_ssid {
+            let Ok(mut state) = callback_data.state.try_borrow_mut() else {
+                log::debug!("WifiMonitor: skipped periodic check while callback is active");
+                continue;
+            };
+            let previous = state.last.clone();
+            periodic_pass(&mut state, detect_current_ssid, |ssid| {
                 log::debug!(
                     "WiFi periodic check: SSID changed {:?} → {:?}",
-                    last_ssid,
-                    current
+                    previous,
+                    ssid
                 );
-                emit_observation(config, app_handle, detect_current_ssid().as_deref());
-                last_ssid = current;
-            }
+                emit_observation(config, app_handle, ssid);
+            });
         }
     }
 
