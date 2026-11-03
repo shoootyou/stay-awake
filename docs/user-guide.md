@@ -1,10 +1,9 @@
-# Stay Awake — User Guide
+# Stay Awake user guide
 
-Stay Awake is a macOS-only menu bar utility that prevents your computer from
-sleeping or going idle. It lives in the menu bar and stays out of your way —
-no Dock icon, no persistent window. Configure it once and forget it.
+Stay Awake prevents your computer from sleeping or going idle on macOS and Linux.
+The macOS guidance below uses the menu bar. On Linux, use the system tray.
 
-**Requirements:** macOS 12 Monterey or later · Apple Silicon (native) or Intel (via Rosetta 2)
+**macOS requirements:** macOS 12 Monterey or later. Apple Silicon runs natively; Intel uses Rosetta 2.
 
 ---
 
@@ -242,8 +241,12 @@ on or off without opening the tray menu.
 **Homebrew install:** run `brew upgrade shoootyou/tap/stay-awake`.
 
 **Manual DMG install:** Stay Awake checks for new versions on each launch. When an
-update is available on GitHub Releases, a prompt appears in the menu bar — click it
+update is available on GitHub Releases, a prompt appears in the menu bar. Click it
 to install in one step.
+
+**Linux `.deb`:** Download each new `.deb` from GitHub Releases and install it with
+`sudo apt install ./<downloaded-file>.deb`. The in-app updater is not available for
+the Linux package.
 
 ---
 
