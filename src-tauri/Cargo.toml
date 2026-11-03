@@ -1,7 +1,7 @@
 [package]
 name = "stay-awake"
 version = "1.0.1"
-description = "macOS mouse jiggler and anti-inactivity tool"
+description = "Stay Awake is a tray utility that prevents your computer from sleeping on macOS and Linux."
 authors = ["Rodolfo Castelo <shoootyou>"]
 edition = "2021"
 license = "MIT"
