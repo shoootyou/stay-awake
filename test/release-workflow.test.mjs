@@ -98,6 +98,7 @@ test("keeps the required Linux packages and executable installer in one reposito
   const installerPath = new URL("scripts/install-linux-dependencies.sh", `file://${root}/`);
 
   for (const packageName of [
+    "build-essential",
     "libgtk-3-dev",
     "libwebkit2gtk-4.1-dev",
     "libayatana-appindicator3-dev",
@@ -106,6 +107,8 @@ test("keeps the required Linux packages and executable installer in one reposito
   ]) {
     assert.match(installer, new RegExp(`\\b${packageName}\\b`));
   }
+  // The development packages pull pkgconf; rustls does not require OpenSSL headers.
+  assert.doesNotMatch(installer, /\b(?:pkg-config|libssl-dev)\b/);
   assert.doesNotMatch(installer, /--no-install-recommends/);
   assert.notEqual(statSync(installerPath).mode & 0o111, 0, "installer must be executable on disk");
 
