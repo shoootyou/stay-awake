@@ -1312,10 +1312,15 @@ mod core_helper_tests {
     fn shortcut_parser_accepts_aliases_and_rejects_unknown_parts() {
         use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
+        let cmd_or_ctrl = if cfg!(target_os = "macos") {
+            Modifiers::SUPER
+        } else {
+            Modifiers::CONTROL
+        };
         assert_eq!(
             parse_shortcut_string("CmdOrCtrl + Shift + J"),
             Some(Shortcut::new(
-                Some(Modifiers::CONTROL | Modifiers::SHIFT),
+                Some(cmd_or_ctrl | Modifiers::SHIFT),
                 Code::KeyJ
             ))
         );
