@@ -30,14 +30,16 @@ const jobBlock = (workflow, name) => {
   return withoutYamlComments(workflow.slice(start, next === -1 ? undefined : start + match[0].length + next));
 };
 
-const runBodies = (job) => [...job.matchAll(/^ {8}run:[ \t]*(.*)$/gm)].map((match) => {
-  const value = match[1];
+const runBodies = (job) => [...job.matchAll(/^(\s+)(?:-\s+)?run:[ \t]*(.*)$/gm)].map((match) => {
+  const indentation = match[1].length;
+  const value = match[2];
   if (!/^[>|][+-]?[ \t]*(?:#.*)?$/.test(value)) return value;
 
   const lines = job.slice(match.index + match[0].length).split(/(?<=\n)/);
+  if (lines[0] === "\n") lines.shift();
   const body = [];
   for (const line of lines) {
-    if (!/^[ \t]*\n$/.test(line) && !/^ {10,}/.test(line)) break;
+    if (!/^[ \t]*\n$/.test(line) && !(line.match(/^ */)?.[0].length > indentation)) break;
     body.push(line);
   }
   return body.join("");
@@ -53,6 +55,21 @@ const needsJobs = (job) => {
 
   return job.slice(match.index + match[0].length)
     .match(/^ {6}- ([\w-]+)$/gm)?.map((line) => line.trim().slice(2)) ?? [];
+};
+
+const cargoPackageVersion = (cargo) => {
+  const start = cargo.indexOf("[package]\n");
+  if (start === -1) return undefined;
+  const end = cargo.indexOf("\n[", start + 1);
+  return /^version\s*=\s*"([^"]+)"/m.exec(cargo.slice(start, end === -1 ? undefined : end))?.[1];
+};
+
+const assertNodeTestCommandsAreOrdered = (runs) => {
+  const installIndex = runs.indexOf("npm ci");
+  const testIndex = runs.indexOf("npm test");
+  assert.ok(installIndex >= 0, "npm ci must be present");
+  assert.ok(testIndex >= 0, "npm test must be present");
+  assert.equal(installIndex < testIndex, true, "npm ci must run before npm test");
 };
 
 const matrixOs = (job) => {
@@ -92,10 +109,15 @@ const withoutYamlComments = (yaml) => yaml.split("\n").map((line) => {
 test("keeps the frontend and Tauri release versions synchronized", () => {
   const packageVersion = JSON.parse(read("package.json")).version;
   const tauriVersion = JSON.parse(read("src-tauri/tauri.conf.json")).version;
-  const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(read("src-tauri/Cargo.toml"))?.[1];
+  const cargoVersion = cargoPackageVersion(read("src-tauri/Cargo.toml"));
 
   assert.equal(packageVersion, tauriVersion);
   assert.equal(packageVersion, cargoVersion);
+  assert.equal(JSON.parse(read(".release-please-manifest.json"))["src-tauri"], cargoVersion);
+});
+
+test("reads the Cargo version only from the package table", () => {
+  assert.equal(cargoPackageVersion("[package]\nname = \"stay-awake\"\n[dependencies]\nexample = { version = \"9.9.9\" }\n"), undefined);
 });
 
 test("keeps release-please extra files inside the package path and synchronized", () => {
@@ -149,9 +171,11 @@ test("keeps the required Linux packages and executable installer in one reposito
 
 test("uses sudo only when the Linux dependency installer is not root", () => {
   const installer = read("scripts/install-linux-dependencies.sh");
+  const aptGetLines = installer.split("\n").filter((line) => /\bapt-get\b/.test(line) && !/^\s*#/.test(line));
 
   assert.match(installer, /SUDO=\(\)\s*\nif \[ "\$\(id -u\)" -ne 0 \]; then\s*\n  SUDO=\(sudo\)\s*\nfi/);
-  for (const line of installer.split("\n").filter((line) => /\bapt-get\b/.test(line))) {
+  assert.ok(aptGetLines.length >= 2, "installer must contain at least two apt-get commands");
+  for (const line of aptGetLines) {
     assert.match(line, /^"\$\{SUDO\[@\]\}"\s+apt-get\b/);
   }
 });
@@ -185,8 +209,17 @@ test("runs Node contract tests independently in pull request CI", () => {
   assert.match(contractTests, /actions\/checkout@[0-9a-f]{40} # v[\d.]+/);
   assert.match(contractTests, /actions\/setup-node@[0-9a-f]{40} # v[\d.]+/);
   assert.match(contractTests, /node-version: 26/);
-  assert.equal(runs.indexOf("npm ci") < runs.indexOf("npm test"), true,
-    "npm ci must run before npm test");
+  assertNodeTestCommandsAreOrdered(runs);
+});
+
+test("parses list and indented run bodies", () => {
+  assert.deepEqual(runBodies("        - run: npm ci\n          run: npm test\n"), ["npm ci", "npm test"]);
+  assert.deepEqual(runBodies("        - run: |\n            npm ci\n            npm test\n"), ["            npm ci\n            npm test\n"]);
+  assert.deepEqual(runBodies("          run: >\n            npm test\n"), ["            npm test\n"]);
+});
+
+test("rejects a contract-test command list without npm ci", () => {
+  assert.throws(() => assertNodeTestCommandsAreOrdered(["npm test"]), /npm ci must be present/);
 });
 
 test("parses flow-style needs with trailing whitespace and comments", () => {

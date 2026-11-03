@@ -78,7 +78,7 @@ const commandNames = (source) => new Set([...source.matchAll(/invoke\(\s*["']([\
   .map((match) => match[1]));
 const registeredCommands = (source) => {
   const handler = stripComments(source).match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
-  return new Set([...handler.matchAll(/\b([a-z][a-z0-9_]*)\b/g)].map((match) => match[1]));
+  return new Set([...handler.matchAll(/^\s*([a-z][a-z0-9_]*)\s*,/gm)].map((match) => match[1]));
 };
 const iconClasses = (source) => new Set([...source.matchAll(/\b(ph-[\w-]+)\b/g)].map((match) => match[1]));
 const dynamicIds = (source) => new Set([...source.matchAll(/(?:\.id\s*=|setAttribute\(\s*["']id["']\s*,)\s*["']([\w-]+)/g)]
@@ -93,6 +93,7 @@ const resourcePaths = (source) => [...source.matchAll(/(?:href|src)=["']([^"']+)
 // This handles common regex starts; ambiguity after ) or ] and nested template interpolation remain unsupported.
 const stripComments = (source) => {
   let state = "code";
+  let blockCommentDepth = 0;
   let regexClass = false;
   let token = "";
   let previousToken = null;
@@ -124,10 +125,15 @@ const stripComments = (source) => {
     }
     if (state === "blockComment") {
       output += character === "\n" ? "\n" : " ";
-      if (character === "*" && next === "/") {
+      if (character === "/" && next === "*") {
         output += " ";
         index += 1;
-        state = "code";
+        blockCommentDepth += 1;
+      } else if (character === "*" && next === "/") {
+        output += " ";
+        index += 1;
+        blockCommentDepth -= 1;
+        if (blockCommentDepth === 0) state = "code";
       }
       continue;
     }
@@ -159,6 +165,7 @@ const stripComments = (source) => {
       output += "  ";
       index += 1;
       state = "blockComment";
+      blockCommentDepth = 1;
     } else if (character === "/" && beginsRegex()) {
       finishToken();
       output += character;
@@ -264,6 +271,12 @@ test("does not treat commented Rust handler entries as registrations", () => {
   const source = "generate_handler![\n  // update_global_hotkey,\n  /// update_global_hotkey\n  //! update_global_hotkey\n  /* update_global_hotkey */\n]";
 
   assert.equal(registeredCommands(source).has("update_global_hotkey"), false);
+});
+
+test("ignores nested Rust block comments when extracting handler registrations", () => {
+  const source = "generate_handler![/* a /* update_global_hotkey, */ c */ update_global_hotkey,]";
+
+  assert.equal(registeredCommands(source).has("update_global_hotkey"), true);
 });
 
 test("keeps bundled pages, local resources, CSP, and used icons available", () => {
