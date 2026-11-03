@@ -171,6 +171,8 @@ jobs:
     continue-on-error: true
     permissions:
       contents: write
+    outputs:
+      linux-build-failed: ${{ steps.tauri.outcome != 'success' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,6 +208,7 @@ jobs:
         run: scripts/install-linux-dependencies.sh
 
       - name: Build and upload release assets
+        id: tauri
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -225,14 +228,18 @@ jobs:
     steps:
       - name: Summarize Linux build
         env:
-          LINUX_RESULT: ${{ needs.build-linux.result }}
+          LINUX_FAILED: ${{ needs.build-linux.outputs.linux-build-failed }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [[ "$LINUX_RESULT" == success ]]; then
+          if [[ "$LINUX_FAILED" == true ]]; then
+            echo "## Linux build failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Linux .deb build failed. The release and Homebrew distribution continued. See $RUN_URL." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Linux .deb build failed. The release and Homebrew distribution continued. See $RUN_URL."
+          elif [[ -z "$LINUX_FAILED" ]]; then
+            echo "## Linux build did not report a result" >> "$GITHUB_STEP_SUMMARY"
+            echo "Linux build did not report a result. See $RUN_URL." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Linux build did not report a result. See $RUN_URL."
+          else
             echo "## Linux build" >> "$GITHUB_STEP_SUMMARY"
             echo "Linux .deb build succeeded." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "## Linux build failed" >> "$GITHUB_STEP_SUMMARY"
-            echo "build-linux result: $LINUX_RESULT. See $RUN_URL." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::build-linux result: $LINUX_RESULT. See $RUN_URL."
           fi
