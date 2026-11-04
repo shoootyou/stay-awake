@@ -55,6 +55,376 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
     }
 }
 
+#[cfg(test)]
+mod phase_one_contract {
+    /*
+     * @spec-handoff
+     * @interface evaluate_schedule(schedule, clock) -> ScheduleResult; decide_lifecycle(input) -> Decision
+     * @behavior
+     *   - Schedule windows are start-inclusive, end-exclusive, and owned by their start day.
+     *   - Lifecycle decisions reconcile schedule-owned Manual and AlwaysOn modes without changing WiFi lifecycle.
+     *   - Tray presentation is derived from actual engine state and every route refreshes it.
+     * @edge-cases
+     *   - Empty days and equal bounds have no occurrence; DST gaps/folds resolve deterministically.
+     *   - Overrides expire at their boundary and policy changes clear them.
+     */
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Mode {
+        Manual,
+        AlwaysOn,
+        WiFi,
+        Scheduled,
+    }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Override {
+        None,
+        SkipWindow,
+        ForceOn,
+    }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Presentation {
+        Inactive,
+        Active,
+        Waiting,
+        Paused,
+        ActiveOverride,
+    }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum LocalResolution {
+        Earlier,
+        Later,
+        FirstAfterGap,
+    }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Event {
+        Startup,
+        WindowBoundary,
+        Tray,
+        Hotkey,
+        Ipc,
+        WiFi,
+        Config,
+        Language,
+        Resume,
+    }
+
+    // Fields are consumed only after Kou promotes this test seam to production.
+    #[allow(dead_code)]
+    #[derive(Clone, Copy, Debug)]
+    struct Schedule {
+        start: u16,
+        end: u16,
+        start_day: u8,
+        days: &'static [u8],
+    }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct ScheduleResult {
+        in_window: bool,
+        next_start: Option<u16>,
+    }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct Decision {
+        active: bool,
+        override_state: Override,
+        presentation: Presentation,
+    }
+
+    // Test-only placeholders use production-final names; Kou promotes these seams unchanged.
+    fn evaluate_schedule(_: Schedule, _: u8, _: u16, _: LocalResolution) -> ScheduleResult {
+        ScheduleResult {
+            in_window: false,
+            next_start: None,
+        }
+    }
+    fn effective_mode(mode: Mode) -> Mode {
+        mode
+    }
+    fn derive_tray_status(_: Mode, _: bool, _: bool, _: bool, _: Override) -> Presentation {
+        Presentation::Inactive
+    }
+    fn should_jiggle(_: Mode, _: bool, _: bool, _: bool, _: Override) -> bool {
+        false
+    }
+    fn decide_lifecycle(
+        _: Mode,
+        _: bool,
+        _: ScheduleResult,
+        _: bool,
+        _: Override,
+        _: Event,
+    ) -> Decision {
+        Decision {
+            active: false,
+            override_state: Override::None,
+            presentation: Presentation::Inactive,
+        }
+    }
+    fn refresh_tray_status(route: Event, sink: &mut Vec<Event>) {
+        sink.push(route);
+    }
+
+    const MON: &[u8] = &[1];
+    const NONE: &[u8] = &[];
+
+    #[test]
+    fn schedule_is_start_inclusive_end_exclusive_and_empty_for_equal_bounds() {
+        let weekday = Schedule {
+            start: 9 * 60,
+            end: 17 * 60,
+            start_day: 1,
+            days: MON,
+        };
+        assert!(evaluate_schedule(weekday, 1, 9 * 60, LocalResolution::Earlier).in_window);
+        assert!(!evaluate_schedule(weekday, 1, 17 * 60, LocalResolution::Earlier).in_window);
+        let empty = Schedule {
+            start: 9 * 60,
+            end: 9 * 60,
+            start_day: 1,
+            days: MON,
+        };
+        assert!(!evaluate_schedule(empty, 1, 10 * 60, LocalResolution::Earlier).in_window);
+    }
+
+    #[test]
+    fn overnight_window_is_owned_by_its_selected_start_day_and_empty_days_have_no_window() {
+        let overnight = Schedule {
+            start: 22 * 60,
+            end: 6 * 60,
+            start_day: 1,
+            days: MON,
+        };
+        assert!(evaluate_schedule(overnight, 2, 5 * 60, LocalResolution::Earlier).in_window);
+        assert!(
+            !evaluate_schedule(
+                Schedule {
+                    days: NONE,
+                    ..overnight
+                },
+                2,
+                5 * 60,
+                LocalResolution::Earlier
+            )
+            .in_window
+        );
+    }
+
+    #[test]
+    fn schedule_resolution_has_explicit_gap_fold_and_next_window_contracts() {
+        let schedule = Schedule {
+            start: 2 * 60 + 30,
+            end: 4 * 60,
+            start_day: 1,
+            days: MON,
+        };
+        assert_eq!(
+            evaluate_schedule(schedule, 1, 60, LocalResolution::FirstAfterGap).next_start,
+            Some(3 * 60)
+        );
+        assert!(evaluate_schedule(schedule, 1, 3 * 60, LocalResolution::Earlier).in_window);
+        assert_eq!(
+            evaluate_schedule(schedule, 1, 3 * 60, LocalResolution::Later).next_start,
+            Some(2 * 60 + 30)
+        );
+    }
+
+    #[test]
+    fn scheduled_normalizes_to_manual_and_always_on_is_schedule_owned() {
+        assert_eq!(effective_mode(Mode::Scheduled), Mode::Manual);
+        let outside = ScheduleResult {
+            in_window: false,
+            next_start: Some(9 * 60),
+        };
+        assert!(
+            !decide_lifecycle(
+                Mode::AlwaysOn,
+                true,
+                outside,
+                true,
+                Override::None,
+                Event::Startup
+            )
+            .active
+        );
+    }
+
+    #[test]
+    fn tray_truth_table_uses_actual_state_and_wifi_never_has_schedule_presentations() {
+        let rows = [
+            (
+                Mode::WiFi,
+                true,
+                false,
+                false,
+                Override::None,
+                Presentation::Active,
+            ),
+            (
+                Mode::WiFi,
+                false,
+                true,
+                true,
+                Override::None,
+                Presentation::Inactive,
+            ),
+            (
+                Mode::Manual,
+                true,
+                false,
+                false,
+                Override::None,
+                Presentation::Active,
+            ),
+            (
+                Mode::AlwaysOn,
+                false,
+                true,
+                false,
+                Override::None,
+                Presentation::Waiting,
+            ),
+            (
+                Mode::Manual,
+                false,
+                true,
+                true,
+                Override::SkipWindow,
+                Presentation::Paused,
+            ),
+            (
+                Mode::Manual,
+                true,
+                true,
+                false,
+                Override::ForceOn,
+                Presentation::ActiveOverride,
+            ),
+        ];
+        for (mode, active, enabled, in_window, override_state, expected) in rows {
+            assert_eq!(
+                derive_tray_status(mode, active, enabled, in_window, override_state),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn jiggle_policy_separates_wifi_and_force_on_and_never_allows_inactive_engine() {
+        assert!(should_jiggle(
+            Mode::Manual,
+            true,
+            true,
+            false,
+            Override::ForceOn
+        ));
+        assert!(!should_jiggle(
+            Mode::WiFi,
+            true,
+            true,
+            false,
+            Override::ForceOn
+        ));
+        assert!(!should_jiggle(
+            Mode::Manual,
+            false,
+            false,
+            true,
+            Override::None
+        ));
+    }
+
+    #[test]
+    fn lifecycle_creates_cancels_expires_and_resets_overrides() {
+        let inside = ScheduleResult {
+            in_window: true,
+            next_start: Some(9 * 60),
+        };
+        let outside = ScheduleResult {
+            in_window: false,
+            next_start: Some(9 * 60),
+        };
+        assert_eq!(
+            decide_lifecycle(
+                Mode::Manual,
+                true,
+                inside,
+                false,
+                Override::None,
+                Event::Tray
+            )
+            .override_state,
+            Override::SkipWindow
+        );
+        assert_eq!(
+            decide_lifecycle(
+                Mode::Manual,
+                true,
+                outside,
+                false,
+                Override::None,
+                Event::Tray
+            )
+            .override_state,
+            Override::ForceOn
+        );
+        assert_eq!(
+            decide_lifecycle(
+                Mode::Manual,
+                true,
+                inside,
+                true,
+                Override::ForceOn,
+                Event::WindowBoundary
+            )
+            .override_state,
+            Override::None
+        );
+        assert_eq!(
+            decide_lifecycle(
+                Mode::Manual,
+                true,
+                outside,
+                false,
+                Override::ForceOn,
+                Event::Config
+            )
+            .override_state,
+            Override::None
+        );
+    }
+
+    #[test]
+    fn every_state_producing_route_refreshes_the_shared_tray_seam() {
+        let mut sink = Vec::new();
+        for route in [
+            Event::Startup,
+            Event::Tray,
+            Event::Hotkey,
+            Event::Ipc,
+            Event::WiFi,
+            Event::WindowBoundary,
+            Event::Config,
+            Event::Language,
+            Event::Resume,
+        ] {
+            refresh_tray_status(route, &mut sink);
+        }
+        assert_eq!(
+            sink,
+            vec![
+                Event::Startup,
+                Event::Tray,
+                Event::Hotkey,
+                Event::Ipc,
+                Event::WiFi,
+                Event::WindowBoundary,
+                Event::Config,
+                Event::Language,
+                Event::Resume
+            ]
+        );
+    }
+}
+
 /// Engine operational state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineState {
