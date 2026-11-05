@@ -144,7 +144,7 @@ pub(crate) fn detect_time_change(input: TimeChangeInput<'_>) -> bool {
         .current
         .wall
         .signed_duration_since(input.previous.wall);
-    let wall = wall.to_std().unwrap_or_default();
+    let wall = wall.abs().to_std().unwrap_or(Duration::MAX);
     monotonic >= Duration::from_secs(2)
         || monotonic.abs_diff(wall) >= Duration::from_secs(2)
         || input.previous.offset_seconds != input.current.offset_seconds
