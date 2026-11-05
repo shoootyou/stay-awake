@@ -177,10 +177,13 @@ mod tray_refresh_contract_tests {
     struct RecordingBackend {
         active: bool,
         fail_start: bool,
+        start_calls: usize,
+        stop_calls: usize,
     }
 
     impl runtime::EngineBackend for RecordingBackend {
         fn start(&mut self) -> Result<(), String> {
+            self.start_calls += 1;
             if self.fail_start {
                 return Err("start failed".to_owned());
             }
@@ -189,6 +192,7 @@ mod tray_refresh_contract_tests {
         }
 
         fn stop(&mut self) -> Result<(), String> {
+            self.stop_calls += 1;
             self.active = false;
             Ok(())
         }
@@ -369,7 +373,7 @@ mod tray_refresh_contract_tests {
     }
 
     #[test]
-    fn every_runtime_route_reaches_the_sink_once() {
+    fn runtime_routes_publish_once_and_language_refreshes_an_initialized_snapshot() {
         let clock = FixedClock(at(10));
         let bundle = i18n::create_bundle("en");
         let config = AppConfig::default();
@@ -386,7 +390,6 @@ mod tray_refresh_contract_tests {
             TrayRoute::ProfileLoaded {
                 policy_changed: true,
             },
-            TrayRoute::LanguageChanged,
             TrayRoute::Resume,
             TrayRoute::Quit,
         ];
@@ -394,7 +397,7 @@ mod tray_refresh_contract_tests {
             let mut supervisor = runtime::Supervisor::new();
             let mut backend = RecordingBackend::default();
             let mut sink = RecordingSink::default();
-            let _ = handle_runtime_route(
+            let result = handle_runtime_route(
                 RuntimeRouteInput {
                     route,
                     config: &config,
@@ -405,8 +408,66 @@ mod tray_refresh_contract_tests {
                 &mut backend,
                 &mut sink,
             );
+            assert!(result.is_ok(), "{route:?}");
             assert_eq!(sink.calls.len(), 1, "{route:?}");
+            assert_eq!(backend.start_calls + backend.stop_calls, 0, "{route:?}");
         }
+
+        let mut supervisor = runtime::Supervisor::new();
+        let mut backend = RecordingBackend::default();
+        let mut sink = RecordingSink::default();
+        let startup = handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::Startup,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        );
+        assert!(startup.is_ok());
+        let language = handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::LanguageChanged,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        );
+        assert!(language.is_ok());
+        assert_eq!(backend.start_calls, 0);
+        assert_eq!(backend.stop_calls, 0);
+        assert_eq!(sink.calls.len(), 2);
+    }
+
+    #[test]
+    fn language_change_without_a_snapshot_returns_an_error_without_backend_or_publication() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig::default();
+        let mut supervisor = runtime::Supervisor::new();
+        let mut backend = RecordingBackend::default();
+        let mut sink = RecordingSink::default();
+        let result = handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::LanguageChanged,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        );
+        assert!(result.is_err());
+        assert_eq!(backend.start_calls, 0);
+        assert_eq!(backend.stop_calls, 0);
+        assert!(sink.calls.is_empty());
     }
 
     #[test]
