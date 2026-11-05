@@ -1,3 +1,13 @@
+/*
+ * @spec-handoff
+ * @interface effective_mode(AppMode): AppMode;
+ *   normalize_override(NormalizeInput): NormalizedOverride
+ * @behavior
+ *   - Normalizes Scheduled to Manual and invalid runtime overrides to None.
+ *   - Derives tray status and its text/icon keys from actual activity and normalized state.
+ * @edge-cases
+ *   - ForceOn clears at a current or passed start; expired SkipWindow is dropped.
+ */
 #![allow(dead_code)] // skeleton: wired in E3
 
 use crate::config::{AppConfig, AppMode, JiggleMode};
@@ -210,5 +220,180 @@ impl Supervisor {
 
     pub(crate) fn snapshot(&self) -> Option<&RuntimeSnapshot> {
         self.last_snapshot.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, TimeZone};
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 3, 2, hour, 0, 0).unwrap()
+    }
+    fn occurrence() -> Occurrence {
+        Occurrence {
+            start_day: NaiveDate::from_ymd_opt(2026, 3, 2).unwrap(),
+            start: at(9),
+            end: at(17),
+        }
+    }
+    fn evaluation(inside: bool) -> ScheduleEvaluation {
+        let occurrence = occurrence();
+        ScheduleEvaluation {
+            at: if inside { at(10) } else { at(18) },
+            current: inside.then_some(occurrence.clone()),
+            next: Some(Occurrence {
+                start: at(18) + chrono::Duration::days(1),
+                ..occurrence
+            }),
+        }
+    }
+    fn normalized(state: OverrideState) -> NormalizedOverride {
+        NormalizedOverride(state)
+    }
+    fn expected_keys(status: TrayStatus) -> (&'static str, &'static str, TrayIcon) {
+        match status {
+            TrayStatus::Active => ("tray-running", "tray-tooltip-active", TrayIcon::Active),
+            TrayStatus::Inactive => ("tray-start", "tray-tooltip-inactive", TrayIcon::Inactive),
+            TrayStatus::Waiting => ("tray-waiting", "tray-tooltip-waiting", TrayIcon::Waiting),
+            TrayStatus::Paused => ("tray-paused", "tray-tooltip-paused", TrayIcon::Inactive),
+            TrayStatus::ActiveOverride => (
+                "tray-active-override",
+                "tray-tooltip-override",
+                TrayIcon::Active,
+            ),
+        }
+    }
+
+    #[test]
+    fn normalizes_scheduled_and_invalid_override_lifetimes() {
+        assert_eq!(effective_mode(&AppMode::Scheduled), AppMode::Manual);
+        assert_eq!(effective_mode(&AppMode::AlwaysOn), AppMode::AlwaysOn);
+        let current = occurrence();
+        let inside = evaluation(true);
+        let outside = evaluation(false);
+        let skip = OverrideState::SkipWindow(current.clone());
+        assert_eq!(
+            normalize_override(NormalizeInput {
+                mode: &AppMode::Manual,
+                schedule_enabled: true,
+                window: &inside,
+                override_state: &skip,
+                event: LifecycleEvent::Tick
+            })
+            .as_state(),
+            &skip
+        );
+        assert_eq!(
+            normalize_override(NormalizeInput {
+                mode: &AppMode::Manual,
+                schedule_enabled: true,
+                window: &outside,
+                override_state: &skip,
+                event: LifecycleEvent::Tick
+            })
+            .as_state(),
+            &OverrideState::None
+        );
+        let expired = OverrideState::ForceOn {
+            until: Some(at(18)),
+        };
+        assert_eq!(
+            normalize_override(NormalizeInput {
+                mode: &AppMode::Manual,
+                schedule_enabled: true,
+                window: &outside,
+                override_state: &expired,
+                event: LifecycleEvent::Tick
+            })
+            .as_state(),
+            &OverrideState::None
+        );
+        assert_eq!(
+            normalize_override(NormalizeInput {
+                mode: &AppMode::Manual,
+                schedule_enabled: true,
+                window: &inside,
+                override_state: &OverrideState::ForceOn { until: None },
+                event: LifecycleEvent::Tick
+            })
+            .as_state(),
+            &OverrideState::None
+        );
+        assert_eq!(
+            normalize_override(NormalizeInput {
+                mode: &AppMode::Manual,
+                schedule_enabled: true,
+                window: &outside,
+                override_state: &OverrideState::ForceOn { until: None },
+                event: LifecycleEvent::ConfigChanged {
+                    policy_changed: true
+                }
+            })
+            .as_state(),
+            &OverrideState::None
+        );
+    }
+
+    #[test]
+    fn derives_every_mode_activity_enablement_window_and_normalized_override_combination() {
+        let current = occurrence();
+        for mode in [
+            AppMode::Manual,
+            AppMode::AlwaysOn,
+            AppMode::WiFi,
+            AppMode::Scheduled,
+        ] {
+            for active in [false, true] {
+                for enabled in [false, true] {
+                    for inside in [false, true] {
+                        for override_state in [
+                            OverrideState::None,
+                            OverrideState::SkipWindow(current.clone()),
+                            OverrideState::ForceOn {
+                                until: Some(at(18) + chrono::Duration::days(1)),
+                            },
+                        ] {
+                            let normalized = normalized(override_state.clone());
+                            let actual = derive_tray_status(TrayInput {
+                                mode: &mode,
+                                engine_active: active,
+                                schedule_enabled: enabled,
+                                window: &evaluation(inside),
+                                override_state: &normalized,
+                            });
+                            let expected = if mode == AppMode::WiFi || !enabled {
+                                if active {
+                                    TrayStatus::Active
+                                } else {
+                                    TrayStatus::Inactive
+                                }
+                            } else if active
+                                && !inside
+                                && matches!(override_state, OverrideState::ForceOn { .. })
+                            {
+                                TrayStatus::ActiveOverride
+                            } else if active {
+                                TrayStatus::Active
+                            } else if inside
+                                && matches!(override_state, OverrideState::SkipWindow(_))
+                            {
+                                TrayStatus::Paused
+                            } else if !inside && matches!(override_state, OverrideState::None) {
+                                TrayStatus::Waiting
+                            } else {
+                                TrayStatus::Inactive
+                            };
+                            assert_eq!(actual, expected);
+                            assert_eq!(
+                                (actual.menu_key(), actual.tooltip_key(), actual.icon()),
+                                expected_keys(expected)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }
