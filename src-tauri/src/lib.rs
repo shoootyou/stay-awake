@@ -3442,6 +3442,7 @@ mod native_wiring_contract_tests {
         let setup = scoped_block(&source, ".setup(|app| {");
         let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
         let paint = scoped_block(&source, "impl TrayPaintTargets for NativeTrayTargets {");
+        let compact_setup = setup.split_whitespace().collect::<String>();
 
         assert!(
             setup.contains(
@@ -3450,7 +3451,7 @@ mod native_wiring_contract_tests {
             "the hint has its own disabled menu item"
         );
         assert!(
-            setup.contains("&toggle_item, &toggle_hint,"),
+            compact_setup.contains("&toggle_item,&toggle_hint,"),
             "the hint is immediately after the enabled status item"
         );
         assert!(
