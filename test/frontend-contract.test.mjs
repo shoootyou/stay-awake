@@ -43,7 +43,7 @@ const expectedSelectorIds = [
 ];
 const expectedTranslationKeys = [
   "mode-desc-circle", "mode-desc-power", "mode-desc-subtle", "mode-desc-zen", "profile-default",
-  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled",
+  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled", "schedule-enabled-hint",
   "schedule-end", "schedule-fri", "schedule-label", "schedule-mon", "schedule-sat", "schedule-start",
   "schedule-sun", "schedule-thu", "schedule-tue", "schedule-wed", "settings-accessibility-banner",
   "settings-app-mode-label", "settings-autostart-label", "settings-grant-btn", "settings-hotkey-hint",
@@ -76,9 +76,22 @@ const ids = (source) => new Set(attributeValues(source, "id"));
 const fluentKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].map((match) => match[1]));
 const commandNames = (source) => new Set([...source.matchAll(/invoke\(\s*["']([\w-]+)["']/g)]
   .map((match) => match[1]));
+const handlerEntries = (source) => {
+  const uncommented = stripComments(source, "rust");
+  const match = uncommented.match(/generate_handler!\s*\[/);
+  if (!match || match.index === undefined) return "";
+  const open = match.index + match[0].length - 1;
+  let depth = 0;
+  for (let index = open; index < uncommented.length; index += 1) {
+    if (uncommented[index] === "[") depth += 1;
+    if (uncommented[index] === "]" && --depth === 0) return uncommented.slice(open + 1, index);
+  }
+  return "";
+};
 const registeredCommands = (source) => {
-  const handler = stripComments(source, "rust").match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
-  return new Set([...handler.matchAll(/^\s*([a-z][a-z0-9_]*)\s*,/gm)].map((match) => match[1]));
+  const handler = handlerEntries(source);
+  const entries = handler.replace(/#\[[^\]]*\]\s*/g, "");
+  return new Set([...entries.matchAll(/^\s*([a-z][a-z0-9_]*)\s*,/gm)].map((match) => match[1]));
 };
 const iconClasses = (source) => new Set([...source.matchAll(/\b(ph-[\w-]+)\b/g)].map((match) => match[1]));
 const dynamicIds = (source) => new Set([...source.matchAll(/(?:\.id\s*=|setAttribute\(\s*["']id["']\s*,)\s*["']([\w-]+)/g)]
@@ -284,6 +297,14 @@ test("does not treat commented Rust handler entries as registrations", () => {
   const source = "generate_handler![\n  // update_global_hotkey,\n  /// update_global_hotkey\n  //! update_global_hotkey\n  /* update_global_hotkey */\n]";
 
   assert.equal(registeredCommands(source).has("update_global_hotkey"), false);
+});
+
+test("ignores handler entry attributes without registering absent commands", () => {
+  const source = "generate_handler![\n  #[cfg(desktop)]\n  get_config,\n]";
+  const commands = registeredCommands(source);
+
+  assert.equal(commands.has("get_config"), true);
+  assert.equal(commands.has("save_config"), false);
 });
 
 test("ignores nested Rust block comments when extracting handler registrations", () => {
