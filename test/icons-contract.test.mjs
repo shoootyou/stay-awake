@@ -3,7 +3,8 @@
  * @interface iconAssets(): void
  * @behavior
  *   - Ships the mapped local SVG icons and uses their geometry inline in Settings.
- *   - Removes Phosphor and product emoji while preserving localized accessible names.
+ *   - Allows only fixed tray-menu emoji glyphs in the Rust tray module.
+ *   - Removes every other product emoji while preserving localized accessible names.
  *   - Keeps decorative icons hidden from assistive technology and CSP local-only.
  * @edge-cases
  *   - Dynamic network removal names include the SSID without HTML interpolation.
@@ -63,6 +64,15 @@ const emojiEscape = new RegExp([
   String.raw`\\u\{(?:1F[3-9A-Fa-f][0-9A-Fa-f]{2}|260[0-9A-Fa-f]|27[0-9A-Fa-f]{2}|FE0F|2764|2665)\}`,
   String.raw`\\u(?:D83[C-F]|D8[0-9A-Fa-f]{2}|D[CE][0-9A-Fa-f]{2}|260[0-9A-Fa-f]|27[0-9A-Fa-f]{2}|FE0F|2764|2665)`,
 ].join("|"), "u");
+const trayMenuEmoji = ["🟢", "⚪", "📅", "⏸️", "⚠️"];
+const trayMenuEmojiEscapes = [
+  String.raw`\u{1f7e2}`, String.raw`\u{26aa}`, String.raw`\u{1f4c5}`,
+  String.raw`\u{23f8}\u{fe0f}`, String.raw`\u{26a0}\u{fe0f}`,
+];
+const trayMenuEmojiConstants = new Map([
+  ["TRAY_ACTIVE_EMOJI", "🟢"], ["TRAY_INACTIVE_EMOJI", "⚪"],
+  ["TRAY_WAITING_EMOJI", "📅"], ["TRAY_PAUSED_EMOJI", "⏸️"],
+]);
 
 // Mutant: replace an original asset, retain a silhouette, or restore template rendering.
 test("restores the original dimmable tray assets and removes silhouette assets", () => {
@@ -147,14 +157,24 @@ test("removes Phosphor while retaining Geist and local-only frontend resources",
   assert.match(frontend, /font-family:\s*["']Geist/i, "Geist must remain used");
 });
 
-// Mutant: reintroduce a product emoji, including an escaped Unicode spelling.
-test("contains no product emoji in shipped frontend, Rust, or locale sources", () => {
+// Mutant: add a non-tray emoji or move an allowed tray glyph into another source file.
+test("allows only fixed tray-menu glyphs in lib.rs and no other product emoji", () => {
   for (const path of productFiles) {
-    const source = stripComments(readFileSync(path, "utf8"),
+    let source = stripComments(readFileSync(path, "utf8"),
       path.endsWith(".html") ? ".html" : ".code");
+    if (relative(root, path) === "src-tauri/src/lib.rs") {
+      for (const glyph of trayMenuEmoji) source = source.replaceAll(glyph, "");
+      for (const escapedGlyph of trayMenuEmojiEscapes) {
+        source = source.replaceAll(escapedGlyph, "");
+      }
+    }
     assert.equal(emoji.test(source), false, `${relative(root, path)} contains a product emoji`);
     assert.equal(emojiEscape.test(source), false,
       `${relative(root, path)} contains an escaped product emoji`);
+  }
+  const lib = read("src-tauri/src/lib.rs");
+  for (const [name, glyph] of trayMenuEmojiConstants) {
+    assert.match(lib, new RegExp(`const\\s+${name}\\s*:\\s*&str\\s*=\\s*"${glyph}"`));
   }
 });
 
