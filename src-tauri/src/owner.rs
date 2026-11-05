@@ -1,3 +1,14 @@
+/*
+ * @spec-handoff
+ * @interface RuntimeHandle::spawn(OwnerStart) -> Result<RuntimeHandle, String>
+ * @interface RuntimeHandle::{post, request, query, update_config, shutdown}
+ * @behavior
+ *   - The owner serializes Startup, routes, snapshots, and config revisions on one thread.
+ *   - Replies report actual backend state and retain queued work after a caller timeout.
+ *   - Shutdown rejects new work and becomes exit-ready only after confirmed cleanup and one join.
+ * @edge-cases
+ *   - Disconnected replies, poisoned mirrors, and failed cleanup return errors without defaults.
+ */
 #![allow(dead_code)]
 
 use crate::config::AppConfig;
