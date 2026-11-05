@@ -906,89 +906,76 @@ mod tests {
     }
 
     #[test]
-    fn allows_jiggles_only_for_active_permitted_modes_and_never_for_power_only() {
-        let inside = evaluation(true);
-        let outside = evaluation(false);
-        let cases = [
-            (
-                AppMode::Manual,
-                JiggleMode::MouseSubtle,
-                false,
-                true,
-                &inside,
-                OverrideState::None,
-                false,
-            ),
-            (
-                AppMode::Manual,
-                JiggleMode::MouseSubtle,
-                true,
-                false,
-                &outside,
-                OverrideState::None,
-                true,
-            ),
-            (
-                AppMode::AlwaysOn,
-                JiggleMode::MouseSubtle,
-                true,
-                true,
-                &inside,
-                OverrideState::None,
-                true,
-            ),
-            (
-                AppMode::Manual,
-                JiggleMode::MouseSubtle,
-                true,
-                true,
-                &outside,
-                OverrideState::ForceOn {
-                    until: Some(at(18) + chrono::Duration::days(1)),
-                },
-                true,
-            ),
-            (
-                AppMode::WiFi,
-                JiggleMode::MouseSubtle,
-                true,
-                true,
-                &outside,
-                OverrideState::None,
-                false,
-            ),
-            (
-                AppMode::WiFi,
-                JiggleMode::MouseSubtle,
-                true,
-                true,
-                &inside,
-                OverrideState::None,
-                true,
-            ),
-            (
-                AppMode::Manual,
-                JiggleMode::PowerOnly,
-                true,
-                false,
-                &inside,
-                OverrideState::None,
-                false,
-            ),
-        ];
-        for (mode, jiggle_mode, active, enabled, window, override_state, expected) in cases {
-            let override_state = normalized(override_state);
-            assert_eq!(
-                should_jiggle(JiggleInput {
-                    mode: &mode,
-                    jiggle_mode: &jiggle_mode,
-                    engine_active: active,
-                    schedule_enabled: enabled,
-                    window,
-                    override_state: &override_state
-                }),
-                expected
-            );
+    fn requires_the_full_jiggle_policy_matrix() {
+        for mode in [
+            AppMode::Manual,
+            AppMode::AlwaysOn,
+            AppMode::WiFi,
+            AppMode::Scheduled,
+        ] {
+            for active in [false, true] {
+                for enabled in [false, true] {
+                    for inside in [false, true] {
+                        let window = evaluation(inside);
+                        let mut raw_overrides = vec![OverrideState::None];
+                        if enabled && mode != AppMode::WiFi {
+                            raw_overrides.push(if inside {
+                                OverrideState::SkipWindow(occurrence())
+                            } else {
+                                OverrideState::ForceOn {
+                                    until: Some(at(18) + chrono::Duration::days(1)),
+                                }
+                            });
+                        }
+                        for raw_override in raw_overrides {
+                            let override_state = normalize_override(NormalizeInput {
+                                mode: &mode,
+                                schedule_enabled: enabled,
+                                window: &window,
+                                override_state: &raw_override,
+                                event: LifecycleEvent::Tick,
+                            });
+                            let expected = active
+                                && match JiggleMode::MouseSubtle {
+                                    JiggleMode::PowerOnly => false,
+                                    _ if !enabled => true,
+                                    _ if effective_mode(&mode) == AppMode::WiFi => inside,
+                                    _ => {
+                                        inside
+                                            && !matches!(
+                                                override_state.as_state(),
+                                                OverrideState::SkipWindow(_)
+                                            )
+                                            || matches!(
+                                                override_state.as_state(),
+                                                OverrideState::ForceOn { .. }
+                                            )
+                                    }
+                                };
+                            assert_eq!(
+                                should_jiggle(JiggleInput {
+                                    mode: &mode,
+                                    jiggle_mode: &JiggleMode::MouseSubtle,
+                                    engine_active: active,
+                                    schedule_enabled: enabled,
+                                    window: &window,
+                                    override_state: &override_state,
+                                }),
+                                expected,
+                                "{mode:?}, active={active}, enabled={enabled}, inside={inside}, {raw_override:?}"
+                            );
+                            assert!(!should_jiggle(JiggleInput {
+                                mode: &mode,
+                                jiggle_mode: &JiggleMode::PowerOnly,
+                                engine_active: active,
+                                schedule_enabled: enabled,
+                                window: &window,
+                                override_state: &override_state,
+                            }));
+                        }
+                    }
+                }
+            }
         }
     }
 
