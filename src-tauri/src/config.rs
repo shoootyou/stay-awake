@@ -175,23 +175,19 @@ impl AppConfig {
 mod tests {
     /*
      * @spec-handoff
-     * @interface AppConfig JSON serialization and deserialization
+     * @interface AppConfig JSON serialization and runtime::effective_mode(&AppMode)
      * @behavior
-     *   - A Linux default serializes byte-for-byte as the committed golden JSON.
+     *   - Legacy Scheduled JSON remains persisted as Scheduled and runs as Manual.
+     *   - A default config retains the established persisted key set.
      *   - Legacy JSON without `wifi` loads with the disabled empty WiFi default.
      *   - Unknown JSON fields are ignored by the current migration contract.
      * @edge-cases
-     *   - Invalid enum values remain deserialization errors.
+     *   - No runtime-only field is persisted.
      */
     use super::*;
 
-    // Test-only compatibility seam; production must not rewrite persisted configuration.
-    fn effective_mode(mode: AppMode) -> AppMode {
-        mode
-    }
-
     #[test]
-    fn legacy_scheduled_deserializes_without_a_new_persisted_field_and_normalizes_to_manual() {
+    fn legacy_scheduled_json_remains_persisted_and_uses_manual_runtime_behavior() {
         let json = r#"{
             "mode":"Scheduled", "jiggle_mode":"MouseSubtle", "interval_secs":30,
             "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
@@ -201,9 +197,49 @@ mod tests {
         }"#;
         let config: AppConfig = serde_json::from_str(json).expect("legacy shape must deserialize");
         assert_eq!(config.mode, AppMode::Scheduled);
-        assert_eq!(effective_mode(config.mode.clone()), AppMode::Manual);
-        let serialized = serde_json::to_value(config).expect("existing shape must serialize");
-        assert!(serialized.get("runtime_override").is_none());
+        assert_eq!(
+            serde_json::to_value(&config)
+                .expect("legacy config must serialize")
+                .get("mode"),
+            Some(&serde_json::Value::String("Scheduled".to_owned()))
+        );
+        assert_eq!(
+            crate::runtime::effective_mode(&config.mode),
+            AppMode::Manual
+        );
+    }
+
+    #[test]
+    fn default_config_serializes_to_the_established_persisted_key_set() {
+        let serialized =
+            serde_json::to_value(AppConfig::default()).expect("default config serializes");
+        let mut keys = serialized
+            .as_object()
+            .expect("config serializes as an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "active_profile",
+                "autostart",
+                "global_hotkey",
+                "interval_secs",
+                "jiggle_mode",
+                "language",
+                "mode",
+                "profiles",
+                "schedule_days",
+                "schedule_enabled",
+                "schedule_end_hour",
+                "schedule_end_minute",
+                "schedule_start_hour",
+                "schedule_start_minute",
+                "wifi",
+            ]
+        );
     }
 
     #[test]
