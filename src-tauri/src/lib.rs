@@ -2424,9 +2424,165 @@ mod core_helper_tests {
 #[cfg(test)]
 mod native_wiring_contract_tests {
     use super::*;
+    use chrono::{FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    struct SetupClock;
+
+    impl schedule::Clock for SetupClock {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed setup time exists")
+        }
+
+        fn to_local(&self, instant: chrono::DateTime<Utc>) -> chrono::DateTime<FixedOffset> {
+            instant.with_timezone(&FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(&self, local: NaiveDateTime) -> LocalResult<chrono::DateTime<Utc>> {
+            LocalResult::Single(local.and_utc())
+        }
+    }
+
+    struct ActiveSetupBackend {
+        active: Arc<AtomicBool>,
+        released: mpsc::Sender<()>,
+    }
+
+    impl runtime::EngineBackend for ActiveSetupBackend {
+        fn start(&mut self) -> Result<(), String> {
+            self.active.store(true, Ordering::Release);
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            self.active.store(false, Ordering::Release);
+            self.released
+                .send(())
+                .map_err(|_| "release observer disconnected".to_owned())
+        }
+
+        fn is_active(&self) -> bool {
+            self.active.load(Ordering::Acquire)
+        }
+
+        fn set_jiggle_policy(&mut self, _: runtime::JigglePolicy) {}
+    }
+
+    struct SetupSink;
+
+    impl TraySink for SetupSink {
+        fn publish(&mut self, _: TrayRoute, _: &TrayPresentation) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn active_setup_runtime(released: mpsc::Sender<()>) -> (owner::RuntimeHandle, Arc<AtomicBool>) {
+        let active = Arc::new(AtomicBool::new(false));
+        let backend_active = active.clone();
+        let runtime = owner::RuntimeHandle::spawn(owner::OwnerStart {
+            config: Arc::new(Mutex::new(AppConfig {
+                mode: config::AppMode::AlwaysOn,
+                ..AppConfig::default()
+            })),
+            bundle: Arc::new(Mutex::new(i18n::create_bundle("en"))),
+            clock: Arc::new(SetupClock),
+            backend_factory: Box::new(move |_, _| {
+                Box::new(ActiveSetupBackend {
+                    active: backend_active,
+                    released,
+                })
+            }),
+            sink: Box::new(SetupSink),
+        })
+        .expect("active setup owner spawns");
+        assert!(
+            runtime
+                .query()
+                .expect("startup query sends")
+                .wait(owner::REQUEST_TIMEOUT)
+                .expect("startup query replies")
+                .snapshot
+                .expect("startup snapshot exists")
+                .engine_active,
+            "the fake backend is active before setup failure"
+        );
+        (runtime, active)
+    }
+
+    #[test]
+    fn post_spawn_failure_releases_an_active_owner_after_dropping_each_setup_guard() {
+        for label in ["config", "monitor"] {
+            let (released, release_receiver) = mpsc::channel();
+            let (runtime, active) = active_setup_runtime(released);
+            let guard = Arc::new(Mutex::new(()));
+            let step_guard = guard.clone();
+            let shutdown_guard = guard.clone();
+            let error = format!("{label} lock failed");
+            let expected = error.clone();
+            let steps: Vec<PostSpawnStep<'_>> = vec![Box::new(move || {
+                let held = step_guard.lock().expect("setup guard locks");
+                drop(held);
+                Err(error)
+            })];
+            let result = run_post_spawn_steps(&runtime, steps, move |runtime| {
+                drop(
+                    shutdown_guard
+                        .try_lock()
+                        .expect("setup guard drops before shutdown"),
+                );
+                runtime.shutdown(owner::SHUTDOWN_TIMEOUT)?;
+                release_receiver
+                    .recv_timeout(owner::REQUEST_TIMEOUT)
+                    .expect("active backend releases before setup returns");
+                Ok(())
+            });
+            assert_eq!(result, Err(expected), "{label} failure remains primary");
+            assert!(
+                !active.load(Ordering::Acquire),
+                "{label} failure returns only after releasing the active backend"
+            );
+        }
+    }
+
+    #[test]
+    fn post_spawn_success_runs_all_steps_without_shutdown() {
+        let (released, _release_receiver) = mpsc::channel();
+        let (runtime, _) = active_setup_runtime(released);
+        let ran = Arc::new(AtomicBool::new(false));
+        let step_ran = ran.clone();
+        let steps: Vec<PostSpawnStep<'_>> = vec![Box::new(move || {
+            step_ran.store(true, Ordering::Release);
+            Ok(())
+        })];
+        let result = run_post_spawn_steps(&runtime, steps, |_| {
+            panic!("successful post-spawn steps must not shut down the owner")
+        });
+        assert_eq!(result, Ok(()));
+        assert!(ran.load(Ordering::Acquire));
+        runtime
+            .shutdown(owner::SHUTDOWN_TIMEOUT)
+            .expect("test owner cleanup succeeds");
+    }
+
+    #[test]
+    fn post_spawn_returns_the_step_error_before_a_shutdown_error() {
+        let (released, _release_receiver) = mpsc::channel();
+        let (runtime, _) = active_setup_runtime(released);
+        let steps: Vec<PostSpawnStep<'_>> = vec![Box::new(|| Err("config lock failed".to_owned()))];
+        let result =
+            run_post_spawn_steps(&runtime, steps, |_| Err("monitor lock failed".to_owned()));
+        assert_eq!(
+            result,
+            Err("config lock failed; owner shutdown failed: monitor lock failed".to_owned())
+        );
+        runtime
+            .shutdown(owner::SHUTDOWN_TIMEOUT)
+            .expect("test owner cleanup succeeds");
+    }
 
     struct FakeUiExecutor {
         tasks: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
