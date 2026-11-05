@@ -1421,6 +1421,10 @@ mod tray_refresh_contract_tests {
             let mut supervisor = runtime::Supervisor::new();
             let mut backend = RecordingBackend::default();
             let mut sink = RecordingSink::default();
+            handle_runtime_route(RuntimeRouteInput { route: TrayRoute::Startup, config: &config, clock: &clock,
+                bundle: &i18n::create_bundle("en") }, &mut supervisor, &mut backend, &mut sink)
+                .expect("startup publishes");
+            sink.calls.clear();
             handle_runtime_route(RuntimeRouteInput { route, config: &config, clock: &clock,
                 bundle: &i18n::create_bundle(locale) }, &mut supervisor, &mut backend, &mut sink)
                 .expect("route publishes");
