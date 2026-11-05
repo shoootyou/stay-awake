@@ -121,7 +121,8 @@ mod tests {
     use chrono::TimeZone;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
-    const NEW_KEYS: [&str; 11] = [
+    const NEW_KEYS: [&str; 12] = [
+        "tray-inactive",
         "tray-waiting",
         "tray-paused",
         "tray-active-override",
