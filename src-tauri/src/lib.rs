@@ -1408,6 +1408,27 @@ mod tray_refresh_contract_tests {
     }
 
     #[test]
+    fn runtime_routes_rebuild_mode_text_from_config_and_language() {
+        let clock = FixedClock(at(10));
+        let mut config = AppConfig::default();
+        config.mode = AppMode::WiFi;
+        for (route, locale, expected) in [
+            (TrayRoute::Startup, "en", "Mode: WiFi"),
+            (TrayRoute::Tick, "en", "Mode: WiFi"),
+            (TrayRoute::ConfigChanged { policy_changed: false }, "en", "Mode: WiFi"),
+            (TrayRoute::LanguageChanged, "es", "Modo: WiFi"),
+        ] {
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend::default();
+            let mut sink = RecordingSink::default();
+            handle_runtime_route(RuntimeRouteInput { route, config: &config, clock: &clock,
+                bundle: &i18n::create_bundle(locale) }, &mut supervisor, &mut backend, &mut sink)
+                .expect("route publishes");
+            assert_eq!(sink.calls[0].1.mode_text, expected, "{route:?}");
+        }
+    }
+
+    #[test]
     fn language_change_without_a_snapshot_returns_an_error_without_backend_or_publication() {
         let clock = FixedClock(at(10));
         let bundle = i18n::create_bundle("en");
