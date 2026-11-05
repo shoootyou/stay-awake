@@ -9,11 +9,11 @@
  * @edge-cases
  *   - Disconnected replies, poisoned mirrors, and failed cleanup return errors without defaults.
  */
-#![allow(dead_code)]
-
 use crate::config::AppConfig;
 use crate::i18n::{create_bundle, Bundle};
-use crate::runtime::{EngineBackend, RuntimeSnapshot, Supervisor, SUPERVISOR_PERIOD};
+use crate::runtime::{
+    effective_mode, runtime_policy, EngineBackend, RuntimeSnapshot, Supervisor, SUPERVISOR_PERIOD,
+};
 use crate::schedule::Clock;
 use crate::{handle_runtime_route, RuntimeRouteInput, TrayRoute, TraySink};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,6 +132,24 @@ pub(crate) struct TimeSample {
 pub(crate) struct TimeChangeInput<'a> {
     pub(crate) previous: &'a TimeSample,
     pub(crate) current: &'a TimeSample,
+}
+
+/// Samples immediately before and after each receive wait for resume detection.
+pub(crate) trait TimeSource: Send {
+    fn sample(&mut self, clock: &dyn Clock) -> TimeSample;
+}
+
+struct SystemTimeSource;
+
+impl TimeSource for SystemTimeSource {
+    fn sample(&mut self, clock: &dyn Clock) -> TimeSample {
+        let wall = clock.now();
+        TimeSample {
+            offset_seconds: clock.to_local(wall).offset().local_minus_utc(),
+            wall,
+            monotonic: Instant::now(),
+        }
+    }
 }
 
 /// Treat substantial sleeping, wall-clock jumps, and offset changes as a resume hint.
@@ -305,16 +323,25 @@ impl RuntimeHandle {
     }
 
     pub(crate) fn shutdown(&self, timeout: Duration) -> Result<(), String> {
-        let _shutdown = self
-            .shared
-            .shutdown
-            .lock()
-            .map_err(|_| "shutdown lock poisoned".to_owned())?;
+        let deadline = Instant::now() + timeout;
+        let _shutdown = loop {
+            match self.shared.shutdown.try_lock() {
+                Ok(lock) => break lock,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err("shutdown lock poisoned".to_owned());
+                }
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() >= deadline => {
+                    return Err("shutdown gate timed out".to_owned());
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+        };
         if self.exit_ready() {
             return Ok(());
         }
         self.shared.closing.store(true, Ordering::Release);
-        let deadline = Instant::now() + timeout;
         if self.shared.alive.load(Ordering::Acquire) {
             let (reply, receiver) = mpsc::channel();
             self.shared
@@ -334,27 +361,37 @@ impl RuntimeHandle {
                     .unwrap_or_else(|| "owner cleanup is incomplete".to_owned()));
             }
         }
-        let mut owner = self
-            .shared
-            .owner
-            .lock()
-            .map_err(|_| "owner lock poisoned".to_owned())?;
-        let Some(handle) = owner.as_ref() else {
-            self.shared.exit_ready.store(true, Ordering::Release);
-            return Ok(());
-        };
-        while !handle.is_finished() {
+        loop {
+            let finished = self
+                .shared
+                .owner
+                .lock()
+                .map_err(|_| "owner lock poisoned".to_owned())?
+                .as_ref()
+                .map(JoinHandle::is_finished);
+            let Some(finished) = finished else {
+                return Err("owner shutdown outcome was not verified".to_owned());
+            };
+            if finished {
+                break;
+            }
             if Instant::now() >= deadline {
                 return Err("owner shutdown join timed out".to_owned());
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let handle = owner
+        let handle = self
+            .shared
+            .owner
+            .lock()
+            .map_err(|_| "owner lock poisoned".to_owned())?
             .take()
             .ok_or_else(|| "owner join handle disappeared".to_owned())?;
-        handle
+        let joined = handle
             .join()
-            .map_err(|_| "owner thread panicked during shutdown".to_owned())??;
+            .map_err(|_| "owner thread panicked during shutdown".to_owned())
+            .and_then(|result| result);
+        joined?;
         self.shared.exit_ready.store(true, Ordering::Release);
         Ok(())
     }
@@ -385,10 +422,30 @@ impl RuntimeHandle {
 fn owner_loop(
     receiver: mpsc::Receiver<OwnerCommand>,
     shared: std::sync::Weak<Shared>,
+    config: AppConfig,
+    clock: Arc<dyn Clock>,
+    backend: Box<dyn EngineBackend>,
+    sink: Box<dyn TraySink + Send>,
+) -> Result<(), String> {
+    owner_loop_with_time_source(
+        receiver,
+        shared,
+        config,
+        clock,
+        backend,
+        sink,
+        &mut SystemTimeSource,
+    )
+}
+
+fn owner_loop_with_time_source(
+    receiver: mpsc::Receiver<OwnerCommand>,
+    shared: std::sync::Weak<Shared>,
     mut config: AppConfig,
     clock: Arc<dyn Clock>,
     mut backend: Box<dyn EngineBackend>,
     mut sink: Box<dyn TraySink + Send>,
+    time_source: &mut dyn TimeSource,
 ) -> Result<(), String> {
     let _alive = OwnerAlive(shared.clone());
     let mut supervisor = Supervisor::new();
@@ -401,10 +458,14 @@ fn owner_loop(
         backend.as_mut(),
         sink.as_mut(),
     );
-    let mut last_ssid: Option<String>;
+    let mut last_ssid = None;
+    let mut configuration_fault = false;
     loop {
         let now = Instant::now();
-        if deadline_due(now, next_tick) {
+        let closing = shared
+            .upgrade()
+            .is_none_or(|state| state.closing.load(Ordering::Acquire));
+        if deadline_due(now, next_tick) && !closing {
             let _ = route_reply(
                 TrayRoute::Tick,
                 &config,
@@ -417,6 +478,7 @@ fn owner_loop(
             continue;
         }
         let wait = next_tick.saturating_duration_since(now);
+        let before_wait = time_source.sample(clock.as_ref());
         match receiver.recv_timeout(wait) {
             Ok(command) => {
                 let closing = shared
@@ -491,19 +553,39 @@ fn owner_loop(
                             });
                             continue;
                         }
+                        let previous_policy = runtime_policy(&config)?;
+                        let candidate_policy = runtime_policy(&candidate)?;
+                        let policy_changed = previous_policy != candidate_policy;
+                        let entered_wifi = effective_mode(&config.mode)
+                            != crate::config::AppMode::WiFi
+                            && effective_mode(&candidate.mode) == crate::config::AppMode::WiFi;
+                        let left_wifi = effective_mode(&config.mode)
+                            == crate::config::AppMode::WiFi
+                            && effective_mode(&candidate.mode) != crate::config::AppMode::WiFi;
+                        if entered_wifi {
+                            supervisor.reset_wifi_activation();
+                            last_ssid = None;
+                        }
+                        if left_wifi {
+                            last_ssid = None;
+                        }
                         match backend.update_config(candidate.clone()) {
                             Ok(()) => {
+                                let recovering = configuration_fault;
                                 config = candidate;
-                                let route = match origin {
-                                    ConfigOrigin::Profile => TrayRoute::ProfileLoaded {
-                                        policy_changed: true,
-                                    },
-                                    ConfigOrigin::Language => TrayRoute::LanguageChanged,
-                                    _ => TrayRoute::ConfigChanged {
-                                        policy_changed: true,
-                                    },
+                                configuration_fault = false;
+                                let route = if recovering {
+                                    TrayRoute::Startup
+                                } else {
+                                    match origin {
+                                        ConfigOrigin::Profile => {
+                                            TrayRoute::ProfileLoaded { policy_changed }
+                                        }
+                                        ConfigOrigin::Language => TrayRoute::LanguageChanged,
+                                        _ => TrayRoute::ConfigChanged { policy_changed },
+                                    }
                                 };
-                                let result = route_reply(
+                                let mut result = route_reply(
                                     route,
                                     &config,
                                     &clock,
@@ -511,13 +593,44 @@ fn owner_loop(
                                     backend.as_mut(),
                                     sink.as_mut(),
                                 );
+                                if effective_mode(&config.mode) == crate::config::AppMode::WiFi
+                                    && !entered_wifi
+                                {
+                                    let active = last_ssid.as_ref().is_some_and(|ssid| {
+                                        config.wifi.networks.iter().any(|network| network == ssid)
+                                    });
+                                    result = route_reply(
+                                        TrayRoute::WifiChanged { active },
+                                        &config,
+                                        &clock,
+                                        &mut supervisor,
+                                        backend.as_mut(),
+                                        sink.as_mut(),
+                                    );
+                                }
                                 let _ = reply.send(result);
                             }
                             Err(error) => {
+                                configuration_fault = true;
                                 let stop = backend.stop();
-                                let message = match stop { Ok(()) => format!("configuration update failed: {error}"), Err(stop_error) => format!("configuration update failed: {error}; cleanup failed: {stop_error}") };
+                                let message = match stop {
+                                    Ok(()) => format!("configuration update failed: {error}"),
+                                    Err(stop_error) => {
+                                        format!("configuration update failed: {error}; cleanup failed: {stop_error}")
+                                    }
+                                };
+                                let snapshot = supervisor
+                                    .observe(
+                                        crate::runtime::ReconcileInput {
+                                            config: &config,
+                                            clock: clock.as_ref(),
+                                            event: crate::runtime::LifecycleEvent::Tick,
+                                        },
+                                        backend.as_ref(),
+                                    )
+                                    .ok();
                                 let _ = reply.send(OwnerReply {
-                                    snapshot: supervisor.snapshot().cloned(),
+                                    snapshot,
                                     error: Some(message),
                                     terminating: false,
                                 });
@@ -525,31 +638,63 @@ fn owner_loop(
                         }
                     }
                     OwnerCommand::Wifi { observation, reply } => {
+                        if closing {
+                            send_reply(
+                                reply,
+                                OwnerReply {
+                                    snapshot: supervisor.snapshot().cloned(),
+                                    error: Some("runtime is shutting down".to_owned()),
+                                    terminating: false,
+                                },
+                            );
+                            continue;
+                        }
                         last_ssid = observation.ssid;
                         let active = last_ssid.as_ref().is_some_and(|ssid| {
                             config.wifi.networks.iter().any(|network| network == ssid)
                         });
-                        let result = route_reply(
-                            TrayRoute::WifiChanged { active },
-                            &config,
-                            &clock,
-                            &mut supervisor,
-                            backend.as_mut(),
-                            sink.as_mut(),
-                        );
+                        let result = if configuration_fault {
+                            OwnerReply {
+                                snapshot: supervisor.snapshot().cloned(),
+                                error: None,
+                                terminating: false,
+                            }
+                        } else {
+                            route_reply(
+                                TrayRoute::WifiChanged { active },
+                                &config,
+                                &clock,
+                                &mut supervisor,
+                                backend.as_mut(),
+                                sink.as_mut(),
+                            )
+                        };
                         send_reply(reply, result);
                     }
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = route_reply(
-                    TrayRoute::Tick,
-                    &config,
-                    &clock,
-                    &mut supervisor,
-                    backend.as_mut(),
-                    sink.as_mut(),
-                );
+                let after_wait = time_source.sample(clock.as_ref());
+                let closing = shared
+                    .upgrade()
+                    .is_none_or(|state| state.closing.load(Ordering::Acquire));
+                if !closing {
+                    let _ = route_reply(
+                        if detect_time_change(TimeChangeInput {
+                            previous: &before_wait,
+                            current: &after_wait,
+                        }) {
+                            TrayRoute::Resume
+                        } else {
+                            TrayRoute::Tick
+                        },
+                        &config,
+                        &clock,
+                        &mut supervisor,
+                        backend.as_mut(),
+                        sink.as_mut(),
+                    );
+                }
                 next_tick = Instant::now() + SUPERVISOR_PERIOD;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {

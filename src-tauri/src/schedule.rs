@@ -1,5 +1,3 @@
-#![allow(dead_code)] // wired in E3b
-
 use crate::config::AppConfig;
 use chrono::{
     DateTime, Datelike, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,

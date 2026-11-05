@@ -1,5 +1,3 @@
-#![allow(dead_code)] // wired in E3b
-
 use crate::config::{AppConfig, AppMode, JiggleMode};
 use crate::schedule::{Clock, Occurrence, Schedule, ScheduleEvaluation};
 use chrono::{DateTime, Utc};
@@ -18,6 +16,13 @@ pub(crate) fn effective_mode(mode: &AppMode) -> AppMode {
 pub(crate) struct RuntimePolicy {
     pub(crate) mode: AppMode,
     pub(crate) schedule: Schedule,
+}
+
+pub(crate) fn runtime_policy(config: &AppConfig) -> Result<RuntimePolicy, String> {
+    Ok(RuntimePolicy {
+        mode: effective_mode(&config.mode),
+        schedule: Schedule::from_config(config)?,
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -294,9 +299,11 @@ pub(crate) fn decide_lifecycle(input: LifecycleInput<'_>) -> LifecycleDecision {
         LifecycleEvent::ConfigChanged {
             policy_changed: true,
         } => match mode {
-            AppMode::AlwaysOn => input.previous_policy.is_none_or(|previous| {
-                previous.mode != AppMode::AlwaysOn || previous.schedule.enabled
-            }),
+            AppMode::AlwaysOn => {
+                input.previous_policy.is_none_or(|previous| {
+                    previous.mode != AppMode::AlwaysOn || previous.schedule.enabled
+                }) || input.engine_active
+            }
             AppMode::WiFi => {
                 if input
                     .previous_policy
@@ -564,7 +571,41 @@ impl Supervisor {
         self.last_snapshot.as_ref()
     }
 
-    #[allow(dead_code)] // skeleton: wired in boundary 3/4
+    pub(crate) fn observe(
+        &mut self,
+        input: ReconcileInput<'_>,
+        backend: &dyn EngineBackend,
+    ) -> Result<RuntimeSnapshot, String> {
+        let at = input.clock.now();
+        let schedule = Schedule::from_config(input.config)?;
+        let window = crate::schedule::evaluate_schedule(crate::schedule::ScheduleInput {
+            schedule: &schedule,
+            at,
+            clock: input.clock,
+        })?;
+        let normalized = normalize_override(NormalizeInput {
+            mode: &input.config.mode,
+            schedule_enabled: schedule.enabled,
+            window: &window,
+            override_state: &self.override_state,
+            event: input.event,
+        });
+        let snapshot = RuntimeSnapshot {
+            engine_active: backend.is_active(),
+            status: derive_tray_status(TrayInput {
+                mode: &input.config.mode,
+                engine_active: backend.is_active(),
+                schedule_enabled: schedule.enabled,
+                window: &window,
+                override_state: &normalized,
+            }),
+            override_state: normalized,
+            window,
+        };
+        self.last_snapshot = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+
     pub(crate) fn reset_wifi_activation(&mut self) {
         self.wifi_active = false;
     }
