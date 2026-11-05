@@ -121,7 +121,7 @@ mod tests {
     use chrono::TimeZone;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
-    const NEW_KEYS: [&str; 13] = [
+    const NEW_KEYS: [&str; 17] = [
         "tray-inactive",
         "tray-waiting",
         "tray-paused",
@@ -133,6 +133,10 @@ mod tests {
         "tray-no-next-window",
         "schedule-enabled-hint",
         "schedule-wifi-alert",
+        "tray-app-mode",
+        "tray-app-mode-manual",
+        "tray-app-mode-always-on",
+        "tray-app-mode-wifi",
         "settings-mode-info-label",
         "settings-wifi-remove-label",
     ];
@@ -196,6 +200,10 @@ mod tests {
                 "schedule-wifi-alert",
                 "In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.",
             ),
+            ("tray-app-mode", "Mode: { $mode }"),
+            ("tray-app-mode-manual", "Manual"),
+            ("tray-app-mode-always-on", "Always On"),
+            ("tray-app-mode-wifi", "WiFi"),
             ("settings-mode-info-label", "About jiggle modes"),
             ("settings-wifi-remove-label", "Remove network Lab"),
         ] {

@@ -3481,6 +3481,40 @@ mod native_wiring_contract_tests {
     }
 
     #[test]
+    fn tray_menu_places_a_disabled_localized_app_mode_line_before_its_first_separator() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+        let paint = scoped_block(&source, "impl TrayPaintTargets for NativeTrayTargets {");
+        let compact_setup = setup.split_whitespace().collect::<String>();
+
+        assert!(
+            source.contains("fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String"),
+            "the app-mode line needs a pure localized label function"
+        );
+        assert!(
+            source.contains("mode_text: String"),
+            "tray presentations retain the localized app-mode text"
+        );
+        assert!(
+            setup.contains(r#"MenuItem::with_id(app, "mode_info", &initial_presentation.mode_text, false"#),
+            "the app-mode line has its own disabled menu item"
+        );
+        assert!(
+            compact_setup.contains("&toggle_item,&toggle_hint,&mode_info,&sep1,"),
+            "the app-mode line is third, before the first separator"
+        );
+        assert!(
+            !menu.contains(r#""mode_info""#),
+            "the disabled app-mode line has no menu-event branch"
+        );
+        assert!(
+            paint.contains("self.mode_item.set_text(&presentation.mode_text)"),
+            "every paint updates the app-mode line"
+        );
+    }
+
+    #[test]
     fn setup_uses_actual_initial_presentation_and_installs_wifi_listener_before_monitor_start() {
         let source = source();
         let setup = scoped_block(&source, ".setup(|app| {");
