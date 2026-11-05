@@ -1643,6 +1643,166 @@ mod tests {
     }
 
     #[test]
+    fn config_transaction_reports_saved_but_not_applied_when_owner_disconnects_after_save() {
+        let initial = AppConfig::default();
+        let config = Arc::new(Mutex::new(initial.clone()));
+        let bundle = Arc::new(Mutex::new(crate::i18n::create_bundle("en")));
+        let (handle, receiver) = RuntimeHandle::for_config_transaction(OwnerShared::new(
+            config.clone(),
+            bundle,
+            Mutex::new(()),
+        ));
+        let persisted = Arc::new(AtomicBool::new(false));
+        let saved = persisted.clone();
+
+        let error = handle
+            .update_config_with(
+                ConfigOrigin::Settings,
+                |candidate| {
+                    candidate.interval_secs = 60;
+                    Ok(())
+                },
+                |_, _| panic!("effects must not run when runtime delivery disconnects"),
+                move |_| {
+                    saved.store(true, Ordering::Release);
+                    receiver.disconnect();
+                    Ok(())
+                },
+            )
+            .err()
+            .expect("a disconnected owner cannot accept a saved configuration");
+
+        assert!(
+            persisted.load(Ordering::Acquire),
+            "the candidate was saved first"
+        );
+        assert_eq!(error, "configuration saved, runtime unavailable");
+        assert_eq!(
+            config
+                .lock()
+                .expect("mirror remains readable")
+                .interval_secs,
+            60,
+            "the durable saved mirror is retained without inventing runtime acceptance"
+        );
+        assert_eq!(
+            initial.interval_secs, 30,
+            "the fixture starts with its prior value"
+        );
+    }
+
+    #[test]
+    fn config_transaction_rejects_a_poisoned_mutation_lock_without_persisting_a_default() {
+        let mutations = Mutex::new(());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutations.lock().expect("fresh mutation lock");
+            panic!("poison mutation lock");
+        }));
+        let (handle, _receiver) = RuntimeHandle::for_config_transaction(OwnerShared::new(
+            Arc::new(Mutex::new(AppConfig::default())),
+            Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            mutations,
+        ));
+        let persisted = Arc::new(AtomicBool::new(false));
+        let saved = persisted.clone();
+
+        let error = handle
+            .update_config_with(
+                ConfigOrigin::Settings,
+                |_| Ok(()),
+                |_, _| {},
+                move |_| {
+                    saved.store(true, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .err()
+            .expect("a poisoned mutation gate is an explicit transaction failure");
+
+        assert_eq!(error, "configuration mutation lock poisoned");
+        assert!(
+            !persisted.load(Ordering::Acquire),
+            "a poisoned gate must not save a fabricated default configuration"
+        );
+    }
+
+    #[test]
+    fn config_transaction_rejects_a_poisoned_config_mirror_without_persisting() {
+        let config = Mutex::new(AppConfig::default());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = config.lock().expect("fresh config mirror");
+            panic!("poison config mirror");
+        }));
+        let (handle, _receiver) = RuntimeHandle::for_config_transaction(OwnerShared::new(
+            Arc::new(config),
+            Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            Mutex::new(()),
+        ));
+        let persisted = Arc::new(AtomicBool::new(false));
+        let saved = persisted.clone();
+
+        let error = handle
+            .update_config_with(
+                ConfigOrigin::Settings,
+                |_| Ok(()),
+                |_, _| {},
+                move |_| {
+                    saved.store(true, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .err()
+            .expect("a poisoned config mirror is an explicit transaction failure");
+
+        assert_eq!(error, "config lock poisoned");
+        assert!(!persisted.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn config_transaction_reports_saved_but_not_applied_for_a_poisoned_bundle_mirror() {
+        let bundle = Mutex::new(crate::i18n::create_bundle("en"));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = bundle.lock().expect("fresh bundle mirror");
+            panic!("poison bundle mirror");
+        }));
+        let config = Arc::new(Mutex::new(AppConfig::default()));
+        let (handle, _receiver) = RuntimeHandle::for_config_transaction(OwnerShared::new(
+            config.clone(),
+            Arc::new(bundle),
+            Mutex::new(()),
+        ));
+        let persisted = Arc::new(AtomicBool::new(false));
+        let saved = persisted.clone();
+
+        let error = handle
+            .update_config_with(
+                ConfigOrigin::Language,
+                |candidate| {
+                    candidate.language = "es".to_owned();
+                    Ok(())
+                },
+                |_, _| {},
+                move |_| {
+                    saved.store(true, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .err()
+            .expect("a poisoned bundle mirror cannot publish a saved language change");
+
+        assert!(persisted.load(Ordering::Acquire));
+        assert_eq!(error, "bundle lock poisoned after configuration save");
+        assert_eq!(
+            config
+                .lock()
+                .expect("config mirror remains readable")
+                .language,
+            "en",
+            "a failed mirror publication must not claim the runtime accepted the new language"
+        );
+    }
+
+    #[test]
     fn unrelated_config_change_keeps_the_current_skip_window() {
         let config = AppConfig {
             schedule_enabled: true,
