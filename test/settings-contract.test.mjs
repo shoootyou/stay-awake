@@ -256,7 +256,7 @@ test("renders literal translated network names without frontend placeholder subs
   const invoke = async (command, args) => {
     if (command !== "get_translation") return undefined;
     const template = language === "en" ? "Remove network {$network}" : "Quitar red {$network}";
-    return args.network === undefined ? template : template.replace("{$network}", args.network);
+    return args.network === undefined ? template : template.replace("{$network}", () => args.network);
   };
   const context = vm.createContext({
     window: {
