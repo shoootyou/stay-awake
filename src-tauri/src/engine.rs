@@ -1,5 +1,16 @@
-//! Core anti-inactivity engine with state machine and timer.
-
+/**
+ * @spec-handoff
+ * @interface Engine::new_with_clock(), set_jiggle_policy(), update_config(), start(), stop()
+ * @behavior
+ *   - A worker samples its injected clock and jiggles outside a schedule only with ForceOn.
+ *   - Config and policy updates expose a coherent worker snapshot.
+ *   - Stop releases inhibition before joining a blocked worker and prevents overlapping workers.
+ *
+ * @edge-cases
+ *   - Non-policy config changes retain a valid ForceOn override.
+ *   - A blocked worker does not permit a second acquisition before it is joined.
+ */
+// Core anti-inactivity engine with state machine and timer.
 use crate::config::{AppConfig, JiggleMode};
 use crate::platform::{MouseDriver, PowerInhibitor};
 use crate::runtime::{
@@ -367,6 +378,7 @@ mod tests {
      */
     use super::*;
     use crate::runtime::OverrideState;
+    use chrono::{TimeZone, Utc};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Instant;
@@ -390,6 +402,50 @@ mod tests {
     struct CountingMouse {
         positions: Arc<AtomicUsize>,
         moves: Arc<AtomicUsize>,
+    }
+
+    struct SignalingMouse {
+        jiggles: mpsc::Sender<()>,
+    }
+
+    impl MouseDriver for SignalingMouse {
+        fn move_relative(&self, _: i32, _: i32) -> Result<(), String> {
+            self.jiggles
+                .send(())
+                .map_err(|_| "jiggle observer disconnected".to_owned())
+        }
+
+        fn get_position(&self) -> Result<(i32, i32), String> {
+            Ok((0, 0))
+        }
+
+        fn jiggle_zen(&self) -> Result<(), String> {
+            self.jiggles
+                .send(())
+                .map_err(|_| "jiggle observer disconnected".to_owned())
+        }
+    }
+
+    struct FixedClock(chrono::DateTime<Utc>);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            self.0
+        }
+
+        fn to_local(
+            &self,
+            instant: chrono::DateTime<Utc>,
+        ) -> chrono::DateTime<chrono::FixedOffset> {
+            instant.with_timezone(&chrono::FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(
+            &self,
+            local: chrono::NaiveDateTime,
+        ) -> chrono::LocalResult<chrono::DateTime<Utc>> {
+            chrono::LocalResult::Single(local.and_utc())
+        }
     }
 
     impl MouseDriver for CountingMouse {
@@ -492,10 +548,12 @@ mod tests {
 
     struct SignalingPower {
         released: mpsc::Sender<()>,
+        starts: Arc<AtomicUsize>,
     }
 
     impl PowerInhibitor for SignalingPower {
         fn inhibit_sleep(&mut self, _: &str) -> Result<(), String> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -618,6 +676,108 @@ mod tests {
     }
 
     #[test]
+    fn injected_clock_allows_outside_schedule_jiggles_only_for_force_on() {
+        let outside = Utc
+            .with_ymd_and_hms(2026, 3, 2, 18, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let config = Arc::new(Mutex::new(AppConfig {
+            jiggle_mode: JiggleMode::MouseZen,
+            interval_secs: 1,
+            schedule_enabled: true,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        }));
+        let (without_force_sender, without_force_receiver) = mpsc::channel();
+        let (mut without_force, _, _) = engine_with_clock(
+            Box::new(SignalingMouse {
+                jiggles: without_force_sender,
+            }),
+            Arc::clone(&config),
+            Arc::new(FixedClock(outside)),
+        );
+        without_force
+            .start()
+            .expect("engine starts without ForceOn");
+        assert!(
+            without_force_receiver
+                .recv_timeout(Duration::from_millis(1200))
+                .is_err(),
+            "outside-window worker must not jiggle without ForceOn"
+        );
+        without_force.stop().expect("engine stops without ForceOn");
+
+        let (with_force_sender, with_force_receiver) = mpsc::channel();
+        let (mut with_force, _, _) = engine_with_clock(
+            Box::new(SignalingMouse {
+                jiggles: with_force_sender,
+            }),
+            config,
+            Arc::new(FixedClock(outside)),
+        );
+        with_force.set_jiggle_policy(JigglePolicy {
+            override_state: OverrideState::ForceOn {
+                until: Some(outside + chrono::Duration::hours(1)),
+            },
+        });
+        with_force.start().expect("engine starts with ForceOn");
+        with_force_receiver
+            .recv_timeout(Duration::from_millis(1200))
+            .expect("ForceOn permits the outside-window jiggle");
+        with_force.stop().expect("engine stops with ForceOn");
+    }
+
+    #[test]
+    fn config_updates_clear_force_on_only_when_the_runtime_policy_changes() {
+        let outside = Utc
+            .with_ymd_and_hms(2026, 3, 2, 18, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let config = Arc::new(Mutex::new(AppConfig {
+            schedule_enabled: true,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        }));
+        let (mut engine, _, _) = engine_with_clock(
+            Box::new(Mouse),
+            Arc::clone(&config),
+            Arc::new(FixedClock(outside)),
+        );
+        let force_on = JigglePolicy {
+            override_state: OverrideState::ForceOn {
+                until: Some(outside + chrono::Duration::hours(1)),
+            },
+        };
+        engine.set_jiggle_policy(force_on.clone());
+
+        let mut changed_schedule = config.lock().expect("config lock").clone();
+        changed_schedule.schedule_days = vec!["tue".to_owned()];
+        engine
+            .update_config(changed_schedule.clone())
+            .expect("policy change updates the worker snapshot");
+        let snapshot = worker_snapshot(&engine.config, &engine.worker_control)
+            .expect("worker snapshot is readable");
+        assert_eq!(
+            snapshot.config.schedule_days,
+            changed_schedule.schedule_days
+        );
+        assert_eq!(snapshot.policy.override_state, OverrideState::None);
+
+        engine.set_jiggle_policy(force_on.clone());
+        let mut non_policy = changed_schedule;
+        non_policy.interval_secs = 2;
+        non_policy.jiggle_mode = JiggleMode::MouseZen;
+        engine
+            .update_config(non_policy.clone())
+            .expect("non-policy update succeeds");
+        let snapshot = worker_snapshot(&engine.config, &engine.worker_control)
+            .expect("worker snapshot is readable");
+        assert_eq!(snapshot.config.interval_secs, non_policy.interval_secs);
+        assert_eq!(snapshot.config.jiggle_mode, non_policy.jiggle_mode);
+        assert_eq!(snapshot.policy, force_on);
+    }
+
+    #[test]
     fn power_only_never_calls_the_mouse_driver_while_mouse_subtle_does() {
         let power_only_positions = Arc::new(AtomicUsize::new(0));
         let power_only_moves = Arc::new(AtomicUsize::new(0));
@@ -668,6 +828,7 @@ mod tests {
         let (continue_sender, continue_receiver) = mpsc::channel();
         let (released_sender, released_receiver) = mpsc::channel();
         let moves = Arc::new(AtomicUsize::new(0));
+        let starts = Arc::new(AtomicUsize::new(0));
         let config = Arc::new(Mutex::new(AppConfig {
             jiggle_mode: JiggleMode::MouseSubtle,
             interval_secs: 1,
@@ -681,6 +842,7 @@ mod tests {
             }),
             Box::new(SignalingPower {
                 released: released_sender,
+                starts: Arc::clone(&starts),
             }),
             config,
         )));
@@ -701,6 +863,22 @@ mod tests {
         released_receiver
             .recv_timeout(Duration::from_millis(250))
             .expect("inhibitor releases before waiting for the blocked worker");
+        let attempted_starts = Arc::new(AtomicUsize::new(0));
+        let attempted_starts_in_thread = Arc::clone(&attempted_starts);
+        let starting_engine = Arc::clone(&engine);
+        let (started_sender, started_receiver) = mpsc::channel();
+        let starter = thread::spawn(move || {
+            attempted_starts_in_thread.fetch_add(1, Ordering::SeqCst);
+            let result = starting_engine
+                .lock()
+                .expect("engine lock for start")
+                .start();
+            started_sender.send(result)
+        });
+        wait_until(Duration::from_millis(250), || {
+            attempted_starts.load(Ordering::SeqCst) == 1
+        });
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
         continue_sender
             .send(())
             .expect("worker probe is allowed to return");
@@ -709,12 +887,44 @@ mod tests {
             .expect("stop completes after the probe returns")
             .expect("stop succeeds");
         assert_eq!(stopper.join().expect("stopper joins"), Ok(()));
+        started_receiver
+            .recv_timeout(Duration::from_millis(1200))
+            .expect("second start completes only after the blocked worker joins")
+            .expect("second start succeeds after cleanup");
+        assert!(starter.join().expect("starter joins").is_ok());
+        engine
+            .lock()
+            .expect("engine lock for final stop")
+            .stop()
+            .expect("replacement worker stops");
 
         assert_eq!(
             moves.load(Ordering::SeqCst),
             0,
             "no mouse movement may begin after inhibitor release"
         );
+    }
+
+    #[test]
+    fn start_rejects_an_unfinished_worker_without_acquiring_a_second_lease() {
+        let (mut engine, inhibits, _) = engine(false);
+        let (release_sender, release_receiver) = mpsc::channel();
+        engine.thread_handle = Some(thread::spawn(move || {
+            release_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("test releases the unfinished worker");
+        }));
+
+        assert_eq!(
+            engine.start(),
+            Err("timer worker cleanup is incomplete".to_owned())
+        );
+        assert_eq!(inhibits.load(Ordering::SeqCst), 0);
+
+        release_sender
+            .send(())
+            .expect("unfinished worker is released");
+        engine.stop().expect("cleanup joins the released worker");
     }
 
     fn engine_with_mouse(
@@ -730,6 +940,25 @@ mod tests {
         };
         (
             Engine::new(mouse, Box::new(power), config),
+            inhibits,
+            releases,
+        )
+    }
+
+    fn engine_with_clock(
+        mouse: Box<dyn MouseDriver>,
+        config: Arc<Mutex<AppConfig>>,
+        clock: Arc<dyn Clock>,
+    ) -> (Engine, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let inhibits = Arc::new(AtomicUsize::new(0));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let power = Power {
+            inhibits: Arc::clone(&inhibits),
+            releases: Arc::clone(&releases),
+            fail_start: false,
+        };
+        (
+            Engine::new_with_clock(mouse, Box::new(power), config, clock),
             inhibits,
             releases,
         )
