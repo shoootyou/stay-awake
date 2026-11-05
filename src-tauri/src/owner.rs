@@ -15,7 +15,10 @@ use crate::runtime::{
     effective_mode, runtime_policy, EngineBackend, RuntimeSnapshot, Supervisor, SUPERVISOR_PERIOD,
 };
 use crate::schedule::Clock;
-use crate::{handle_runtime_route, RuntimeRouteInput, TrayRoute, TraySink};
+use crate::{
+    build_tray_presentation, handle_runtime_route, refresh_tray_status, PresentationInput,
+    RuntimeRouteInput, TrayRefreshInput, TrayRoute, TraySink,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -463,31 +466,71 @@ fn owner_loop_with_time_source(
     let mut last_ssid = None;
     let mut configuration_fault = false;
     let mut last_automatic_error = None;
+    let mut before_wait = time_source.sample(clock.as_ref());
     loop {
         let now = Instant::now();
         let closing = shared
             .upgrade()
             .is_none_or(|state| state.closing.load(Ordering::Acquire));
         if deadline_due(now, next_tick) && !closing {
-            let result = route_reply(
-                TrayRoute::Tick,
-                &config,
-                &clock,
-                &mut supervisor,
-                backend.as_mut(),
-                sink.as_mut(),
-            );
+            let result = if configuration_fault {
+                observe_configuration_fault(
+                    &config,
+                    &clock,
+                    &mut supervisor,
+                    backend.as_ref(),
+                    sink.as_mut(),
+                )
+            } else {
+                route_reply(
+                    TrayRoute::Tick,
+                    &config,
+                    &clock,
+                    &mut supervisor,
+                    backend.as_mut(),
+                    sink.as_mut(),
+                )
+            };
             report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
             next_tick = Instant::now() + SUPERVISOR_PERIOD;
+            before_wait = time_source.sample(clock.as_ref());
             continue;
         }
         let wait = next_tick.saturating_duration_since(now);
-        let before_wait = time_source.sample(clock.as_ref());
         match receiver.recv_timeout(wait) {
             Ok(command) => {
+                let after_wait = time_source.sample(clock.as_ref());
                 let closing = shared
                     .upgrade()
                     .is_none_or(|state| state.closing.load(Ordering::Acquire));
+                let offset_changed = before_wait.offset_seconds != after_wait.offset_seconds;
+                if !closing
+                    && !offset_changed
+                    && detect_time_change(TimeChangeInput {
+                        previous: &before_wait,
+                        current: &after_wait,
+                    })
+                {
+                    let result = if configuration_fault {
+                        observe_configuration_fault(
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_ref(),
+                            sink.as_mut(),
+                        )
+                    } else {
+                        route_reply(
+                            TrayRoute::Resume,
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_mut(),
+                            sink.as_mut(),
+                        )
+                    };
+                    report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
+                }
                 match command {
                     OwnerCommand::Query { reply } => {
                         let _ = reply.send(OwnerReply {
@@ -508,14 +551,24 @@ fn owner_loop_with_time_source(
                             );
                             continue;
                         }
-                        let result = route_reply(
-                            route,
-                            &config,
-                            &clock,
-                            &mut supervisor,
-                            backend.as_mut(),
-                            sink.as_mut(),
-                        );
+                        let result = if configuration_fault && route != TrayRoute::Quit {
+                            observe_configuration_fault(
+                                &config,
+                                &clock,
+                                &mut supervisor,
+                                backend.as_ref(),
+                                sink.as_mut(),
+                            )
+                        } else {
+                            route_reply(
+                                route,
+                                &config,
+                                &clock,
+                                &mut supervisor,
+                                backend.as_mut(),
+                                sink.as_mut(),
+                            )
+                        };
                         let result = if route == TrayRoute::Quit && !backend.is_active() {
                             match backend.stop() {
                                 Ok(()) => result,
@@ -528,9 +581,10 @@ fn owner_loop_with_time_source(
                         } else {
                             result
                         };
-                        let terminating = route == TrayRoute::Quit
-                            && !backend.is_active()
-                            && result.error.is_none();
+                        let terminating = route == TrayRoute::Quit && !backend.is_active();
+                        if terminating {
+                            report_unreplied_error(sink.as_mut(), &result);
+                        }
                         let no_reply = reply.is_none();
                         if no_reply {
                             report_unreplied_error(sink.as_mut(), &result);
@@ -564,6 +618,7 @@ fn owner_loop_with_time_source(
                         let previous_policy = runtime_policy(&config)?;
                         let candidate_policy = runtime_policy(&candidate)?;
                         let policy_changed = previous_policy != candidate_policy;
+                        let networks_changed = config.wifi.networks != candidate.wifi.networks;
                         let entered_wifi = effective_mode(&config.mode)
                             != crate::config::AppMode::WiFi
                             && effective_mode(&candidate.mode) == crate::config::AppMode::WiFi;
@@ -603,6 +658,7 @@ fn owner_loop_with_time_source(
                                 );
                                 if effective_mode(&config.mode) == crate::config::AppMode::WiFi
                                     && !entered_wifi
+                                    && networks_changed
                                 {
                                     let active = last_ssid.as_ref().is_some_and(|ssid| {
                                         config.wifi.networks.iter().any(|network| network == ssid)
@@ -627,19 +683,22 @@ fn owner_loop_with_time_source(
                                         format!("configuration update failed: {error}; cleanup failed: {stop_error}")
                                     }
                                 };
-                                let snapshot = supervisor
-                                    .observe(
-                                        crate::runtime::ReconcileInput {
-                                            config: &config,
-                                            clock: clock.as_ref(),
-                                            event: crate::runtime::LifecycleEvent::Tick,
-                                        },
-                                        backend.as_ref(),
-                                    )
-                                    .ok();
+                                let observed = observe_configuration_fault(
+                                    &config,
+                                    &clock,
+                                    &mut supervisor,
+                                    backend.as_ref(),
+                                    sink.as_mut(),
+                                );
+                                let error = match observed.error {
+                                    Some(observation_error) => {
+                                        format!("{message}; {observation_error}")
+                                    }
+                                    None => message,
+                                };
                                 let _ = reply.send(OwnerReply {
-                                    snapshot,
-                                    error: Some(message),
+                                    snapshot: observed.snapshot,
+                                    error: Some(error),
                                     terminating: false,
                                 });
                             }
@@ -662,11 +721,13 @@ fn owner_loop_with_time_source(
                             config.wifi.networks.iter().any(|network| network == ssid)
                         });
                         let result = if configuration_fault {
-                            OwnerReply {
-                                snapshot: supervisor.snapshot().cloned(),
-                                error: None,
-                                terminating: false,
-                            }
+                            observe_configuration_fault(
+                                &config,
+                                &clock,
+                                &mut supervisor,
+                                backend.as_ref(),
+                                sink.as_mut(),
+                            )
                         } else {
                             route_reply(
                                 TrayRoute::WifiChanged { active },
@@ -684,6 +745,28 @@ fn owner_loop_with_time_source(
                         send_reply(reply, result);
                     }
                 }
+                if !closing && offset_changed {
+                    let result = if configuration_fault {
+                        observe_configuration_fault(
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_ref(),
+                            sink.as_mut(),
+                        )
+                    } else {
+                        route_reply(
+                            TrayRoute::Resume,
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_mut(),
+                            sink.as_mut(),
+                        )
+                    };
+                    report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
+                }
+                before_wait = time_source.sample(clock.as_ref());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let after_wait = time_source.sample(clock.as_ref());
@@ -691,24 +774,36 @@ fn owner_loop_with_time_source(
                     .upgrade()
                     .is_none_or(|state| state.closing.load(Ordering::Acquire));
                 if !closing {
-                    let result = route_reply(
-                        if detect_time_change(TimeChangeInput {
-                            previous: &before_wait,
-                            current: &after_wait,
-                        }) {
-                            TrayRoute::Resume
-                        } else {
-                            TrayRoute::Tick
-                        },
-                        &config,
-                        &clock,
-                        &mut supervisor,
-                        backend.as_mut(),
-                        sink.as_mut(),
-                    );
+                    let route = if detect_time_change(TimeChangeInput {
+                        previous: &before_wait,
+                        current: &after_wait,
+                    }) {
+                        TrayRoute::Resume
+                    } else {
+                        TrayRoute::Tick
+                    };
+                    let result = if configuration_fault {
+                        observe_configuration_fault(
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_ref(),
+                            sink.as_mut(),
+                        )
+                    } else {
+                        route_reply(
+                            route,
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_mut(),
+                            sink.as_mut(),
+                        )
+                    };
                     report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
                 }
                 next_tick = Instant::now() + SUPERVISOR_PERIOD;
+                before_wait = time_source.sample(clock.as_ref());
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let reply = route_reply(
@@ -756,6 +851,53 @@ fn route_reply(
         },
     }
 }
+
+fn observe_configuration_fault(
+    config: &AppConfig,
+    clock: &Arc<dyn Clock>,
+    supervisor: &mut Supervisor,
+    backend: &dyn EngineBackend,
+    sink: &mut dyn TraySink,
+) -> OwnerReply {
+    if let Err(error) = supervisor.observe(
+        crate::runtime::ReconcileInput {
+            config,
+            clock: clock.as_ref(),
+            event: crate::runtime::LifecycleEvent::Tick,
+        },
+        backend,
+    ) {
+        return OwnerReply {
+            snapshot: None,
+            error: Some(format!("configuration fault observation failed: {error}")),
+            terminating: false,
+        };
+    }
+    let snapshot = supervisor.snapshot().cloned();
+    let error = snapshot.as_ref().and_then(|snapshot| {
+        let bundle = create_bundle(&config.language);
+        let presentation = build_tray_presentation(PresentationInput {
+            snapshot,
+            bundle: &bundle,
+            locale: &config.language,
+            clock: clock.as_ref(),
+        });
+        refresh_tray_status(
+            TrayRefreshInput {
+                route: TrayRoute::LanguageChanged,
+                presentation: &presentation,
+            },
+            sink,
+        )
+        .err()
+    });
+    OwnerReply {
+        snapshot,
+        error,
+        terminating: false,
+    }
+}
+
 fn send_reply(reply: Option<mpsc::Sender<OwnerReply>>, value: OwnerReply) {
     if let Some(reply) = reply {
         let _ = reply.send(value);
