@@ -238,6 +238,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn formats_next_window_with_each_locale_numeric_convention() {
+        let when = chrono::FixedOffset::east_opt(0)
+            .expect("UTC offset exists")
+            .with_ymd_and_hms(2026, 11, 9, 9, 0, 0)
+            .single()
+            .expect("fixed timestamp exists");
+
+        for (locale, expected) in [
+            ("en", "11/09/2026 09:00 +00:00"),
+            ("es", "09/11/2026 09:00 +00:00"),
+            ("fr", "09/11/2026 09:00 +00:00"),
+            ("de", "09.11.2026 09:00 +00:00"),
+            ("pt-BR", "09/11/2026 09:00 +00:00"),
+            ("ja", "2026/11/09 09:00 +00:00"),
+            ("zh-Hans", "2026/11/09 09:00 +00:00"),
+            ("ko", "2026/11/09 09:00 +00:00"),
+        ] {
+            assert_eq!(
+                format_next_window(NextWindowInput { when, locale }),
+                expected,
+                "{locale} uses its contract numeric date order and separator"
+            );
+        }
+    }
+
     fn english_message_ids() -> Vec<String> {
         LOCALE_EN
             .lines()

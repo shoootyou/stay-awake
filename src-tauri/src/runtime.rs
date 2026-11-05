@@ -1092,6 +1092,41 @@ mod tests {
     }
 
     #[test]
+    fn schedule_evaluation_failure_keeps_active_status_when_stop_retains_the_lease() {
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend {
+            active: true,
+            stop_failures: 1,
+            ..RecordingBackend::inactive()
+        };
+        let clock = UnresolvableClock;
+
+        assert!(
+            supervisor
+                .reconcile(
+                    ReconcileInput {
+                        config: &config,
+                        clock: &clock,
+                        event: LifecycleEvent::Tick,
+                    },
+                    &mut backend,
+                )
+                .is_err(),
+            "fail-closed reconciliation must report a retained-release failure"
+        );
+        let snapshot = supervisor
+            .snapshot()
+            .expect("failure stores an actual snapshot");
+        assert!(backend.active, "failed stop retains the backend lease");
+        assert!(
+            snapshot.engine_active,
+            "snapshot reports the retained lease"
+        );
+        assert_eq!(snapshot.status, TrayStatus::Active);
+    }
+
+    #[test]
     fn clears_skipwindow_and_forceon_at_their_required_boundaries() {
         let skip = decide(
             AppMode::Manual,
