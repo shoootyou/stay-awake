@@ -2505,12 +2505,13 @@ mod accessibility_key_selection_tests {
 mod core_helper_tests {
     /*
      * @spec-handoff
-     * @interface parse_shortcut_string(), is_within_schedule()
+     * @interface parse_shortcut_string(), is_within_schedule(), get_translation()
      * @interface format_translation(Bundle, key, network) -> String
      * @behavior
      *   - Shortcut aliases produce the same registered shortcut and invalid parts are rejected.
      *   - Disabled schedules do not permit scheduled autostart.
      *   - Network names are passed to Fluent as arguments without JavaScript-style expansion.
+     *   - get_translation forwards its optional network argument to the formatting seam.
      * @edge-cases
      *   - Empty or unknown shortcut parts are invalid.
      */
@@ -2564,6 +2565,23 @@ mod core_helper_tests {
                 assert!(!rendered.contains('\u{2068}') && !rendered.contains('\u{2069}'));
             }
         }
+    }
+
+    #[test]
+    fn get_translation_forwards_the_optional_network_to_format_translation() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("lib.rs is readable");
+        let start = source
+            .find("fn get_translation(")
+            .expect("get_translation exists");
+        let command = source[start..]
+            .split("/// Return all saved profiles.")
+            .next()
+            .expect("get_translation ends before profile commands")
+            .replace("//", "");
+        assert!(command.contains("format_translation(&b, &key, network.as_deref())"));
     }
 }
 
