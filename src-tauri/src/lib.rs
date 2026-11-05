@@ -1269,16 +1269,27 @@ fn close_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn format_translation(bundle: &I18nBundle, key: &str, network: Option<&str>) -> String {
+    let Some(network) = network else {
+        return i18n::t(bundle, key);
+    };
+
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("network", network);
+    i18n::t_with_args(bundle, key, Some(&args))
+}
+
 /// Return a translated string for the given message key.
 #[tauri::command]
 fn get_translation(
     key: String,
+    network: Option<String>,
     bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
 ) -> Result<String, String> {
     let b = bundle
         .lock()
         .map_err(|e| format!("I18n lock poisoned: {}", e))?;
-    Ok(i18n::t(&b, &key))
+    Ok(format_translation(&b, &key, network.as_deref()))
 }
 
 /// Return all saved profiles.
