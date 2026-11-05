@@ -1372,16 +1372,20 @@ mod tests {
     struct BlockingFailingStartBackend {
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
+        blocking_starts_remaining: usize,
     }
 
     impl EngineBackend for BlockingFailingStartBackend {
         fn start(&mut self) -> Result<(), String> {
-            self.entered
-                .send(())
-                .map_err(|_| "test start observer disconnected".to_owned())?;
-            self.release
-                .recv_timeout(REQUEST_TIMEOUT)
-                .map_err(|_| "test start release timed out".to_owned())?;
+            if self.blocking_starts_remaining > 0 {
+                self.blocking_starts_remaining -= 1;
+                self.entered
+                    .send(())
+                    .map_err(|_| "test start observer disconnected".to_owned())?;
+                self.release
+                    .recv_timeout(REQUEST_TIMEOUT)
+                    .map_err(|_| "test start release timed out".to_owned())?;
+            }
             Err("backend start failed".to_owned())
         }
 
@@ -2337,6 +2341,7 @@ mod tests {
                 Box::new(BlockingFailingStartBackend {
                     entered,
                     release: release_receiver,
+                    blocking_starts_remaining: 2,
                 }),
                 Box::new(RouteSink {
                     routes: route_sender,
@@ -2368,7 +2373,7 @@ mod tests {
         );
         assert_eq!(
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(Duration::from_millis(500))
                 .expect("post-processing reconciliation arrives"),
             TrayRoute::Resume,
             "an offset change during backend processing must survive until the next reconciliation"
@@ -2518,6 +2523,7 @@ mod tests {
                 Box::new(BlockingFailingStartBackend {
                     entered,
                     release: release_receiver,
+                    blocking_starts_remaining: 1,
                 }),
                 Box::new(RouteSink {
                     routes: route_sender,
