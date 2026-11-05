@@ -195,9 +195,9 @@ test("keeps the WiFi-only Schedule alert localized, hidden by default, and visua
   const alert = tagWithId(schedule ?? "", "schedule-wifi-alert");
   assert.ok(alert, "Schedule needs a WiFi-only alert element");
   assert.ok("hidden" in alert.attributes, "Schedule alert must start hidden");
-  assert.equal(alert.attributes["data-i18n"], "schedule-wifi-alert");
   assert.ok(["status", "alert"].includes(alert.attributes.role), "Schedule alert needs an accessible status role");
   const alertMarkup = (schedule ?? "").slice(alert.index, (schedule ?? "").indexOf("</div>", alert.index) + "</div>".length);
+  assert.match(alertMarkup, /data-i18n="schedule-wifi-alert"/);
   assert.match(alertMarkup, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.doesNotMatch(alertMarkup, /[\u{1F300}-\u{1FAFF}]/u, "Schedule alert must not use emoji");
   assert.match(settingsCss, /\.schedule-alert\s*\{[^}]*padding\s*:/s, "Schedule alert needs its own inset rule");
