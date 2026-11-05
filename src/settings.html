@@ -89,30 +89,6 @@
         </div>
       </section>
 
-      <section class="group">
-        <label class="field">
-          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M247.15,212.42l-56-112a8,8,0,0,0-14.31,0l-21.71,43.43A88,88,0,0,1,108,126.93,103.65,103.65,0,0,0,135.69,64H160a8,8,0,0,0,0-16H104V32a8,8,0,0,0-16,0V48H32a8,8,0,0,0,0,16h87.63A87.76,87.76,0,0,1,96,116.35a87.74,87.74,0,0,1-19-31,8,8,0,1,0-15.08,5.34A103.63,103.63,0,0,0,84,127a87.55,87.55,0,0,1-52,17,8,8,0,0,0,0,16,103.46,103.46,0,0,0,64-22.08,104.18,104.18,0,0,0,51.44,21.31l-26.6,53.19a8,8,0,0,0,14.31,7.16L148.94,192h70.11l13.79,27.58A8,8,0,0,0,240,224a8,8,0,0,0,7.15-11.58ZM156.94,176,184,121.89,211.05,176Z"/></svg> <span data-i18n="settings-language-label">Language</span></span>
-          <select id="language">
-            <option value="en">English</option>
-            <option value="es">Espanol</option>
-            <option value="fr">Francais</option>
-            <option value="de">Deutsch</option>
-            <option value="pt-BR">Portugues (BR)</option>
-            <option value="ja">Japanese</option>
-            <option value="zh-Hans">Chinese (Simplified)</option>
-            <option value="ko">Korean</option>
-          </select>
-        </label>
-
-        <div class="field">
-          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M224,48H32A16,16,0,0,0,16,64V192a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V64A16,16,0,0,0,224,48Zm0,144H32V64H224V192Zm-16-64a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,128Zm0-32a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,96ZM72,160a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16h8A8,8,0,0,1,72,160Zm96,0a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,160Zm40,0a8,8,0,0,1-8,8h-8a8,8,0,0,1,0-16h8A8,8,0,0,1,208,160Z"/></svg> <span data-i18n="settings-hotkey-label">Global Hotkey</span></span>
-          <button id="hotkey-recorder" class="hotkey-btn">
-            <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
-            <span class="hotkey-hint" data-i18n="settings-hotkey-hint">Click to record</span>
-          </button>
-        </div>
-      </section>
-
       <section class="group" id="schedule-section">
         <div class="group-header"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M208,32H184V24a8,8,0,0,0-16,0v8H88V24a8,8,0,0,0-16,0v8H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM72,48v8a8,8,0,0,0,16,0V48h80v8a8,8,0,0,0,16,0V48h24V80H48V48ZM208,208H48V96H208V208Z"/></svg> <span data-i18n="schedule-label">Schedule</span></div>
         <label class="field row">
@@ -147,6 +123,30 @@
             <label><input type="checkbox" value="sat" /><span data-i18n="schedule-sat">Sat</span></label>
             <label><input type="checkbox" value="sun" /><span data-i18n="schedule-sun">Sun</span></label>
           </div>
+        </div>
+      </section>
+
+      <section class="group">
+        <label class="field">
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M247.15,212.42l-56-112a8,8,0,0,0-14.31,0l-21.71,43.43A88,88,0,0,1,108,126.93,103.65,103.65,0,0,0,135.69,64H160a8,8,0,0,0,0-16H104V32a8,8,0,0,0-16,0V48H32a8,8,0,0,0,0,16h87.63A87.76,87.76,0,0,1,96,116.35a87.74,87.74,0,0,1-19-31,8,8,0,1,0-15.08,5.34A103.63,103.63,0,0,0,84,127a87.55,87.55,0,0,1-52,17,8,8,0,0,0,0,16,103.46,103.46,0,0,0,64-22.08,104.18,104.18,0,0,0,51.44,21.31l-26.6,53.19a8,8,0,0,0,14.31,7.16L148.94,192h70.11l13.79,27.58A8,8,0,0,0,240,224a8,8,0,0,0,7.15-11.58ZM156.94,176,184,121.89,211.05,176Z"/></svg> <span data-i18n="settings-language-label">Language</span></span>
+          <select id='language'>
+            <option value="en">English</option>
+            <option value="es">Espanol</option>
+            <option value="fr">Francais</option>
+            <option value="de">Deutsch</option>
+            <option value="pt-BR">Portugues (BR)</option>
+            <option value="ja">Japanese</option>
+            <option value="zh-Hans">Chinese (Simplified)</option>
+            <option value="ko">Korean</option>
+          </select>
+        </label>
+
+        <div class="field">
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M224,48H32A16,16,0,0,0,16,64V192a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V64A16,16,0,0,0,224,48Zm0,144H32V64H224V192Zm-16-64a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,128Zm0-32a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,96ZM72,160a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16h8A8,8,0,0,1,72,160Zm96,0a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,160Zm40,0a8,8,0,0,1-8,8h-8a8,8,0,0,1,0-16h8A8,8,0,0,1,208,160Z"/></svg> <span data-i18n="settings-hotkey-label">Global Hotkey</span></span>
+          <button id="hotkey-recorder" class="hotkey-btn">
+            <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
+            <span class="hotkey-hint" data-i18n="settings-hotkey-hint">Click to record</span>
+          </button>
         </div>
       </section>
 
