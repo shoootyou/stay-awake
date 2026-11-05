@@ -38,11 +38,11 @@ const expectedSelectorIds = [
   "mode-info-panel", "profile-delete-btn", "profile-save-btn", "profile-select", "recheck-btn",
   "schedule-enabled", "schedule-end", "schedule-start", "wifi-current-ssid", "wifi-details",
   "wifi-grant-location", "wifi-location-banner", "wifi-network-list", "wifi-nm-banner",
-  "wifi-register-btn", "wifi-section",
+  "wifi-register-btn", "wifi-section", "schedule-wifi-alert",
 ];
 const expectedTranslationKeys = [
   "mode-desc-circle", "mode-desc-power", "mode-desc-subtle", "mode-desc-zen", "profile-default",
-  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled", "schedule-enabled-hint",
+  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled", "schedule-enabled-hint", "schedule-wifi-alert",
   "schedule-end", "schedule-fri", "schedule-label", "schedule-mon", "schedule-sat", "schedule-start",
   "schedule-sun", "schedule-thu", "schedule-tue", "schedule-wed", "settings-accessibility-banner",
   "settings-app-mode-label", "settings-autostart-label", "settings-grant-btn", "settings-hotkey-hint",

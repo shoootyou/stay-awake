@@ -2,10 +2,11 @@
  * @spec-handoff
  * @interface loadConfig(): Promise<void>; autoSave(): Promise<void>
  * @behavior
- *   - Places the complete App Mode control before Jiggle Mode and Interval.
+ *   - Places Launch at Login in the first group and App Mode in the second group.
  *   - Keeps Manual, AlwaysOn, and WiFi as the only selectable App Modes.
  *   - Preserves midnight schedule values through loading and autosave.
  *   - Associates the schedule helper and localized descriptions with their controls.
+ *   - Shows the localized Schedule warning only while WiFi is selected.
  *   - Renders network removal names from translated Fluent arguments without frontend substitution.
  * @edge-cases
  *   - Legacy Scheduled displays as Manual and autosaves as Manual.
@@ -53,27 +54,44 @@ const appModeBlock = (source) => {
   return start >= 0 && end >= 0 ? source.slice(start, end + "</label>".length) : "";
 };
 
+const settingsGroups = (source) => [...source.matchAll(/<section\b[^>]*class="group"[^>]*>/g)]
+  .map((match) => {
+    const end = source.indexOf("</section>", match.index);
+    return end < 0 ? "" : source.slice(match.index, end + "</section>".length);
+  });
+const swapFirstTwoGroups = (source) => {
+  const groups = settingsGroups(source);
+  const first = source.indexOf(groups[0]);
+  const second = source.indexOf(groups[1]);
+  return source.slice(0, first) + groups[1] + source.slice(first + groups[0].length, second)
+    + groups[0] + source.slice(second + groups[1].length);
+};
+
 const assertSettingsOrder = (html, css) => {
   const source = uncommented(html);
+  const groups = settingsGroups(source);
   const app = enclosingFieldStart(source, "app-mode");
   const jiggle = enclosingFieldStart(source, "jiggle-mode");
   const interval = enclosingFieldStart(source, "interval");
   const launch = enclosingFieldStart(source, "autostart");
   assert.ok(app >= 0 && jiggle >= 0 && interval >= 0 && launch >= 0, "each control needs an enclosing field");
+  assert.ok(groups[0]?.includes('id="autostart"'), "Launch at Login must occupy the first group");
+  assert.ok(groups[1]?.includes('id="app-mode"'), "App Mode must occupy the second group");
+  assert.ok(launch < app, "Launch at Login must precede App Mode");
   assert.ok(app < jiggle, "App Mode block must precede the Jiggle Mode block");
   assert.ok(jiggle < interval, "Jiggle Mode block must precede Interval");
-  assert.ok(jiggle < launch, "Launch at Login must remain after Jiggle Mode");
   assert.ok(tagWithId(appModeBlock(source), "app-mode-desc"), "App Mode description must stay in its label");
   assert.equal(/\btabindex\s*=\s*["']?[1-9]/i.test(source), false, "positive tabindex is forbidden");
   assert.equal(/\border\s*:/i.test(css), false, "CSS must not impose settings control order");
   const focusable = [...source.matchAll(/<(?:select|input|button)\b[^>]*>/g)]
     .map((match) => attributes(match[0]).id)
     .filter(Boolean);
-  assert.deepEqual(focusable.slice(0, 4), ["app-mode", "mode-info-btn", "jiggle-mode", "interval"],
-    "App Mode, Info, Jiggle Mode, and Interval must be the first focusable controls");
+  assert.deepEqual(focusable.slice(0, 5), ["autostart", "app-mode", "mode-info-btn", "jiggle-mode", "interval"],
+    "Launch at Login, App Mode, Info, Jiggle Mode, and Interval must be the first focusable controls");
 };
 
 const localeKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].map((match) => match[1]));
+const localeValue = (source, key) => source.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, "m"))?.[1]?.trim();
 
 // Mutant: restore the descendant selector and let nested hints inherit group padding.
 test("keeps schedule helper padding scoped to a direct group child", () => {
@@ -86,16 +104,19 @@ class Element {
     this.id = id;
     this.value = value;
     this.checked = false;
+    this.hidden = false;
     this.textContent = "";
     this.style = {};
     this.listeners = new Map();
+    this.attributes = new Map();
+    this.tagName = "DIV";
     this.classList = { add() {}, remove() {}, toggle() {}, contains: () => false };
   }
 
   addEventListener(type, listener) { this.listeners.set(type, listener); }
   dispatch(type) { return this.listeners.get(type)?.({ target: this }); }
-  setAttribute() {}
-  getAttribute() { return null; }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
   appendChild() {}
 }
 
@@ -111,26 +132,35 @@ const runSettings = async (config) => {
   const ids = ["jiggle-mode", "interval", "interval-value", "app-mode", "app-mode-desc", "autostart",
     "language", "hotkey", "schedule-enabled", "schedule-start", "schedule-end", "profile-select",
     "wifi-section", "accessibility-banner", "mode-info-btn", "grant-btn", "profile-save-btn",
-    "profile-delete-btn", "wifi-register-btn", "hotkey-recorder"];
+    "profile-delete-btn", "wifi-register-btn", "hotkey-recorder", "schedule-wifi-alert"];
   const elements = new Map(ids.map((id) => [id, new Element(id)]));
+  const alert = elements.get("schedule-wifi-alert");
+  alert.hidden = true;
+  alert.setAttribute("data-i18n", "schedule-wifi-alert");
   const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((value) => new Element("", value));
   const documentListeners = new Map();
   const saves = [];
+  let activeLanguage = config.language;
   const invoke = async (command, args) => {
     if (command === "get_config") return config;
     if (command === "list_profiles") return [];
     if (command === "check_accessibility") return true;
     if (command === "save_config") saves.push(args.newConfig);
     if (command === "get_platform_os") return "linux";
-    if (command === "get_translation") return "translated";
+    if (command === "get_translation") return `${activeLanguage}:${args.key}`;
+    if (command === "set_language") activeLanguage = args.language;
     return undefined;
   };
   const document = {
     getElementById: (id) => elements.get(id),
     querySelector: () => null,
-    querySelectorAll: (selector) => selector === ".day-checkboxes input:checked"
-      ? days.filter((day) => day.checked)
-      : selector.includes("day-checkboxes") ? days : [],
+    querySelectorAll: (selector) => {
+      if (selector === ".day-checkboxes input:checked") return days.filter((day) => day.checked);
+      if (selector.includes("day-checkboxes")) return days;
+      if (selector === "[data-i18n]") return [...elements.values()].filter((el) => el.getAttribute("data-i18n"));
+      if (selector === "[data-i18n-aria-label]") return [];
+      return [];
+    },
     addEventListener: (type, listener) => documentListeners.set(type, listener),
     createElement: () => new Element(),
   };
@@ -146,22 +176,61 @@ const runSettings = async (config) => {
   return { elements, days, saves };
 };
 
-test("places complete App Mode first without CSS or tabindex ordering", () => {
+test("places Launch at Login first without CSS or tabindex ordering", () => {
   assertSettingsOrder(settingsHtml, settingsCss);
 });
 
-test("rejects App Mode order contract mutants", () => {
-  const app = appModeBlock(settingsHtml);
-  const green = settingsHtml.replace(app, "").replace(/<section\b[^>]*class="group"[^>]*>/, (tag) => `${tag}${app}`);
+test("rejects Launch at Login order contract mutants", () => {
+  const green = swapFirstTwoGroups(settingsHtml);
   assertSettingsOrder(green, settingsCss);
-  const reordered = green.replace(app, "").replace('</section>', `\n${app}</section>`);
-  assert.throws(() => assertSettingsOrder(reordered, settingsCss), /App Mode block/);
+  assert.throws(() => assertSettingsOrder(swapFirstTwoGroups(green), settingsCss), /Launch at Login must occupy the first group/);
   assert.throws(() => assertSettingsOrder(green.replace('id="app-mode-desc"', 'id="detached-desc"'), settingsCss), /description/);
   assert.throws(() => assertSettingsOrder(green.replace('id="app-mode"', 'id="app-mode" tabindex="1"'), settingsCss), /tabindex/);
-  const launch = green.match(/\s*<label class="field row">[\s\S]*?id="autostart"[\s\S]*?<\/label>/)?.[0];
-  const launchFirst = green.replace(launch, "").replace(/<section\b[^>]*class="group"[^>]*>/, (tag) => `${tag}${launch}`);
-  assert.throws(() => assertSettingsOrder(launchFirst, settingsCss), /Launch at Login must remain after Jiggle Mode/);
+  const app = appModeBlock(green);
   assert.throws(() => assertSettingsOrder(green.replace(app, `<!--${app}-->`), settingsCss), /enclosing field/);
+});
+
+test("keeps the WiFi-only Schedule alert localized, hidden by default, and visually inset", () => {
+  const schedule = settingsGroups(uncommented(settingsHtml)).find((group) => group.includes('id="schedule-section"'));
+  const alert = tagWithId(schedule ?? "", "schedule-wifi-alert");
+  assert.ok(alert, "Schedule needs a WiFi-only alert element");
+  assert.ok("hidden" in alert.attributes, "Schedule alert must start hidden");
+  assert.equal(alert.attributes["data-i18n"], "schedule-wifi-alert");
+  assert.ok(["status", "alert"].includes(alert.attributes.role), "Schedule alert needs an accessible status role");
+  const alertMarkup = (schedule ?? "").slice(alert.index, (schedule ?? "").indexOf("</div>", alert.index) + "</div>".length);
+  assert.match(alertMarkup, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
+  assert.doesNotMatch(alertMarkup, /[\u{1F300}-\u{1FAFF}]/u, "Schedule alert must not use emoji");
+  assert.match(settingsCss, /\.schedule-alert\s*\{[^}]*padding\s*:/s, "Schedule alert needs its own inset rule");
+});
+
+test("shows the Schedule alert only for WiFi on load and live mode changes", async () => {
+  const wifi = await runSettings({ ...baseConfig(), mode: "WiFi" });
+  assert.equal(wifi.elements.get("schedule-wifi-alert").hidden, false, "WiFi shows the Schedule alert on load");
+
+  for (const mode of ["Manual", "AlwaysOn", "Scheduled"]) {
+    const state = await runSettings({ ...baseConfig(), mode });
+    assert.equal(state.elements.get("schedule-wifi-alert").hidden, true, `${mode} keeps the Schedule alert hidden`);
+  }
+
+  const live = await runSettings(baseConfig());
+  const select = live.elements.get("app-mode");
+  select.value = "WiFi";
+  const change = select.dispatch("change");
+  assert.equal(live.elements.get("schedule-wifi-alert").hidden, false, "WiFi change updates the alert before saving");
+  await change;
+  select.value = "Manual";
+  await select.dispatch("change");
+  assert.equal(live.elements.get("schedule-wifi-alert").hidden, true, "leaving WiFi hides the alert");
+});
+
+test("keeps the WiFi Schedule alert visible through re-localization", async () => {
+  const state = await runSettings({ ...baseConfig(), mode: "WiFi" });
+  const alert = state.elements.get("schedule-wifi-alert");
+  assert.equal(alert.hidden, false);
+  state.elements.get("language").value = "es";
+  await state.elements.get("language").dispatch("change");
+  assert.equal(alert.hidden, false, "re-localizing must not hide the WiFi alert");
+  assert.equal(alert.textContent, "es:schedule-wifi-alert");
 });
 
 test("keeps exactly the three supported App Mode selector values", async () => {
@@ -181,6 +250,20 @@ test("links the schedule helper and requires it in exactly eight locales", () =>
   const required = new Set(["schedule-enabled-hint"]);
   for (const locale of locales) for (const key of required) {
     assert.ok(localeKeys(read(`src-tauri/locales/${locale}`)).has(key), `${locale} is missing ${key}`);
+  }
+});
+
+test("separates the Manual and Always On helper from the WiFi warning in every locale", () => {
+  const hint = tagWithId(settingsHtml, "schedule-enabled-hint");
+  assert.doesNotMatch(hint?.tag ?? "", /wifi/i, "Schedule helper markup must not mention WiFi");
+  const englishHint = localeValue(read("src-tauri/locales/en.ftl"), "schedule-enabled-hint");
+  assert.equal(englishHint, "Automatically starts and stops the engine with the schedule.");
+  for (const locale of locales) {
+    const source = read(`src-tauri/locales/${locale}`);
+    const alert = localeValue(source, "schedule-wifi-alert");
+    const localizedHint = localeValue(source, "schedule-enabled-hint");
+    assert.ok(alert, `${locale} needs a non-empty WiFi Schedule alert`);
+    assert.notEqual(alert, localizedHint, `${locale} must not repeat the Schedule helper as its alert`);
   }
 });
 
