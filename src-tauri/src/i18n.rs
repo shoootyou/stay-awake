@@ -121,7 +121,7 @@ mod tests {
     use chrono::TimeZone;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
-    const NEW_KEYS: [&str; 12] = [
+    const NEW_KEYS: [&str; 13] = [
         "tray-inactive",
         "tray-waiting",
         "tray-paused",
@@ -132,6 +132,7 @@ mod tests {
         "tray-next-window",
         "tray-no-next-window",
         "schedule-enabled-hint",
+        "schedule-wifi-alert",
         "settings-mode-info-label",
         "settings-wifi-remove-label",
     ];
