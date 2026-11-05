@@ -75,6 +75,12 @@ const assertSettingsOrder = (html, css) => {
 
 const localeKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].map((match) => match[1]));
 
+// Mutant: restore the descendant selector and let nested hints inherit group padding.
+test("keeps schedule helper padding scoped to a direct group child", () => {
+  assert.match(settingsCss, /\.group\s*>\s*\.field-hint\s*\{[^}]*padding:\s*0\s+16px\s*;/s);
+  assert.doesNotMatch(settingsCss, /\.group\s+\.field-hint\s*\{/);
+});
+
 class Element {
   constructor(id, value = "") {
     this.id = id;
