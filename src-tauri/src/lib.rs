@@ -20,7 +20,7 @@ use platform::PermissionChecker;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrayRoute {
@@ -38,14 +38,27 @@ pub(crate) enum TrayRoute {
 }
 
 impl TrayRoute {
-    // skeleton: wired in E3
+    // wired in E3b-2
     #[allow(dead_code)]
     pub(crate) fn lifecycle_event(self) -> Option<runtime::LifecycleEvent> {
-        None
+        match self {
+            Self::Startup => Some(runtime::LifecycleEvent::Startup),
+            Self::TrayToggle | Self::Hotkey | Self::IpcToggle => {
+                Some(runtime::LifecycleEvent::TrayToggle)
+            }
+            Self::Tick => Some(runtime::LifecycleEvent::Tick),
+            Self::WifiChanged { active } => Some(runtime::LifecycleEvent::WifiChanged { active }),
+            Self::ConfigChanged { policy_changed } | Self::ProfileLoaded { policy_changed } => {
+                Some(runtime::LifecycleEvent::ConfigChanged { policy_changed })
+            }
+            Self::LanguageChanged => None,
+            Self::Resume => Some(runtime::LifecycleEvent::Resume),
+            Self::Quit => Some(runtime::LifecycleEvent::Quit),
+        }
     }
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrayPresentation {
@@ -55,7 +68,7 @@ pub(crate) struct TrayPresentation {
     pub(crate) icon: runtime::TrayIcon,
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) struct PresentationInput<'a> {
     pub(crate) snapshot: &'a runtime::RuntimeSnapshot,
@@ -66,22 +79,48 @@ pub(crate) struct PresentationInput<'a> {
 
 // skeleton: wired in E3
 #[allow(dead_code)]
-pub(crate) fn build_tray_presentation(_input: PresentationInput<'_>) -> TrayPresentation {
+pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPresentation {
+    let status = input.snapshot.status;
+    let mut tooltip = i18n::t(input.bundle, status.tooltip_key());
+    if matches!(
+        status,
+        runtime::TrayStatus::Waiting
+            | runtime::TrayStatus::Paused
+            | runtime::TrayStatus::ActiveOverride
+    ) {
+        let suffix = match input.snapshot.window.next.as_ref() {
+            Some(next) => {
+                let mut args = fluent_bundle::FluentArgs::new();
+                args.set(
+                    "when",
+                    i18n::format_next_window(i18n::NextWindowInput {
+                        when: input.clock.to_local(next.start),
+                        locale: input.locale,
+                    }),
+                );
+                i18n::t_with_args(input.bundle, "tray-next-window", Some(&args))
+            }
+            None => i18n::t(input.bundle, "tray-no-next-window"),
+        };
+        tooltip.push_str(" (");
+        tooltip.push_str(&suffix);
+        tooltip.push(')');
+    }
     TrayPresentation {
-        status: runtime::TrayStatus::Inactive,
-        menu_text: String::new(),
-        tooltip: String::new(),
-        icon: runtime::TrayIcon::Inactive,
+        status,
+        menu_text: i18n::t(input.bundle, status.menu_key()),
+        tooltip,
+        icon: status.icon(),
     }
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) trait TraySink {
     fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) struct TrayRefreshInput<'a> {
     pub(crate) route: TrayRoute,
@@ -91,13 +130,13 @@ pub(crate) struct TrayRefreshInput<'a> {
 // skeleton: wired in E3
 #[allow(dead_code)]
 pub(crate) fn refresh_tray_status(
-    _input: TrayRefreshInput<'_>,
-    _sink: &mut dyn TraySink,
+    input: TrayRefreshInput<'_>,
+    sink: &mut dyn TraySink,
 ) -> Result<(), String> {
-    Ok(())
+    sink.publish(input.route, input.presentation)
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) struct RuntimeRouteInput<'a> {
     pub(crate) route: TrayRoute,
@@ -106,15 +145,56 @@ pub(crate) struct RuntimeRouteInput<'a> {
     pub(crate) bundle: &'a i18n::Bundle,
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) fn handle_runtime_route(
-    _input: RuntimeRouteInput<'_>,
-    _supervisor: &mut runtime::Supervisor,
-    _backend: &mut dyn runtime::EngineBackend,
-    _sink: &mut dyn TraySink,
+    input: RuntimeRouteInput<'_>,
+    supervisor: &mut runtime::Supervisor,
+    backend: &mut dyn runtime::EngineBackend,
+    sink: &mut dyn TraySink,
 ) -> Result<runtime::RuntimeSnapshot, String> {
-    Err("runtime route skeleton".to_owned())
+    let lifecycle_result = match input.route.lifecycle_event() {
+        Some(event) => supervisor.reconcile(
+            runtime::ReconcileInput {
+                config: input.config,
+                clock: input.clock,
+                event,
+            },
+            backend,
+        ),
+        None => supervisor
+            .snapshot()
+            .cloned()
+            .ok_or_else(|| "tray status is not initialized".to_owned()),
+    };
+    let snapshot = match lifecycle_result.as_ref() {
+        Ok(snapshot) => snapshot.clone(),
+        Err(_) => supervisor
+            .snapshot()
+            .cloned()
+            .ok_or_else(|| "runtime reconciliation produced no snapshot".to_owned())?,
+    };
+    let presentation = build_tray_presentation(PresentationInput {
+        snapshot: &snapshot,
+        bundle: input.bundle,
+        locale: &input.config.language,
+        clock: input.clock,
+    });
+    let publish_result = refresh_tray_status(
+        TrayRefreshInput {
+            route: input.route,
+            presentation: &presentation,
+        },
+        sink,
+    );
+    match (lifecycle_result, publish_result) {
+        (Ok(_), Ok(())) => Ok(snapshot),
+        (Err(lifecycle_error), Ok(())) => Err(lifecycle_error),
+        (Ok(_), Err(publish_error)) => Err(publish_error),
+        (Err(lifecycle_error), Err(publish_error)) => Err(format!(
+            "{lifecycle_error}; tray status publication failed: {publish_error}"
+        )),
+    }
 }
 
 /// Return the current configuration to the frontend.
