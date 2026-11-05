@@ -285,8 +285,10 @@ test("renders literal translated network names without frontend placeholder subs
     assert.equal(buttons[index].getAttribute("aria-label"), `Quitar red ${network}`);
   }
 
-  const dynamicNames = settingsJs.match(/async function (?:applyTranslations|renderNetworkList)[\s\S]*?(?=\nasync function|\nfunction registerCurrentNetwork)/g)
-    ?.join("\n") ?? "";
+  const dynamicNames = (settingsJs
+    .match(/(?:async )?function (?:applyTranslations|renderNetworkList)[\s\S]*?(?=\nasync function|\nfunction registerCurrentNetwork)/g)
+    ?.join("\n") ?? "")
+    .replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
   assert.doesNotMatch(dynamicNames, /\.replace(?:All)?\(/,
     "dynamic network labels must rely on Fluent arguments, not frontend substitution");
 });
