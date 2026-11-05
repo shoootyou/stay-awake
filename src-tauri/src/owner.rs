@@ -1283,6 +1283,7 @@ mod tests {
         active: Arc<Mutex<bool>>,
         starts: Arc<Mutex<usize>>,
         failures_remaining: usize,
+        stop_failures_remaining: usize,
     }
 
     impl EngineBackend for FailingConfigPublicationBackend {
@@ -1293,6 +1294,10 @@ mod tests {
         }
 
         fn stop(&mut self) -> Result<(), String> {
+            if self.stop_failures_remaining > 0 {
+                self.stop_failures_remaining -= 1;
+                return Err("release failed".to_owned());
+            }
             *self.active.lock().expect("backend activity lock") = false;
             Ok(())
         }
@@ -1801,6 +1806,7 @@ mod tests {
                         active: backend_active,
                         starts: backend_starts,
                         failures_remaining: 1,
+                        stop_failures_remaining: 1,
                     })
                 }),
                 sink: Box::new(RecordingSink::default()),
@@ -1815,14 +1821,14 @@ mod tests {
                 "publication failure reaches the caller"
             );
             assert!(
-                !failed
+                failed
                     .snapshot
                     .expect("failed publication returns an observed snapshot")
                     .engine_active,
-                "cleanup makes the accepted scheduled policy inactive"
+                "a failed cleanup retains the active lease for an explicit stop"
             );
 
-            let starts_after_cleanup = *starts.lock().expect("backend start lock");
+            let starts_after_fault = *starts.lock().expect("backend start lock");
             for route in [TrayRoute::Tick, TrayRoute::Resume] {
                 let automatic = send_owner_route(&handle, route);
                 assert!(
@@ -1831,7 +1837,7 @@ mod tests {
                 );
                 assert_eq!(
                     *starts.lock().expect("backend start lock"),
-                    starts_after_cleanup,
+                    starts_after_fault,
                     "a configuration fault blocks {route:?} from restarting a scheduled policy"
                 );
             }
@@ -1846,21 +1852,31 @@ mod tests {
                 "Query remains available under the fault guard"
             );
 
-            let user_start = send_owner_route(&handle, TrayRoute::TrayToggle);
-            assert!(
-                user_start.error.is_none(),
-                "a user toggle remains actionable"
-            );
-            assert_eq!(
-                *starts.lock().expect("backend start lock"),
-                starts_after_cleanup + 1,
-                "the fault guard suppresses automatic starts, not an explicit user toggle"
-            );
             let user_stop = send_owner_route(&handle, TrayRoute::TrayToggle);
             assert!(
                 user_stop.error.is_none(),
-                "the user can stop the explicit activation"
+                "an explicit toggle may release a lease retained after failed cleanup"
             );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                starts_after_fault,
+                "an explicit stop does not start another backend lease"
+            );
+            for route in [TrayRoute::TrayToggle, TrayRoute::IpcToggle] {
+                let blocked = send_owner_route(&handle, route);
+                assert!(
+                    blocked
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("configuration fault")),
+                    "{route:?} reports that the configuration fault blocks a new backend lease"
+                );
+                assert_eq!(
+                    *starts.lock().expect("backend start lock"),
+                    starts_after_fault,
+                    "{route:?} cannot start the backend while the configuration fault is latched"
+                );
+            }
 
             let recovered = send_owner_config(&handle, candidate);
             assert!(
@@ -1869,7 +1885,7 @@ mod tests {
             );
             assert_eq!(
                 *starts.lock().expect("backend start lock"),
-                starts_after_cleanup + 2,
+                starts_after_fault + 1,
                 "the accepted scheduled policy resumes automatic activation after recovery"
             );
             assert!(
