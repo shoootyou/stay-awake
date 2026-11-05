@@ -77,7 +77,7 @@ async function applyTranslations() {
       const ssid = el.getAttribute("data-network");
       const text = await invoke("get_translation", ssid ? { key, network: ssid } : { key });
       if (ssid) {
-        el.setAttribute("aria-label", text.replace(/\{\s*\$network\s*\}/, ssid));
+        el.setAttribute("aria-label", text);
       } else {
         el.setAttribute("aria-label", text);
       }
@@ -531,7 +531,7 @@ function renderNetworkList(networks) {
     removeBtn.setAttribute("data-i18n-aria-label", "settings-wifi-remove-label");
     removeBtn.setAttribute("data-network", ssid);
     invoke("get_translation", { key: "settings-wifi-remove-label", network: ssid })
-      .then((text) => removeBtn.setAttribute("aria-label", text.replace(/\{\s*\$network\s*\}/, ssid)))
+      .then((text) => removeBtn.setAttribute("aria-label", text))
       .catch(() => removeBtn.setAttribute("aria-label", `Remove network ${ssid}`));
     removeBtn.title = "Remove";
     removeBtn.addEventListener("click", () => removeNetwork(ssid));
