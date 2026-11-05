@@ -1531,6 +1531,35 @@ mod tray_refresh_contract_tests {
     }
 
     #[test]
+    fn tray_presentations_localize_each_app_mode_without_emoji() {
+        let clock = FixedClock(at(10));
+        let state = snapshot(runtime::TrayStatus::Active);
+        let cases = [
+            ("en", AppMode::Manual, "Mode: Manual"),
+            ("en", AppMode::AlwaysOn, "Mode: Always On"),
+            ("en", AppMode::WiFi, "Mode: WiFi"),
+            ("en", AppMode::Scheduled, "Mode: Manual"),
+            ("es", AppMode::Manual, "Modo: Manual"),
+            ("es", AppMode::AlwaysOn, "Modo: Siempre activo"),
+            ("es", AppMode::WiFi, "Modo: WiFi"),
+            ("es", AppMode::Scheduled, "Modo: Manual"),
+            ("ja", AppMode::Manual, "モード: 手動"),
+            ("ja", AppMode::AlwaysOn, "モード: 常時オン"),
+            ("ja", AppMode::WiFi, "モード: WiFi"),
+            ("ja", AppMode::Scheduled, "モード: 手動"),
+        ];
+        for (locale, mode, expected) in cases {
+            let presentation = build_tray_presentation_with_schedule(PresentationInput {
+                snapshot: &state, mode: &mode, bundle: &i18n::create_bundle(locale), locale, clock: &clock,
+            }, false);
+            assert_eq!(presentation.mode_text, expected, "{locale} {mode:?}");
+            if matches!(locale, "es" | "ja") {
+                assert!(!presentation.mode_text.chars().any(|c| ('\u{1f300}'..='\u{1faff}').contains(&c)));
+            }
+        }
+    }
+
+    #[test]
     fn failed_backend_operations_publish_the_actual_inactive_state() {
         let clock = FixedClock(at(10));
         let bundle = i18n::create_bundle("en");
