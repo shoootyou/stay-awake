@@ -224,6 +224,28 @@ mod tests {
         ranges: Vec<OffsetRange>,
     }
 
+    struct DelayedResolutionClock {
+        first_valid: NaiveDateTime,
+    }
+
+    impl Clock for DelayedResolutionClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.first_valid.and_utc()
+        }
+
+        fn to_local(&self, instant: DateTime<Utc>) -> DateTime<FixedOffset> {
+            instant.with_timezone(&FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(&self, local: NaiveDateTime) -> LocalResult<DateTime<Utc>> {
+            if local >= self.first_valid {
+                LocalResult::Single(local.and_utc())
+            } else {
+                LocalResult::None
+            }
+        }
+    }
+
     impl TestClock {
         fn new(ranges: Vec<OffsetRange>) -> Self {
             Self { ranges }
@@ -555,6 +577,14 @@ mod tests {
                 .expect("collapsed occurrence is ignored")
                 .in_window()
         );
+        assert_ne!(
+            evaluate(&collapsed, TestClock::utc(2026, 3, 29, 1, 0), &gap_clock)
+                .expect("collapsed occurrence is ignored")
+                .next
+                .expect("the following selected occurrence remains upcoming")
+                .start_day,
+            NaiveDate::from_ymd_opt(2026, 3, 29).expect("fixture date exists")
+        );
         let no_zone = UnresolvableClock;
         let local = NaiveDate::from_ymd_opt(2026, 3, 2)
             .unwrap()
@@ -571,6 +601,36 @@ mod tests {
             TestClock::utc(2026, 3, 2, 9, 0),
             &no_zone
         )
+        .is_err());
+    }
+
+    #[test]
+    fn resolves_a_gap_at_the_48_hour_bound_and_rejects_one_minute_beyond_it() {
+        let local = NaiveDate::from_ymd_opt(2026, 3, 2)
+            .expect("fixture date exists")
+            .and_hms_opt(9, 0, 0)
+            .expect("fixture time exists");
+        let exact = DelayedResolutionClock {
+            first_valid: local + Duration::hours(48),
+        };
+        assert_eq!(
+            resolve_boundary(BoundaryInput {
+                local,
+                edge: BoundaryEdge::Start,
+                clock: &exact,
+            })
+            .expect("a boundary exactly 48 hours away resolves"),
+            (local + Duration::hours(48)).and_utc()
+        );
+
+        let beyond = DelayedResolutionClock {
+            first_valid: local + Duration::hours(48) + Duration::minutes(1),
+        };
+        assert!(resolve_boundary(BoundaryInput {
+            local,
+            edge: BoundaryEdge::Start,
+            clock: &beyond,
+        })
         .is_err());
     }
 
