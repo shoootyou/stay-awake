@@ -99,14 +99,16 @@ pub(crate) fn format_next_window(_input: NextWindowInput<'_>) -> String {
 mod tests {
     /*
      * @spec-handoff
-     * @interface create_bundle(locale: &str) -> Bundle; t(bundle, id) -> String
+     * @interface t_with_args(Bundle, id, FluentArgs); format_next_window(NextWindowInput) -> String
      * @behavior
-     *   - Every English message key resolves for every shipped locale.
-     *   - An unsupported locale and missing message return the current English/key fallbacks.
+     *   - Eight valid locale bundles define every schedule status and accessibility message.
+     *   - Fluent arguments render into tray and network-removal templates without placeholders.
+     *   - Next-window timestamps use the documented locale-specific numeric format.
      * @edge-cases
-     *   - Fluent text is returned without format arguments.
+     *   - No upcoming window uses its localized message.
      */
     use super::*;
+    use chrono::TimeZone;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
     const NEW_KEYS: [&str; 11] = [
@@ -123,14 +125,9 @@ mod tests {
         "settings-wifi-remove-label",
     ];
 
-    // Test-only final seam: production formats Fluent variables instead of replacing strings.
-    fn t_with_args(bundle: &Bundle, id: &str, _: &[(&str, &str)]) -> String {
-        t(bundle, id)
-    }
-
     #[test]
-    fn every_locale_defines_schedule_status_keys_and_formats_fluent_arguments() {
-        for (locale, source) in [
+    fn eight_parseable_locale_files_define_every_schedule_status_key() {
+        let locale_sources = [
             ("en", LOCALE_EN),
             ("es", LOCALE_ES),
             ("fr", LOCALE_FR),
@@ -139,7 +136,17 @@ mod tests {
             ("ja", LOCALE_JA),
             ("zh-Hans", LOCALE_ZH_HANS),
             ("ko", LOCALE_KO),
-        ] {
+        ];
+        assert_eq!(locale_sources.len(), 8);
+        for (locale, source) in locale_sources {
+            let resource = FluentResource::try_new(source.to_owned())
+                .unwrap_or_else(|(_, errors)| panic!("{locale} must parse: {errors:?}"));
+            let language = locale.parse().expect("locale fixture is valid");
+            let mut bundle = FluentBundle::new_concurrent(vec![language]);
+            assert!(
+                bundle.add_resource(resource).is_ok(),
+                "{locale} must load into a Fluent bundle"
+            );
             for key in NEW_KEYS {
                 assert!(
                     source
@@ -149,34 +156,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn english_schedule_status_messages_match_the_contract() {
         let bundle = create_bundle("en");
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("when", "Mon 09 Nov 2026, 09:00");
+        args.set("network", "Lab");
+        for (key, expected) in [
+            ("tray-waiting", "Waiting for schedule"),
+            ("tray-paused", "Paused for this window"),
+            ("tray-active-override", "Active (manual override)"),
+            ("tray-tooltip-waiting", "Stay Awake: waiting for schedule"),
+            ("tray-tooltip-paused", "Stay Awake: paused for this window"),
+            (
+                "tray-tooltip-override",
+                "Stay Awake: active by manual override",
+            ),
+            ("tray-next-window", "Next window: Mon 09 Nov 2026, 09:00"),
+            ("tray-no-next-window", "No upcoming window"),
+            (
+                "schedule-enabled-hint",
+                "Automatically starts and stops in Manual and Always On. In WiFi mode, only mouse \
+                 jiggles follow the schedule.",
+            ),
+            ("settings-mode-info-label", "About jiggle modes"),
+            ("settings-wifi-remove-label", "Remove network Lab"),
+        ] {
+            assert_eq!(t_with_args(&bundle, key, Some(&args)), expected, "{key}");
+        }
+    }
+
+    #[test]
+    fn fluent_arguments_render_without_unresolved_placeholders_in_every_locale() {
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("when", "Tidepool-42");
+        args.set("network", "Lantern-7");
+        for locale in LOCALES {
+            for (key, value) in [
+                ("tray-next-window", "Tidepool-42"),
+                ("settings-wifi-remove-label", "Lantern-7"),
+            ] {
+                let rendered = t_with_args(&create_bundle(locale), key, Some(&args));
+                assert!(rendered.contains(value), "{locale} must render {key}");
+                assert!(!rendered.contains("{ $"), "{locale} must resolve {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn formats_next_window_and_no_upcoming_window_in_english() {
+        let when = chrono::FixedOffset::east_opt(0)
+            .expect("UTC offset exists")
+            .with_ymd_and_hms(2026, 11, 9, 9, 0, 0)
+            .single()
+            .expect("fixed timestamp exists");
         assert_eq!(
-            t_with_args(&bundle, "tray-waiting", &[]),
-            "Waiting for schedule"
+            format_next_window(NextWindowInput { when, locale: "en" }),
+            "11/09/2026 09:00 +00:00"
         );
         assert_eq!(
-            t_with_args(&bundle, "tray-paused", &[]),
-            "Paused for this window"
-        );
-        assert_eq!(
-            t_with_args(&bundle, "tray-active-override", &[]),
-            "Active (manual override)"
-        );
-        assert_eq!(
-            t_with_args(&bundle, "tray-next-window", &[("when", "Mon 09 Nov")]),
-            "Next window: Mon 09 Nov"
-        );
-        assert_eq!(
-            t_with_args(&bundle, "settings-wifi-remove-label", &[("network", "Lab")]),
-            "Remove network Lab"
-        );
-        assert_eq!(
-            t_with_args(&bundle, "tray-no-next-window", &[]),
+            t_with_args(&create_bundle("en"), "tray-no-next-window", None),
             "No upcoming window"
-        );
-        assert_eq!(
-            t_with_args(&bundle, "settings-mode-info-label", &[]),
-            "About jiggle modes"
         );
     }
 
