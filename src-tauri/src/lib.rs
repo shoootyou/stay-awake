@@ -1,10 +1,15 @@
-//! Stay Awake — a cross-platform tray-only mouse jiggler / anti-inactivity tool.
-//!
-//! This is the main Tauri application entry point. It wires together the
-//! platform layer, configuration, engine, system tray, global shortcut,
-//! autostart, accessibility checks, and exposes IPC commands to the
-//! settings webview.
-
+/**
+ * @spec-handoff
+ * @interface handle_runtime_route(RuntimeRouteInput, Supervisor, EngineBackend, TraySink)
+ * @behavior
+ *   - Startup follows the checkbox lifecycle for Manual and AlwaysOn modes.
+ *   - A schedule-enabled startup starts only inside its selected window.
+ *   - Legacy Scheduled uses the Manual startup behavior without changing persisted config.
+ *
+ * @edge-cases
+ *   - Every startup publishes exactly one truthful tray status.
+ */
+// Stay Awake is the Tauri application entry point.
 mod config;
 mod engine;
 mod i18n;
@@ -961,6 +966,74 @@ mod tray_refresh_contract_tests {
         .is_err());
         assert_eq!(sink.calls.len(), 1);
         assert_eq!(sink.calls[0].1.status, runtime::TrayStatus::Inactive);
+    }
+
+    #[test]
+    fn checkbox_startup_matrix_uses_the_real_supervisor_and_truthful_publication() {
+        let bundle = i18n::create_bundle("en");
+        let cases = [
+            (AppMode::Manual, false, 10, 0, runtime::TrayStatus::Inactive),
+            (AppMode::Manual, false, 18, 0, runtime::TrayStatus::Inactive),
+            (AppMode::Manual, true, 10, 1, runtime::TrayStatus::Active),
+            (AppMode::Manual, true, 18, 0, runtime::TrayStatus::Waiting),
+            (AppMode::AlwaysOn, false, 10, 1, runtime::TrayStatus::Active),
+            (AppMode::AlwaysOn, false, 18, 1, runtime::TrayStatus::Active),
+            (AppMode::AlwaysOn, true, 10, 1, runtime::TrayStatus::Active),
+            (AppMode::AlwaysOn, true, 18, 0, runtime::TrayStatus::Waiting),
+            (
+                AppMode::Scheduled,
+                false,
+                10,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (AppMode::Scheduled, true, 10, 1, runtime::TrayStatus::Active),
+            (
+                AppMode::Scheduled,
+                true,
+                18,
+                0,
+                runtime::TrayStatus::Waiting,
+            ),
+        ];
+
+        for (mode, schedule_enabled, hour, expected_starts, expected_status) in cases {
+            let config = AppConfig {
+                mode,
+                schedule_enabled,
+                schedule_days: vec!["mon".to_owned()],
+                ..AppConfig::default()
+            };
+            let clock = FixedClock(at(hour));
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend::default();
+            let mut sink = RecordingSink::default();
+
+            let snapshot = handle_runtime_route(
+                RuntimeRouteInput {
+                    route: TrayRoute::Startup,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &bundle,
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("startup reconciliation succeeds");
+
+            assert_eq!(
+                backend.start_calls, expected_starts,
+                "{config:?} at {hour}:00"
+            );
+            assert_eq!(backend.stop_calls, 0, "{config:?} at {hour}:00");
+            assert_eq!(snapshot.status, expected_status, "{config:?} at {hour}:00");
+            assert_eq!(sink.calls.len(), 1, "{config:?} at {hour}:00");
+            assert_eq!(
+                sink.calls[0].1.status, expected_status,
+                "{config:?} at {hour}:00"
+            );
+        }
     }
 }
 
