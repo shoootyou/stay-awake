@@ -53,9 +53,8 @@ To add or change a Settings icon:
 2. Add it to `src/icons/`.
 3. Inline it where it is used with `aria-hidden="true"` and `focusable="false"`.
 
-If a tray shape changes, regenerate its PNG assets and commit them. The checked-in
-PNGs were rendered from `check-circle.svg`, `power.svg`, and `calendar-blank.svg`
-with `@resvg/resvg-js` and `pngjs`; this repository has no generator script.
+The tray uses the original app icon and dims it when the engine is not active.
+Do not regenerate separate state-specific tray PNGs.
 
 ## Conventional Commits
 

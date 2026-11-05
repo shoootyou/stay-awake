@@ -35,12 +35,9 @@ prompt — open **System Settings → Privacy & Security** and click **Open Anyw
 Click the menu bar icon to open the tray menu. Left-click and right-click both
 open the same menu.
 
-The icon shape shows the current state. A check circle means active, a power
-ring means inactive, and a calendar means waiting for a schedule. Active manual
-overrides use the check circle. A paused window uses the power ring.
-
-On macOS, the template images follow the light or dark menu bar. Linux and
-Windows use explicit state images. The tray menu text always names the state.
+The original app icon is full strength while the engine is active and dimmed
+when it is not active. The tray menu status starts with an emoji and ends with
+the state that the next click will produce.
 On Linux, use that menu text because tooltips and native tray titles are not
 guaranteed by every implementation.
 
@@ -59,7 +56,8 @@ guaranteed by every implementation.
 
 ### Status item
 
-The status item shows the current engine and schedule state. Click it to toggle the engine.
+The status item shows the current engine and schedule state, then the state a click will
+produce. Click it to toggle the engine.
 
 - **Active**: the engine is running. Click to stop it.
 - **Inactive**: the engine is stopped. Click to start it.
