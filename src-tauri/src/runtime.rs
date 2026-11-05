@@ -840,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_supervisor_starts_the_next_window_within_one_period_despite_a_300_second_interval() {
+    fn idle_supervisor_starts_the_next_window_on_its_first_tick() {
         let clock = AdvancingClock::new(
             at(8)
                 + chrono::Duration::minutes(59)
