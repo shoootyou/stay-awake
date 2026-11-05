@@ -969,46 +969,51 @@ fn list_profiles(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<
 }
 
 /// Save the current settings as a named profile.
+#[cfg(desktop)]
 #[tauri::command]
-fn save_profile(
+async fn save_profile(
     name: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
 
-    // Reject empty or excessively long names.
-    let name = name.trim().to_string();
-    if name.is_empty() || name.len() > 64 {
-        return Err("Profile name must be 1–64 characters".to_string());
-    }
-
-    // Cap total profiles.
-    if cfg.profiles.len() >= 50 && !cfg.profiles.iter().any(|p| p.name == name) {
-        return Err("Maximum of 50 profiles reached".to_string());
-    }
-
-    let profile = Profile {
-        name: name.clone(),
-        jiggle_mode: cfg.jiggle_mode.clone(),
-        interval_secs: cfg.interval_secs,
-        schedule_enabled: cfg.schedule_enabled,
-        schedule_start_hour: cfg.schedule_start_hour,
-        schedule_start_minute: cfg.schedule_start_minute,
-        schedule_end_hour: cfg.schedule_end_hour,
-        schedule_end_minute: cfg.schedule_end_minute,
-        schedule_days: cfg.schedule_days.clone(),
-    };
-
-    // Replace if a profile with the same name exists, otherwise append.
-    if let Some(existing) = cfg.profiles.iter_mut().find(|p| p.name == name) {
-        *existing = profile;
-    } else {
-        cfg.profiles.push(profile);
-    }
-    cfg.active_profile = name;
-    cfg.save()
+        let edit = move |config: &mut AppConfig| {
+            let name = name.trim().to_string();
+            if name.is_empty() || name.len() > 64 {
+                return Err("Profile name must be 1–64 characters".to_owned());
+            }
+            if config.profiles.len() >= 50 && !config.profiles.iter().any(|p| p.name == name) {
+                return Err("Maximum of 50 profiles reached".to_owned());
+            }
+            let profile = Profile {
+                name: name.clone(),
+                jiggle_mode: config.jiggle_mode.clone(),
+                interval_secs: config.interval_secs,
+                schedule_enabled: config.schedule_enabled,
+                schedule_start_hour: config.schedule_start_hour,
+                schedule_start_minute: config.schedule_start_minute,
+                schedule_end_hour: config.schedule_end_hour,
+                schedule_end_minute: config.schedule_end_minute,
+                schedule_days: config.schedule_days.clone(),
+            };
+            if let Some(existing) = config.profiles.iter_mut().find(|p| p.name == name) {
+                *existing = profile;
+            } else {
+                config.profiles.push(profile);
+            }
+            config.active_profile = name;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Other, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("profile save task failed: {error}"))?
 }
 
 #[cfg(desktop)]
@@ -1184,53 +1189,66 @@ fn state_name(snapshot: Option<runtime::RuntimeSnapshot>) -> Result<String, Stri
 }
 
 /// Delete a named profile.
+#[cfg(desktop)]
 #[tauri::command]
-fn delete_profile(
+async fn delete_profile(
     name: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
 
-    cfg.profiles.retain(|p| p.name != name);
-    if cfg.active_profile == name {
-        cfg.active_profile = String::from("Default");
-    }
-    cfg.save()
+        let edit = move |config: &mut AppConfig| {
+            config.profiles.retain(|profile| profile.name != name);
+            if config.active_profile == name {
+                config.active_profile = "Default".to_owned();
+            }
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Other, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("profile deletion task failed: {error}"))?
 }
 
 /// Update the global hotkey at runtime: unregister the old shortcut, register
 /// the new one, and persist the change.
+#[cfg(desktop)]
 #[tauri::command]
-fn update_global_hotkey(
+async fn update_global_hotkey(
     app: tauri::AppHandle,
     hotkey: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    // Parse the new shortcut string.
-    let new_shortcut =
-        parse_shortcut_string(&hotkey).ok_or_else(|| format!("Invalid shortcut: {}", hotkey))?;
-
-    // Unregister all existing shortcuts, then register the new one.
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-
-    gs.register(new_shortcut)
-        .map_err(|e| format!("Failed to register shortcut: {}", e))?;
-
-    // Persist to config.
-    {
-        let mut cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.global_hotkey = hotkey;
-        cfg.save()?;
-    }
-
-    Ok(())
+        let new_shortcut =
+            parse_shortcut_string(&hotkey).ok_or_else(|| format!("Invalid shortcut: {hotkey}"))?;
+        let shortcuts = app.global_shortcut();
+        let _ = shortcuts.unregister_all();
+        shortcuts
+            .register(new_shortcut)
+            .map_err(|error| format!("Failed to register shortcut: {error}"))?;
+        let edit = move |config: &mut AppConfig| {
+            config.global_hotkey = hotkey;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Other, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("hotkey update task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1576,10 +1594,13 @@ pub fn run() {
             #[cfg(desktop)]
             set_language,
             list_profiles,
+            #[cfg(desktop)]
             save_profile,
             #[cfg(desktop)]
             load_profile,
+            #[cfg(desktop)]
             delete_profile,
+            #[cfg(desktop)]
             update_global_hotkey,
             get_app_version,
             get_platform_os,
@@ -1762,7 +1783,6 @@ pub fn run() {
 
                 let acc_ok_text = format!("\u{1f7e2} {}", tr(accessibility_ok_key()));
 
-                let config_for_tray = Arc::clone(&shared_config);
                 let perm_for_tray = Arc::clone(&perm_checker);
                 let accessibility_clone = accessibility_item.clone();
 
@@ -1811,6 +1831,8 @@ pub fn run() {
                     .menu(&menu)
                     .show_menu_on_left_click(true)
                     .on_menu_event(move |app, event| {
+                        use owner::ConfigOrigin;
+
                         match event.id().as_ref() {
                             "toggle_active" => {
                                 if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
@@ -1822,27 +1844,83 @@ pub fn run() {
                                 }
                             }
                             "mode_power" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::PowerOnly;
-                                    let _ = cfg.save();
+                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                    let runtime = runtime.inner().clone();
+                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                                        let pending = runtime.update_config(ConfigOrigin::Other,
+                                            |config| {
+                                                config.jiggle_mode = JiggleMode::PowerOnly;
+                                                Ok(())
+                                            }, |_, _| {});
+                                        let result = pending
+                                            .and_then(|pending| {
+                                                pending.wait(owner::REQUEST_TIMEOUT)
+                                            })
+                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
+                                        if let Err(error) = result {
+                                            log::error!("Jiggle mode update failed: {error}");
+                                        }
+                                    }));
                                 }
                             }
                             "mode_subtle" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::MouseSubtle;
-                                    let _ = cfg.save();
+                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                    let runtime = runtime.inner().clone();
+                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                                        let pending = runtime.update_config(ConfigOrigin::Other,
+                                            |config| {
+                                                config.jiggle_mode = JiggleMode::MouseSubtle;
+                                                Ok(())
+                                            }, |_, _| {});
+                                        let result = pending
+                                            .and_then(|pending| {
+                                                pending.wait(owner::REQUEST_TIMEOUT)
+                                            })
+                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
+                                        if let Err(error) = result {
+                                            log::error!("Jiggle mode update failed: {error}");
+                                        }
+                                    }));
                                 }
                             }
                             "mode_zen" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::MouseZen;
-                                    let _ = cfg.save();
+                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                    let runtime = runtime.inner().clone();
+                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                                        let pending = runtime.update_config(ConfigOrigin::Other,
+                                            |config| {
+                                                config.jiggle_mode = JiggleMode::MouseZen;
+                                                Ok(())
+                                            }, |_, _| {});
+                                        let result = pending
+                                            .and_then(|pending| {
+                                                pending.wait(owner::REQUEST_TIMEOUT)
+                                            })
+                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
+                                        if let Err(error) = result {
+                                            log::error!("Jiggle mode update failed: {error}");
+                                        }
+                                    }));
                                 }
                             }
                             "mode_circle" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::MouseCircle;
-                                    let _ = cfg.save();
+                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                    let runtime = runtime.inner().clone();
+                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                                        let pending = runtime.update_config(ConfigOrigin::Other,
+                                            |config| {
+                                                config.jiggle_mode = JiggleMode::MouseCircle;
+                                                Ok(())
+                                            }, |_, _| {});
+                                        let result = pending
+                                            .and_then(|pending| {
+                                                pending.wait(owner::REQUEST_TIMEOUT)
+                                            })
+                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
+                                        if let Err(error) = result {
+                                            log::error!("Jiggle mode update failed: {error}");
+                                        }
+                                    }));
                                 }
                             }
                             "grant_accessibility" => {
