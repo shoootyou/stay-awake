@@ -771,6 +771,36 @@ mod tests {
         }
     }
 
+    fn wifi_config(networks: &[&str]) -> AppConfig {
+        AppConfig {
+            mode: crate::config::AppMode::WiFi,
+            wifi: crate::config::WifiConfig {
+                enabled: true,
+                networks: networks
+                    .iter()
+                    .map(|network| (*network).to_owned())
+                    .collect(),
+            },
+            ..AppConfig::default()
+        }
+    }
+
+    fn send_owner_config(handle: &RuntimeHandle, config: AppConfig) -> OwnerReply {
+        let (reply, receiver) = mpsc::channel();
+        handle
+            .shared
+            .sender
+            .send(OwnerCommand::Config {
+                origin: ConfigOrigin::Settings,
+                config,
+                reply,
+            })
+            .expect("ordered config command sends");
+        receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("ordered config command replies")
+    }
+
     struct SharedRecordingBackend {
         calls: Arc<Mutex<Vec<&'static str>>>,
         active: Arc<Mutex<bool>>,
@@ -983,6 +1013,112 @@ mod tests {
                 .count(),
             1,
             "the unrelated update must not restart the backend"
+        );
+    }
+
+    #[test]
+    fn entering_wifi_does_not_restart_from_an_activation_before_the_previous_wifi_session() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let handle = RuntimeHandle::spawn(owner_start_with_config(wifi_config(&["Office"]), calls))
+            .expect("owner spawn succeeds");
+
+        handle
+            .post_wifi(WifiObservation {
+                ssid: Some("Office".to_owned()),
+            })
+            .expect("registered observation queues");
+        assert!(
+            handle
+                .query()
+                .expect("query sends")
+                .wait(REQUEST_TIMEOUT)
+                .expect("query replies")
+                .snapshot
+                .expect("startup snapshot exists")
+                .engine_active,
+            "the first WiFi session acquires on a registered SSID"
+        );
+
+        let mut manual = wifi_config(&["Office"]);
+        manual.mode = crate::config::AppMode::Manual;
+        send_owner_config(&handle, manual);
+        send_owner_config(&handle, wifi_config(&["Office"]));
+
+        assert!(
+            !handle
+                .query()
+                .expect("query sends")
+                .wait(REQUEST_TIMEOUT)
+                .expect("query replies")
+                .snapshot
+                .expect("re-entry snapshot exists")
+                .engine_active,
+            "entering WiFi waits for a new SSID observation rather than reusing activation"
+        );
+    }
+
+    #[test]
+    fn leaving_wifi_discards_the_last_ssid_before_a_later_wifi_session() {
+        let handle = RuntimeHandle::spawn(owner_start_with_config(
+            wifi_config(&["Office"]),
+            Arc::new(Mutex::new(Vec::new())),
+        ))
+        .expect("owner spawn succeeds");
+
+        handle
+            .post_wifi(WifiObservation {
+                ssid: Some("Office".to_owned()),
+            })
+            .expect("registered observation queues");
+        let mut manual = wifi_config(&["Office"]);
+        manual.mode = crate::config::AppMode::Manual;
+        send_owner_config(&handle, manual);
+        send_owner_config(&handle, wifi_config(&[]));
+
+        assert!(
+            !handle
+                .query()
+                .expect("query sends")
+                .wait(REQUEST_TIMEOUT)
+                .expect("query replies")
+                .snapshot
+                .expect("re-entry snapshot exists")
+                .engine_active,
+            "a previous SSID is cleared when WiFi mode ends"
+        );
+    }
+
+    #[test]
+    fn wifi_network_list_edits_recompute_membership_from_the_last_ssid_immediately() {
+        let handle = RuntimeHandle::spawn(owner_start_with_config(
+            wifi_config(&["Office"]),
+            Arc::new(Mutex::new(Vec::new())),
+        ))
+        .expect("owner spawn succeeds");
+        handle
+            .post_wifi(WifiObservation {
+                ssid: Some("Office".to_owned()),
+            })
+            .expect("registered observation queues");
+        let active = handle
+            .query()
+            .expect("query sends")
+            .wait(REQUEST_TIMEOUT)
+            .expect("query replies")
+            .snapshot
+            .expect("active snapshot exists");
+        assert!(
+            active.engine_active,
+            "registered SSID activates the backend"
+        );
+
+        let reply = send_owner_config(&handle, wifi_config(&[]));
+        assert!(
+            !reply
+                .snapshot
+                .expect("network-list reply includes a snapshot")
+                .engine_active,
+            "removing the current SSID stops WiFi activation without another observation"
         );
     }
 
