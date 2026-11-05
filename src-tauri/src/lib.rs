@@ -2594,6 +2594,7 @@ pub fn run() {
                     None::<&str>,
                 )?;
 
+                let sep0 = PredefinedMenuItem::separator(app)?;
                 let sep1 = PredefinedMenuItem::separator(app)?;
                 let sep2 = PredefinedMenuItem::separator(app)?;
                 let sep3 = PredefinedMenuItem::separator(app)?;
@@ -2610,6 +2611,7 @@ pub fn run() {
                     &[
                         &toggle_item,
                         &toggle_hint,
+                        &sep0,
                         &mode_info,
                         &sep1,
                         &mode_submenu,
