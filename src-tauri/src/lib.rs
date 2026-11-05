@@ -113,6 +113,88 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
     }
 }
 
+/**
+ * @spec-handoff
+ * @interface status_menu_label(current: TrayStatus, after_click: TrayStatus, Bundle) -> String
+ * @behavior
+ *   - Renders the current localized state, its fixed emoji, and the true click-result state.
+ *   - Uses one U+2192 arrow with a single space on each side.
+ * @edge-cases
+ *   - A scheduled Active click targets Paused, while an unscheduled Active click targets Inactive.
+ *   - The target is supplied by lifecycle logic rather than guessed from the current label.
+ * @see ./runtime.rs
+ */
+#[cfg(test)]
+mod tray_status_menu_contract_tests {
+    use super::*;
+
+    #[test]
+    fn status_menu_label_uses_fixed_emoji_localized_labels_and_the_click_result() {
+        let english = i18n::create_bundle("en");
+        for (current, after_click, expected) in [
+            (
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Inactive,
+                "🟢 Active → Inactive",
+            ),
+            (
+                runtime::TrayStatus::Inactive,
+                runtime::TrayStatus::Active,
+                "⚪ Inactive → Active",
+            ),
+            (
+                runtime::TrayStatus::Waiting,
+                runtime::TrayStatus::ActiveOverride,
+                "📅 Waiting for schedule → Active (manual override)",
+            ),
+            (
+                runtime::TrayStatus::Paused,
+                runtime::TrayStatus::Active,
+                "⏸️ Paused for this window → Active",
+            ),
+            (
+                runtime::TrayStatus::ActiveOverride,
+                runtime::TrayStatus::Waiting,
+                "🟢 Active (manual override) → Waiting for schedule",
+            ),
+            (
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Paused,
+                "🟢 Active → Paused for this window",
+            ),
+        ] {
+            assert_eq!(status_menu_label(current, after_click, &english), expected);
+        }
+    }
+
+    #[test]
+    fn status_menu_label_uses_the_selected_locale() {
+        let spanish = i18n::create_bundle("es");
+        assert_eq!(
+            status_menu_label(
+                runtime::TrayStatus::Waiting,
+                runtime::TrayStatus::ActiveOverride,
+                &spanish,
+            ),
+            "📅 En espera del horario → Activo (activación manual)"
+        );
+    }
+
+    #[test]
+    fn presentation_delegates_all_status_menu_text_to_the_label_function() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("lib.rs is readable");
+        let production = source
+            .split("#[cfg(test)]\nmod tray_status_menu_contract_tests")
+            .next()
+            .expect("production source precedes this contract");
+        assert!(production.contains("menu_text: status_menu_label("));
+        assert_eq!(production.matches("status_menu_label(").count(), 2);
+    }
+}
+
 pub(crate) trait TraySink {
     fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
 
@@ -2630,7 +2712,10 @@ mod tray_icon_contract_tests {
     #[test]
     fn restores_the_exact_original_tray_png_assets_and_removes_silhouettes() {
         for name in ["tray-icon.png", "tray-icon@2x.png", "tray-icon-dark.png"] {
-            assert!(icons_dir().join(name).is_file(), "missing original tray asset {name}");
+            assert!(
+                icons_dir().join(name).is_file(),
+                "missing original tray asset {name}"
+            );
         }
         for name in RETIRED_SILHOUETTES {
             assert!(
