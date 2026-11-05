@@ -3515,6 +3515,29 @@ mod native_wiring_contract_tests {
     }
 
     #[test]
+    fn macos_window_openers_activate_and_focus_new_windows() {
+        let source = source();
+        let regular = scoped_block(&source, "fn set_macos_regular_app() {");
+        let settings = scoped_block(&source, "fn show_settings_window(app: &tauri::AppHandle) {");
+        let about = scoped_block(&source, "fn show_about_window(app: &tauri::AppHandle) {");
+
+        let regular_policy = regular.find("setActivationPolicy(").expect("Regular policy is set");
+        let activate = regular.find(".activate()").expect("Regular app activates itself");
+        assert!(regular_policy < activate, "activation follows the Regular policy change");
+        for (name, opener) in [("Settings", settings), ("About", about)] {
+            assert!(opener.starts_with("fn"));
+            assert!(opener.contains("set_macos_regular_app();"), "{name} activates before window work");
+            assert!(opener.contains(".show();") && opener.find(".show()") < opener.find("set_focus()"),
+                "existing {name} window shows before focus");
+            assert!(opener.contains(".build()") && opener.contains("Ok(win)") && opener.contains("win.set_focus()"),
+                "new {name} window focuses after build");
+            assert!(opener.contains("Err(e)") && opener.contains("log::error!"),
+                "{name} build failures remain logged");
+            assert!(!opener.contains("Accessory"), "{name} never resets macOS to Accessory");
+        }
+    }
+
+    #[test]
     fn setup_uses_actual_initial_presentation_and_installs_wifi_listener_before_monitor_start() {
         let source = source();
         let setup = scoped_block(&source, ".setup(|app| {");
