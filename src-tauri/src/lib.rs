@@ -66,6 +66,7 @@ impl TrayRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrayPresentation {
     pub(crate) status: runtime::TrayStatus,
+    // The menu label carries the lifecycle-computed click target; tooltip stays state-only.
     pub(crate) menu_text: String,
     pub(crate) tooltip: String,
     pub(crate) icon: runtime::TrayIcon,
@@ -894,6 +895,16 @@ mod tray_refresh_contract_tests {
         }
     }
 
+    fn after_click(status: runtime::TrayStatus) -> runtime::TrayStatus {
+        match status {
+            runtime::TrayStatus::Active => runtime::TrayStatus::Inactive,
+            runtime::TrayStatus::Inactive => runtime::TrayStatus::Active,
+            runtime::TrayStatus::Waiting => runtime::TrayStatus::ActiveOverride,
+            runtime::TrayStatus::Paused => runtime::TrayStatus::Active,
+            runtime::TrayStatus::ActiveOverride => runtime::TrayStatus::Waiting,
+        }
+    }
+
     #[cfg(desktop)]
     fn presentation(text: &str) -> TrayPresentation {
         TrayPresentation {
@@ -1007,31 +1018,31 @@ mod tray_refresh_contract_tests {
         let cases = [
             (
                 runtime::TrayStatus::Active,
-                "Active",
+                "🟢 Active → Inactive",
                 "Stay Awake — Active",
                 runtime::TrayIcon::Active,
             ),
             (
                 runtime::TrayStatus::Inactive,
-                "Start",
+                "⚪ Inactive → Active",
                 "Stay Awake — Inactive",
                 runtime::TrayIcon::Inactive,
             ),
             (
                 runtime::TrayStatus::Waiting,
-                "Waiting for schedule",
+                "📅 Waiting for schedule → Active (manual override)",
                 "Stay Awake: waiting for schedule (No upcoming window)",
                 runtime::TrayIcon::Waiting,
             ),
             (
                 runtime::TrayStatus::Paused,
-                "Paused for this window",
+                "⏸️ Paused for this window → Active",
                 "Stay Awake: paused for this window (No upcoming window)",
                 runtime::TrayIcon::Inactive,
             ),
             (
                 runtime::TrayStatus::ActiveOverride,
-                "Active (manual override)",
+                "🟢 Active (manual override) → Waiting for schedule",
                 "Stay Awake: active by manual override (No upcoming window)",
                 runtime::TrayIcon::Active,
             ),
@@ -1047,6 +1058,10 @@ mod tray_refresh_contract_tests {
             });
             assert_eq!(presentation.status, status);
             assert_eq!(presentation.menu_text, menu_text);
+            assert_eq!(
+                presentation.menu_text,
+                status_menu_label(status, after_click(status), &bundle)
+            );
             assert_eq!(presentation.tooltip, tooltip);
             assert_eq!(presentation.icon, icon);
             refresh_tray_status(
@@ -1151,6 +1166,11 @@ mod tray_refresh_contract_tests {
             assert_eq!(backend.start_calls, starts, "{route:?}");
             assert_eq!(backend.stop_calls, stops, "{route:?}");
             assert_eq!(sink.calls[0].1.status, status, "{route:?}");
+            assert_eq!(
+                sink.calls[0].1.menu_text,
+                status_menu_label(status, after_click(status), &bundle),
+                "{route:?}"
+            );
         }
 
         let mut supervisor = runtime::Supervisor::new();
@@ -1269,9 +1289,17 @@ mod tray_refresh_contract_tests {
             locale: "es",
             clock: &clock,
         });
-        assert_eq!(english.menu_text, "Active");
-        assert_eq!(spanish.menu_text, "Activo");
+        assert_eq!(english.menu_text, "🟢 Active → Inactive");
+        assert_eq!(spanish.menu_text, "🟢 Activo → Inactivo");
         assert_ne!(english.menu_text, spanish.menu_text);
+        assert_eq!(
+            spanish.menu_text,
+            status_menu_label(
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Inactive,
+                &i18n::create_bundle("es"),
+            )
+        );
         let mut sink = RecordingSink::default();
         refresh_tray_status(
             TrayRefreshInput {
