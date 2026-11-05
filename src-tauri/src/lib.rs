@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::doc_lazy_continuation))]
+
 /**
  * @spec-handoff
  * @interface handle_runtime_route(RuntimeRouteInput, Supervisor, EngineBackend, TraySink)
