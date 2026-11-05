@@ -747,7 +747,10 @@ mod tests {
             bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
             clock: Arc::new(FixedClock(now)),
             backend_factory: Box::new(move |_, _| {
-                Box::new(SharedRecordingBackend { calls }) as Box<dyn EngineBackend>
+                Box::new(SharedRecordingBackend {
+                    calls,
+                    active: Arc::new(Mutex::new(false)),
+                }) as Box<dyn EngineBackend>
             }),
             sink: Box::new(RecordingSink::default()),
         }
@@ -755,25 +758,24 @@ mod tests {
 
     struct SharedRecordingBackend {
         calls: Arc<Mutex<Vec<&'static str>>>,
+        active: Arc<Mutex<bool>>,
     }
 
     impl EngineBackend for SharedRecordingBackend {
         fn start(&mut self) -> Result<(), String> {
             self.calls.lock().expect("backend log lock").push("start");
+            *self.active.lock().expect("backend activity lock") = true;
             Ok(())
         }
 
         fn stop(&mut self) -> Result<(), String> {
             self.calls.lock().expect("backend log lock").push("stop");
+            *self.active.lock().expect("backend activity lock") = false;
             Ok(())
         }
 
         fn is_active(&self) -> bool {
-            self.calls
-                .lock()
-                .expect("backend log lock")
-                .last()
-                .is_some_and(|call| *call == "start")
+            *self.active.lock().expect("backend activity lock")
         }
 
         fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {
@@ -781,10 +783,13 @@ mod tests {
         }
     }
 
-    struct FailingStopBackend;
+    struct FailingStopBackend {
+        active: Arc<Mutex<bool>>,
+    }
 
     impl EngineBackend for FailingStopBackend {
         fn start(&mut self) -> Result<(), String> {
+            *self.active.lock().expect("backend activity lock") = true;
             Ok(())
         }
 
@@ -793,7 +798,7 @@ mod tests {
         }
 
         fn is_active(&self) -> bool {
-            false
+            *self.active.lock().expect("backend activity lock")
         }
 
         fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {}
@@ -971,14 +976,29 @@ mod tests {
             .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
             .single()
             .expect("fixed instant exists");
+        let active = Arc::new(Mutex::new(false));
+        let failing_active = active.clone();
         let handle = RuntimeHandle::spawn(OwnerStart {
             config: Arc::new(Mutex::new(AppConfig::default())),
             bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
             clock: Arc::new(FixedClock(now)),
-            backend_factory: Box::new(|_, _| Box::new(FailingStopBackend)),
+            backend_factory: Box::new(move |_, _| {
+                Box::new(FailingStopBackend {
+                    active: failing_active,
+                })
+            }),
             sink: Box::new(RecordingSink::default()),
         })
         .expect("owner spawn succeeds");
+        handle
+            .request(TrayRoute::IpcToggle)
+            .expect("toggle request sends")
+            .wait(REQUEST_TIMEOUT)
+            .expect("toggle reply arrives");
+        assert!(
+            *active.lock().expect("backend activity lock"),
+            "the test backend must acquire before exercising a retained release failure"
+        );
 
         assert_eq!(
             handle.shutdown(SHUTDOWN_TIMEOUT),
@@ -987,6 +1007,10 @@ mod tests {
         assert!(
             !handle.exit_ready(),
             "failed release must keep exit blocked"
+        );
+        assert!(
+            *active.lock().expect("backend activity lock"),
+            "a failed release retains backend activity rather than deriving it from the call log"
         );
     }
 }
