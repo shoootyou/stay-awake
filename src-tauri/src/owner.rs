@@ -588,6 +588,15 @@ pub(crate) fn owner_loop_with_time_sources(
             .upgrade()
             .is_none_or(|state| state.closing.load(Ordering::Acquire));
         if deadline_due(now, next_tick) && !closing {
+            let after_wait = time_source.sample(clock.as_ref());
+            let route = if detect_time_change(TimeChangeInput {
+                previous: &before_wait,
+                current: &after_wait,
+            }) {
+                TrayRoute::Resume
+            } else {
+                TrayRoute::Tick
+            };
             let result = if configuration_fault {
                 observe_configuration_fault(
                     &config,
@@ -598,7 +607,7 @@ pub(crate) fn owner_loop_with_time_sources(
                 )
             } else {
                 route_reply(
-                    TrayRoute::Tick,
+                    route,
                     &config,
                     &clock,
                     &mut supervisor,
