@@ -781,6 +781,24 @@ mod tests {
         }
     }
 
+    struct FailingStopBackend;
+
+    impl EngineBackend for FailingStopBackend {
+        fn start(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            Err("release failed".to_owned())
+        }
+
+        fn is_active(&self) -> bool {
+            false
+        }
+
+        fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {}
+    }
+
     #[test]
     fn owner_processes_internal_startup_once_before_a_queued_route() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -907,6 +925,31 @@ mod tests {
                 .count(),
             1,
             "shutdown joins and releases once"
+        );
+    }
+
+    #[test]
+    fn failed_shutdown_release_does_not_mark_exit_ready() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let handle = RuntimeHandle::spawn(OwnerStart {
+            config: Arc::new(Mutex::new(AppConfig::default())),
+            bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            clock: Arc::new(FixedClock(now)),
+            backend_factory: Box::new(|_, _| Box::new(FailingStopBackend)),
+            sink: Box::new(RecordingSink::default()),
+        })
+        .expect("owner spawn succeeds");
+
+        assert_eq!(
+            handle.shutdown(SHUTDOWN_TIMEOUT),
+            Err("release failed".to_owned())
+        );
+        assert!(
+            !handle.exit_ready(),
+            "failed release must keep exit blocked"
         );
     }
 }
