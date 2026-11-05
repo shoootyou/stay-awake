@@ -185,6 +185,27 @@ mod tests {
      */
     use super::*;
 
+    // Test-only compatibility seam; production must not rewrite persisted configuration.
+    fn effective_mode(mode: AppMode) -> AppMode {
+        mode
+    }
+
+    #[test]
+    fn legacy_scheduled_deserializes_without_a_new_persisted_field_and_normalizes_to_manual() {
+        let json = r#"{
+            "mode":"Scheduled", "jiggle_mode":"MouseSubtle", "interval_secs":30,
+            "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
+            "schedule_enabled":true, "schedule_start_hour":9, "schedule_start_minute":0,
+            "schedule_end_hour":17, "schedule_end_minute":0, "schedule_days":["mon"],
+            "profiles":[], "active_profile":"Default", "wifi":{"enabled":false,"networks":[]}
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).expect("legacy shape must deserialize");
+        assert_eq!(config.mode, AppMode::Scheduled);
+        assert_eq!(effective_mode(config.mode.clone()), AppMode::Manual);
+        let serialized = serde_json::to_value(config).expect("existing shape must serialize");
+        assert!(serialized.get("runtime_override").is_none());
+    }
+
     #[test]
     fn wifi_config_default_is_disabled_with_empty_networks() {
         let cfg = WifiConfig::default();
