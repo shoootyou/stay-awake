@@ -884,6 +884,98 @@ mod tests {
     }
 
     #[test]
+    fn non_entry_always_on_config_change_preserves_actual_activity() {
+        let disabled = Schedule {
+            enabled: false,
+            start: chrono::NaiveTime::from_hms_opt(9, 0, 0).expect("valid time"),
+            end: chrono::NaiveTime::from_hms_opt(10, 0, 0).expect("valid time"),
+            days: vec![chrono::Weekday::Mon],
+        };
+        let previous = RuntimePolicy {
+            mode: AppMode::AlwaysOn,
+            schedule: disabled.clone(),
+        };
+        let window = evaluation(false);
+        let override_state = normalized(OverrideState::None);
+
+        let decision = decide_lifecycle(LifecycleInput {
+            mode: &AppMode::AlwaysOn,
+            schedule_enabled: false,
+            window: &window,
+            engine_active: false,
+            override_state: &override_state,
+            event: LifecycleEvent::ConfigChanged {
+                policy_changed: true,
+            },
+            previous_policy: Some(&previous),
+            wifi_active: false,
+        });
+
+        assert_eq!(
+            decision.action,
+            EngineAction::None,
+            "a disabled-schedule edit is not an AlwaysOn entry and preserves actual inactivity"
+        );
+    }
+
+    struct UnresolvableClock;
+
+    impl Clock for UnresolvableClock {
+        fn now(&self) -> DateTime<Utc> {
+            at(10)
+        }
+
+        fn to_local(&self, instant: DateTime<Utc>) -> chrono::DateTime<chrono::FixedOffset> {
+            instant.with_timezone(&chrono::FixedOffset::east_opt(0).expect("UTC offset"))
+        }
+
+        fn resolve_local(&self, _: chrono::NaiveDateTime) -> chrono::LocalResult<DateTime<Utc>> {
+            chrono::LocalResult::None
+        }
+    }
+
+    #[test]
+    fn schedule_evaluation_failure_stops_active_backend_and_keeps_a_truthful_snapshot() {
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend {
+            active: true,
+            ..RecordingBackend::inactive()
+        };
+        let clock = UnresolvableClock;
+
+        assert!(
+            supervisor
+                .reconcile(
+                    ReconcileInput {
+                        config: &config,
+                        clock: &clock,
+                        event: LifecycleEvent::Tick,
+                    },
+                    &mut backend,
+                )
+                .is_err(),
+            "an unresolvable enabled schedule reports its evaluation error"
+        );
+        let snapshot = supervisor.snapshot();
+        assert!(
+            snapshot.is_some(),
+            "fail-closed reconciliation stores the post-stop state"
+        );
+        if let Some(snapshot) = snapshot {
+            assert_eq!(
+                backend.stop_calls, 1,
+                "fail-closed evaluation releases an active lease"
+            );
+            assert!(
+                !snapshot.engine_active,
+                "snapshot records the confirmed release"
+            );
+            assert_eq!(snapshot.status, TrayStatus::Waiting);
+        }
+    }
+
+    #[test]
     fn clears_skipwindow_and_forceon_at_their_required_boundaries() {
         let skip = decide(
             AppMode::Manual,
