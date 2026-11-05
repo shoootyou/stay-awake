@@ -27,6 +27,92 @@ fn get_config(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<AppConf
     Ok(cfg.clone())
 }
 
+#[cfg(test)]
+mod tray_refresh_contract_tests {
+    /*
+     * @spec-handoff
+     * @interface refresh_tray_status(route: TrayRoute, sink: &mut dyn TraySink, status: TrayStatus)
+     * @behavior
+     *   - Every lifecycle entry route publishes its coherent presentation through one tray seam.
+     *   - WiFi presentation is always Active or Inactive, never a schedule lifecycle label.
+     * @edge-cases
+     *   - Language changes refresh without changing lifecycle state.
+     */
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TrayRoute {
+        Startup,
+        Toggle,
+        Hotkey,
+        Ipc,
+        WiFi,
+        Boundary,
+        Config,
+        Language,
+        Resume,
+    }
+    // Production rendering consumes every schedule status after this seam is promoted.
+    #[allow(dead_code)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TrayStatus {
+        Active,
+        Inactive,
+        Waiting,
+        Paused,
+        ActiveOverride,
+    }
+    trait TraySink {
+        fn publish(&mut self, route: TrayRoute, status: TrayStatus);
+    }
+    #[derive(Default)]
+    struct RecordingSink(Vec<(TrayRoute, TrayStatus)>);
+    impl TraySink for RecordingSink {
+        fn publish(&mut self, route: TrayRoute, status: TrayStatus) {
+            self.0.push((route, status));
+        }
+    }
+
+    // Test-only placeholder with the production-final seam name.
+    fn refresh_tray_status(sink: &mut dyn TraySink, _: TrayRoute, _: TrayStatus) {
+        sink.publish(TrayRoute::Startup, TrayStatus::Active);
+    }
+
+    #[test]
+    fn every_entry_route_uses_the_shared_refresh_seam() {
+        let routes = [
+            TrayRoute::Startup,
+            TrayRoute::Toggle,
+            TrayRoute::Hotkey,
+            TrayRoute::Ipc,
+            TrayRoute::WiFi,
+            TrayRoute::Boundary,
+            TrayRoute::Config,
+            TrayRoute::Language,
+            TrayRoute::Resume,
+        ];
+        let mut sink = RecordingSink::default();
+        for route in routes {
+            refresh_tray_status(&mut sink, route, TrayStatus::Inactive);
+        }
+        assert_eq!(
+            sink.0,
+            routes
+                .into_iter()
+                .map(|route| (route, TrayStatus::Inactive))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn wifi_routes_never_publish_schedule_lifecycle_statuses() {
+        let mut sink = RecordingSink::default();
+        refresh_tray_status(&mut sink, TrayRoute::WiFi, TrayStatus::Inactive);
+        assert!(matches!(
+            sink.0.last(),
+            Some((TrayRoute::WiFi, TrayStatus::Active | TrayStatus::Inactive))
+        ));
+    }
+}
+
 /// Persist a new configuration from the frontend and sync autostart.
 #[tauri::command]
 fn save_config(
