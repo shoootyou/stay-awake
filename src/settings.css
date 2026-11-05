@@ -648,6 +648,10 @@ header h1 svg {
   line-height: 1.4;
 }
 
+.schedule-alert[hidden] {
+  display: none !important;
+}
+
 .schedule-alert svg {
   width: 1em;
   height: 1em;
