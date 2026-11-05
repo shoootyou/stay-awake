@@ -435,6 +435,57 @@ mod tests {
         std::fs::remove_dir_all(root).expect("test directory cleanup succeeds");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn save_to_hardens_an_existing_directory_and_rejects_a_symlinked_one() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "stay-awake-existing-config-test-{}-{}",
+            std::process::id(),
+            TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let existing = root.join("existing");
+        std::fs::create_dir_all(&existing).expect("existing directory creates");
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755))
+            .expect("existing directory becomes permissive");
+        let path = existing.join("config.json");
+
+        AppConfig::default()
+            .save_to(&path)
+            .expect("existing owner directory is hardened and saved");
+        assert_eq!(
+            std::fs::metadata(&existing)
+                .expect("hardened directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("private config metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let target = root.join("target");
+        std::fs::create_dir(&target).expect("symlink target creates");
+        let linked = root.join("linked");
+        symlink(&target, &linked).expect("directory symlink creates");
+        let error = AppConfig::default()
+            .save_to(&linked.join("config.json"))
+            .expect_err("save refuses to chmod through a directory symlink");
+        assert!(error.contains("symlinked config directory"));
+        assert!(
+            !target.join("config.json").exists(),
+            "the symlink target receives no config file"
+        );
+        std::fs::remove_dir_all(root).expect("test directory cleanup succeeds");
+    }
+
     #[test]
     fn wifi_enabled_returns_true_only_for_wifi_mode() {
         for mode in [AppMode::Manual, AppMode::AlwaysOn, AppMode::Scheduled] {
