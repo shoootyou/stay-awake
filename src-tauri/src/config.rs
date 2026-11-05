@@ -336,6 +336,68 @@ mod tests {
         assert_eq!(decoded.wifi.networks, vec!["TestSSID".to_string()]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn save_to_creates_private_paths_and_replaces_the_previous_config_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "stay-awake-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        let path = root.join("private").join("config.json");
+        let mut config = AppConfig {
+            language: "en".to_owned(),
+            ..AppConfig::default()
+        };
+        config.save_to(&path).expect("first private save succeeds");
+
+        assert_eq!(
+            std::fs::metadata(path.parent().expect("config parent"))
+                .expect("config directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("config file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        config.language = "es".to_owned();
+        config.save_to(&path).expect("replacement save succeeds");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("replacement config reads")
+                .contains("\"es\""),
+            "replacement makes the complete new config visible"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("replacement file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::read_dir(path.parent().expect("config parent"))
+                .expect("config directory reads")
+                .count(),
+            1,
+            "atomic replacement leaves no temporary file behind"
+        );
+        std::fs::remove_dir_all(root).expect("test directory cleanup succeeds");
+    }
+
     #[test]
     fn wifi_enabled_returns_true_only_for_wifi_mode() {
         for mode in [AppMode::Manual, AppMode::AlwaysOn, AppMode::Scheduled] {
