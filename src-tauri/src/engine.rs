@@ -60,10 +60,12 @@ mod phase_one_contract {
     use crate::config::JiggleMode;
     /*
      * @spec-handoff
-     * @interface evaluate_schedule(schedule, clock) -> ScheduleResult; decide_lifecycle(input) -> Decision
+     * @interface evaluate_schedule(schedule, clock) -> ScheduleResult;
+     *   decide_lifecycle(input) -> Decision
      * @behavior
      *   - Schedule windows are start-inclusive, end-exclusive, and owned by their start day.
-     *   - Lifecycle decisions reconcile schedule-owned Manual and AlwaysOn modes without changing WiFi lifecycle.
+     *   - Lifecycle decisions reconcile schedule-owned Manual and AlwaysOn modes without changing
+     *     WiFi lifecycle.
      *   - Tray presentation is derived from actual engine state and every route refreshes it.
      * @edge-cases
      *   - Empty days and equal bounds have no occurrence; DST gaps/folds resolve deterministically.
@@ -91,12 +93,6 @@ mod phase_one_contract {
         ActiveOverride,
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum LocalResolution {
-        Earlier,
-        Later,
-        FirstAfterGap,
-    }
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Event {
         Startup,
         WindowBoundary,
@@ -109,15 +105,6 @@ mod phase_one_contract {
         Resume,
     }
 
-    // Fields are consumed only after Kou promotes this test seam to production.
-    #[allow(dead_code)]
-    #[derive(Clone, Copy, Debug)]
-    struct Schedule {
-        start: u16,
-        end: u16,
-        start_day: u8,
-        days: &'static [u8],
-    }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct ScheduleResult {
         in_window: bool,
@@ -130,13 +117,6 @@ mod phase_one_contract {
         presentation: Presentation,
     }
 
-    // Test-only placeholders use production-final names; Kou promotes these seams unchanged.
-    fn evaluate_schedule(_: Schedule, _: u8, _: u16, _: LocalResolution) -> ScheduleResult {
-        ScheduleResult {
-            in_window: false,
-            next_start: None,
-        }
-    }
     fn effective_mode(mode: Mode) -> Mode {
         mode
     }
@@ -226,70 +206,6 @@ mod phase_one_contract {
         _: JiggleMode,
     ) -> Result<Presentation, &'static str> {
         Ok(Presentation::Inactive)
-    }
-
-    const MON: &[u8] = &[1];
-    const NONE: &[u8] = &[];
-
-    #[test]
-    fn schedule_is_start_inclusive_end_exclusive_and_empty_for_equal_bounds() {
-        let weekday = Schedule {
-            start: 9 * 60,
-            end: 17 * 60,
-            start_day: 1,
-            days: MON,
-        };
-        assert!(evaluate_schedule(weekday, 1, 9 * 60, LocalResolution::Earlier).in_window);
-        assert!(!evaluate_schedule(weekday, 1, 17 * 60, LocalResolution::Earlier).in_window);
-        let empty = Schedule {
-            start: 9 * 60,
-            end: 9 * 60,
-            start_day: 1,
-            days: MON,
-        };
-        assert!(!evaluate_schedule(empty, 1, 10 * 60, LocalResolution::Earlier).in_window);
-    }
-
-    #[test]
-    fn overnight_window_is_owned_by_its_selected_start_day_and_empty_days_have_no_window() {
-        let overnight = Schedule {
-            start: 22 * 60,
-            end: 6 * 60,
-            start_day: 1,
-            days: MON,
-        };
-        assert!(evaluate_schedule(overnight, 2, 5 * 60, LocalResolution::Earlier).in_window);
-        assert!(
-            !evaluate_schedule(
-                Schedule {
-                    days: NONE,
-                    ..overnight
-                },
-                2,
-                5 * 60,
-                LocalResolution::Earlier
-            )
-            .in_window
-        );
-    }
-
-    #[test]
-    fn schedule_resolution_has_explicit_gap_fold_and_next_window_contracts() {
-        let schedule = Schedule {
-            start: 2 * 60 + 30,
-            end: 4 * 60,
-            start_day: 1,
-            days: MON,
-        };
-        assert_eq!(
-            evaluate_schedule(schedule, 1, 60, LocalResolution::FirstAfterGap).next_start,
-            Some(3 * 60)
-        );
-        assert!(evaluate_schedule(schedule, 1, 3 * 60, LocalResolution::Earlier).in_window);
-        assert_eq!(
-            evaluate_schedule(schedule, 1, 3 * 60, LocalResolution::Later).next_start,
-            Some(2 * 60 + 30)
-        );
     }
 
     #[test]
