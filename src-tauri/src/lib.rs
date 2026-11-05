@@ -2159,13 +2159,35 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                let cfg = shared_config
-                    .lock()
-                    .map_err(|error| format!("Config lock: {error}"))?;
-                if cfg.wifi_enabled() {
-                    let mut monitor = shared_wifi_monitor
-                        .lock()
-                        .map_err(|error| format!("Monitor lock: {error}"))?;
+                let shutdown_after_setup_error = |error: String| {
+                    let Some(runtime) = app.try_state::<owner::RuntimeHandle>() else {
+                        return format!("{error}; owner runtime is unavailable for cleanup");
+                    };
+                    match runtime.shutdown(owner::SHUTDOWN_TIMEOUT) {
+                        Ok(()) => error,
+                        Err(cleanup_error) => {
+                            format!("{error}; owner shutdown failed: {cleanup_error}")
+                        }
+                    }
+                };
+                let wifi_enabled = match shared_config.lock() {
+                    Ok(config) => config.wifi_enabled(),
+                    Err(error) => {
+                        return Err(
+                            shutdown_after_setup_error(format!("Config lock: {error}")).into(),
+                        );
+                    }
+                };
+                if wifi_enabled {
+                    let mut monitor = match shared_wifi_monitor.lock() {
+                        Ok(monitor) => monitor,
+                        Err(error) => {
+                            return Err(
+                                shutdown_after_setup_error(format!("Monitor lock: {error}"))
+                                    .into(),
+                            );
+                        }
+                    };
                     if let Err(error) = monitor.start() {
                         log::warn!("WiFi monitor startup failed: {error}");
                     }
