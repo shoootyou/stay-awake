@@ -79,18 +79,6 @@ pub(crate) struct PresentationInput<'a> {
     pub(crate) clock: &'a dyn schedule::Clock,
 }
 
-#[cfg(test)]
-pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPresentation {
-    let status = input.snapshot.status;
-    let after_click = match status {
-        runtime::TrayStatus::Active => runtime::TrayStatus::Inactive,
-        runtime::TrayStatus::Inactive | runtime::TrayStatus::Paused => runtime::TrayStatus::Active,
-        runtime::TrayStatus::Waiting => runtime::TrayStatus::ActiveOverride,
-        runtime::TrayStatus::ActiveOverride => runtime::TrayStatus::Waiting,
-    };
-    build_tray_presentation_with_target(input, after_click)
-}
-
 pub(crate) fn build_tray_presentation_with_schedule(
     input: PresentationInput<'_>,
     schedule_owned: bool,
@@ -351,6 +339,27 @@ mod tray_status_menu_contract_tests {
         assert!(runtime::schedule_owned(&config::AppMode::AlwaysOn, true));
         assert!(!runtime::schedule_owned(&config::AppMode::WiFi, true));
         assert!(runtime::schedule_owned(&config::AppMode::Scheduled, true));
+    }
+
+    #[test]
+    fn startup_presentation_passes_loaded_configuration_to_schedule_ownership() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("lib.rs is readable");
+        let start = source
+            .rfind("let initial_presentation")
+            .expect("startup presentation exists");
+        let end = start
+            + source[start..]
+                .find("let shared_bundle")
+                .expect("startup presentation ends before bundle storage");
+        let setup = &source[start..end];
+        let compact = setup.split_whitespace().collect::<String>();
+        assert!(compact.contains(
+            "runtime::schedule_owned(&loaded_config.mode,loaded_config.schedule_enabled)"
+        ));
+        assert!(!compact.contains("build_tray_presentation_with_schedule(true"));
     }
 
     #[test]
@@ -975,13 +984,42 @@ mod tray_refresh_contract_tests {
         }
     }
 
-    fn after_click(status: runtime::TrayStatus) -> runtime::TrayStatus {
-        match status {
-            runtime::TrayStatus::Active => runtime::TrayStatus::Inactive,
-            runtime::TrayStatus::Inactive => runtime::TrayStatus::Active,
-            runtime::TrayStatus::Waiting => runtime::TrayStatus::ActiveOverride,
-            runtime::TrayStatus::Paused => runtime::TrayStatus::Active,
-            runtime::TrayStatus::ActiveOverride => runtime::TrayStatus::Waiting,
+    fn presentation_snapshot(
+        status: runtime::TrayStatus,
+        schedule_owned: bool,
+    ) -> runtime::RuntimeSnapshot {
+        let current = (status == runtime::TrayStatus::Paused).then(|| schedule::Occurrence {
+            start_day: at(10).date_naive(),
+            start: at(9),
+            end: at(11),
+        });
+        let window = schedule::ScheduleEvaluation {
+            at: at(10),
+            current: current.clone(),
+            next: None,
+        };
+        let override_state = match status {
+            runtime::TrayStatus::Paused => runtime::OverrideState::SkipWindow(
+                current.expect("paused state has a current occurrence"),
+            ),
+            runtime::TrayStatus::ActiveOverride => runtime::OverrideState::ForceOn { until: None },
+            _ => runtime::OverrideState::None,
+        };
+        let normalized = runtime::normalize_override(runtime::NormalizeInput {
+            mode: &AppMode::Manual,
+            schedule_enabled: schedule_owned,
+            window: &window,
+            override_state: &override_state,
+            event: runtime::LifecycleEvent::Tick,
+        });
+        runtime::RuntimeSnapshot {
+            engine_active: matches!(
+                status,
+                runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride
+            ),
+            override_state: normalized,
+            window,
+            status,
         }
     }
 
@@ -1098,49 +1136,61 @@ mod tray_refresh_contract_tests {
         let cases = [
             (
                 runtime::TrayStatus::Active,
+                false,
                 "🟢 Active → Inactive",
                 "Stay Awake — Active",
                 runtime::TrayIcon::Active,
             ),
             (
                 runtime::TrayStatus::Inactive,
+                false,
                 "⚪ Inactive → Active",
                 "Stay Awake — Inactive",
                 runtime::TrayIcon::Inactive,
             ),
             (
                 runtime::TrayStatus::Waiting,
+                true,
                 "📅 Waiting for schedule → Active (manual override)",
                 "Stay Awake: waiting for schedule (No upcoming window)",
                 runtime::TrayIcon::Waiting,
             ),
             (
                 runtime::TrayStatus::Paused,
+                true,
                 "⏸️ Paused for this window → Active",
                 "Stay Awake: paused for this window (No upcoming window)",
                 runtime::TrayIcon::Inactive,
             ),
             (
                 runtime::TrayStatus::ActiveOverride,
+                true,
                 "🟢 Active (manual override) → Waiting for schedule",
                 "Stay Awake: active by manual override (No upcoming window)",
                 runtime::TrayIcon::Active,
             ),
         ];
         let mut sink = RecordingSink::default();
-        for (status, menu_text, tooltip, icon) in cases {
-            let state = snapshot(status);
-            let presentation = build_tray_presentation(PresentationInput {
-                snapshot: &state,
-                bundle: &bundle,
-                locale: "en",
-                clock: &clock,
-            });
+        for (status, schedule_owned, menu_text, tooltip, icon) in cases {
+            let state = presentation_snapshot(status, schedule_owned);
+            let presentation = build_tray_presentation_with_schedule(
+                PresentationInput {
+                    snapshot: &state,
+                    bundle: &bundle,
+                    locale: "en",
+                    clock: &clock,
+                },
+                schedule_owned,
+            );
             assert_eq!(presentation.status, status);
             assert_eq!(presentation.menu_text, menu_text);
             assert_eq!(
                 presentation.menu_text,
-                status_menu_label(status, after_click(status), &bundle)
+                status_menu_label(
+                    status,
+                    tray_toggle_presentation(&state, schedule_owned),
+                    &bundle,
+                )
             );
             assert_eq!(presentation.tooltip, tooltip);
             assert_eq!(presentation.icon, icon);
@@ -1230,7 +1280,7 @@ mod tray_refresh_contract_tests {
             let mut supervisor = runtime::Supervisor::new();
             let mut backend = RecordingBackend::default();
             let mut sink = RecordingSink::default();
-            let result = handle_runtime_route(
+            let snapshot = handle_runtime_route(
                 RuntimeRouteInput {
                     route,
                     config: &config,
@@ -1240,15 +1290,22 @@ mod tray_refresh_contract_tests {
                 &mut supervisor,
                 &mut backend,
                 &mut sink,
-            );
-            assert!(result.is_ok(), "{route:?}");
+            )
+            .expect("the route returns a snapshot");
             assert_eq!(sink.calls.len(), 1, "{route:?}");
             assert_eq!(backend.start_calls, starts, "{route:?}");
             assert_eq!(backend.stop_calls, stops, "{route:?}");
             assert_eq!(sink.calls[0].1.status, status, "{route:?}");
             assert_eq!(
                 sink.calls[0].1.menu_text,
-                status_menu_label(status, after_click(status), &bundle),
+                status_menu_label(
+                    status,
+                    tray_toggle_presentation(
+                        &snapshot,
+                        runtime::schedule_owned(&config.mode, config.schedule_enabled),
+                    ),
+                    &bundle,
+                ),
                 "{route:?}"
             );
         }
@@ -1357,18 +1414,24 @@ mod tray_refresh_contract_tests {
     fn language_change_builds_a_fresh_presentation_from_the_replacement_bundle() {
         let clock = FixedClock(at(10));
         let state = snapshot(runtime::TrayStatus::Active);
-        let english = build_tray_presentation(PresentationInput {
-            snapshot: &state,
-            bundle: &i18n::create_bundle("en"),
-            locale: "en",
-            clock: &clock,
-        });
-        let spanish = build_tray_presentation(PresentationInput {
-            snapshot: &state,
-            bundle: &i18n::create_bundle("es"),
-            locale: "es",
-            clock: &clock,
-        });
+        let english = build_tray_presentation_with_schedule(
+            PresentationInput {
+                snapshot: &state,
+                bundle: &i18n::create_bundle("en"),
+                locale: "en",
+                clock: &clock,
+            },
+            false,
+        );
+        let spanish = build_tray_presentation_with_schedule(
+            PresentationInput {
+                snapshot: &state,
+                bundle: &i18n::create_bundle("es"),
+                locale: "es",
+                clock: &clock,
+            },
+            false,
+        );
         assert_eq!(english.menu_text, "🟢 Active → Inactive");
         assert_eq!(spanish.menu_text, "🟢 Activo → Inactivo");
         assert_ne!(english.menu_text, spanish.menu_text);

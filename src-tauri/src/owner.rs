@@ -1452,6 +1452,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn configuration_fault_uses_schedule_ownership_for_wifi_and_manual_menu_targets() {
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed clock exists"),
+        ));
+        for (mode, expected) in [
+            (
+                crate::config::AppMode::WiFi,
+                crate::runtime::TrayStatus::Inactive,
+            ),
+            (
+                crate::config::AppMode::Manual,
+                crate::runtime::TrayStatus::Paused,
+            ),
+        ] {
+            let config = AppConfig {
+                mode,
+                schedule_enabled: true,
+                schedule_start_hour: 7,
+                schedule_end_hour: 9,
+                schedule_days: vec!["mon".to_owned()],
+                ..AppConfig::default()
+            };
+            let mut supervisor = Supervisor::new();
+            let active = Arc::new(Mutex::new(true));
+            let backend = SharedRecordingBackend {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                active,
+            };
+            let mut sink = RecordingSink::default();
+            let reply =
+                observe_configuration_fault(&config, &clock, &mut supervisor, &backend, &mut sink);
+            assert!(reply.error.is_none());
+            let frames = sink.frames.lock().expect("test sink lock");
+            assert_eq!(frames.len(), 1);
+            assert_eq!(
+                frames[0].1.menu_text,
+                crate::status_menu_label(
+                    crate::runtime::TrayStatus::Active,
+                    expected,
+                    &create_bundle("en")
+                )
+            );
+        }
+    }
+
     struct FailingConfigPublicationBackend {
         active: Arc<Mutex<bool>>,
         starts: Arc<Mutex<usize>>,
