@@ -13,8 +13,8 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -73,15 +73,20 @@ const trayMenuEmojiConstants = new Map([
   ["TRAY_ACTIVE_EMOJI", "🟢"], ["TRAY_INACTIVE_EMOJI", "⚪"],
   ["TRAY_WAITING_EMOJI", "📅"], ["TRAY_PAUSED_EMOJI", "⏸️"],
 ]);
+const originalTrayAssets = new Map([
+  ["tray-icon.png", { bytes: 342, sha256: "36e5eebd2f16f6676753cce512d51c4b60d42edc5728c39717503cf0061de397" }],
+  ["tray-icon@2x.png", { bytes: 621, sha256: "7adbbbd3a037affb93c8e3a85c3ebf3da584c98f2f5c5d1779fd726a02a82d8d" }],
+  ["tray-icon-dark.png", { bytes: 573, sha256: "b28a25e292bb8c4e394bdf83b52d0286e9c92789044da8ad84526455180a2b9c" }],
+]);
 
 // Mutant: replace an original asset, retain a silhouette, or restore template rendering.
 test("restores the original dimmable tray assets and removes silhouette assets", () => {
   const iconDirectory = join(root, "src-tauri/icons");
-  for (const name of ["tray-icon.png", "tray-icon@2x.png", "tray-icon-dark.png"]) {
-    const original = execFileSync("/usr/bin/git", [
-      "show", `155afa6a:src-tauri/icons/${name}`,
-    ]);
-    assert.deepEqual(readFileSync(join(iconDirectory, name)), original, `${name} must be original`);
+  for (const [name, expected] of originalTrayAssets) {
+    const asset = readFileSync(join(iconDirectory, name));
+    assert.equal(asset.length, expected.bytes, `${name} byte length`);
+    assert.equal(createHash("sha256").update(asset).digest("hex"), expected.sha256,
+      `${name} SHA-256`);
   }
   for (const name of [
     "tray-active.png", "tray-active@2x.png", "tray-inactive.png", "tray-inactive@2x.png",
