@@ -787,6 +787,7 @@ fn report_automatic_error(
 mod tests {
     use super::*;
     use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
@@ -900,6 +901,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         frames: Arc<Mutex<Vec<(TrayRoute, crate::TrayPresentation)>>>,
+        errors: Arc<Mutex<Vec<String>>>,
     }
 
     impl TraySink for RecordingSink {
@@ -914,6 +916,119 @@ mod tests {
                 .push((route, presentation.clone()));
             Ok(())
         }
+
+        fn report_error(&mut self, error: &str) {
+            self.errors
+                .lock()
+                .expect("test sink error lock")
+                .push(error.to_owned());
+        }
+    }
+
+    struct ScriptedTimeSource {
+        samples: VecDeque<TimeSample>,
+    }
+
+    impl TimeSource for ScriptedTimeSource {
+        fn sample(&mut self, _: &dyn Clock) -> TimeSample {
+            self.samples
+                .pop_front()
+                .expect("owner loop must not sample beyond the test script")
+        }
+    }
+
+    struct RouteSink {
+        routes: mpsc::Sender<TrayRoute>,
+        errors: Arc<Mutex<Vec<String>>>,
+        tick_results: Arc<Mutex<VecDeque<Result<(), String>>>>,
+    }
+
+    impl TraySink for RouteSink {
+        fn publish(&mut self, route: TrayRoute, _: &crate::TrayPresentation) -> Result<(), String> {
+            self.routes
+                .send(route)
+                .map_err(|_| "test route observer disconnected".to_owned())?;
+            if route == TrayRoute::Tick {
+                self.tick_results
+                    .lock()
+                    .expect("test tick result lock")
+                    .pop_front()
+                    .unwrap_or(Ok(()))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn report_error(&mut self, error: &str) {
+            self.errors
+                .lock()
+                .expect("test sink error lock")
+                .push(error.to_owned());
+        }
+    }
+
+    fn steady_time_samples(count: usize) -> VecDeque<TimeSample> {
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        (0..count)
+            .map(|index| TimeSample {
+                wall: wall + chrono::Duration::milliseconds((index * 250) as i64),
+                monotonic: base + Duration::from_millis((index * 250) as u64),
+                offset_seconds: 0,
+            })
+            .collect()
+    }
+
+    fn scheduled_active_config() -> AppConfig {
+        AppConfig {
+            schedule_enabled: true,
+            schedule_start_hour: 7,
+            schedule_end_hour: 9,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        }
+    }
+
+    fn owner_loop_shared(sender: mpsc::Sender<OwnerCommand>) -> Arc<Shared> {
+        Arc::new(Shared {
+            sender,
+            config: Arc::new(Mutex::new(AppConfig::default())),
+            bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            mutations: Mutex::new(()),
+            owner: Mutex::new(None),
+            shutdown: Mutex::new(()),
+            closing: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            exit_ready: AtomicBool::new(false),
+            exit_coordinator_running: AtomicBool::new(false),
+        })
+    }
+
+    fn stop_owner_loop(
+        sender: &mpsc::Sender<OwnerCommand>,
+        owner: thread::JoinHandle<Result<(), String>>,
+    ) {
+        let (reply, receiver) = mpsc::channel();
+        sender
+            .send(OwnerCommand::Route {
+                route: TrayRoute::Quit,
+                reply: Some(reply),
+            })
+            .expect("Quit reaches the owner loop");
+        assert!(
+            receiver
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("Quit reply arrives")
+                .terminating,
+            "Quit must terminate the direct owner loop"
+        );
+        owner
+            .join()
+            .expect("owner loop thread joins")
+            .expect("owner loop exits cleanly");
     }
 
     struct FailingSink;
@@ -1072,6 +1187,63 @@ mod tests {
 
         fn is_active(&self) -> bool {
             *self.active.lock().expect("backend activity lock")
+        }
+
+        fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {}
+    }
+
+    struct FailingStartBackend {
+        active: Arc<Mutex<bool>>,
+        starts: Arc<Mutex<usize>>,
+        failures_remaining: usize,
+    }
+
+    impl EngineBackend for FailingStartBackend {
+        fn start(&mut self) -> Result<(), String> {
+            *self.starts.lock().expect("backend start lock") += 1;
+            if self.failures_remaining == 0 {
+                *self.active.lock().expect("backend activity lock") = true;
+                Ok(())
+            } else {
+                self.failures_remaining -= 1;
+                Err("backend start failed".to_owned())
+            }
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            *self.active.lock().expect("backend activity lock") = false;
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            *self.active.lock().expect("backend activity lock")
+        }
+
+        fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {}
+    }
+
+    struct BlockingFailingStartBackend {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl EngineBackend for BlockingFailingStartBackend {
+        fn start(&mut self) -> Result<(), String> {
+            self.entered
+                .send(())
+                .map_err(|_| "test start observer disconnected".to_owned())?;
+            self.release
+                .recv_timeout(REQUEST_TIMEOUT)
+                .map_err(|_| "test start release timed out".to_owned())?;
+            Err("backend start failed".to_owned())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            false
         }
 
         fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {}
@@ -1648,5 +1820,230 @@ mod tests {
             !handle.exit_ready(),
             "only a successfully joined owner may make exit readiness true"
         );
+    }
+
+    fn assert_resume_retries_a_latched_start(script: VecDeque<TimeSample>) {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let starts = Arc::new(Mutex::new(0));
+        let backend_starts = starts.clone();
+        let backend = Box::new(FailingStartBackend {
+            active: Arc::new(Mutex::new(false)),
+            starts: backend_starts,
+            failures_remaining: 1,
+        });
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists"),
+        ));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                scheduled_active_config(),
+                clock,
+                backend,
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors,
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource { samples: script },
+            )
+        });
+
+        assert_eq!(
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("Startup presentation arrives"),
+            TrayRoute::Startup
+        );
+        assert_eq!(
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("ordinary tick presentation arrives"),
+            TrayRoute::Tick
+        );
+        assert_eq!(
+            *starts.lock().expect("backend start lock"),
+            1,
+            "an ordinary tick must not retry the latched failed start"
+        );
+        assert_eq!(
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("resume presentation arrives"),
+            TrayRoute::Resume
+        );
+        assert_eq!(
+            *starts.lock().expect("backend start lock"),
+            2,
+            "Resume must retry the previously latched failed start"
+        );
+        stop_owner_loop(&sender, owner);
+    }
+
+    #[test]
+    fn owner_loop_retries_a_latched_start_after_a_forward_wall_clock_jump() {
+        let mut samples = steady_time_samples(2);
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::milliseconds(500),
+            monotonic: base + Duration::from_millis(500),
+            offset_seconds: 0,
+        });
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::seconds(6),
+            monotonic: base + Duration::from_millis(750),
+            offset_seconds: 0,
+        });
+        samples.extend(steady_time_samples(8));
+        assert_resume_retries_a_latched_start(samples);
+    }
+
+    #[test]
+    fn owner_loop_retries_a_latched_start_after_a_backward_wall_clock_jump() {
+        let mut samples = steady_time_samples(2);
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::seconds(5),
+            monotonic: base + Duration::from_millis(500),
+            offset_seconds: 0,
+        });
+        samples.push_back(TimeSample {
+            wall,
+            monotonic: base + Duration::from_millis(750),
+            offset_seconds: 0,
+        });
+        samples.extend(steady_time_samples(8));
+        assert_resume_retries_a_latched_start(samples);
+    }
+
+    #[test]
+    fn owner_loop_retries_a_latched_start_after_a_timezone_offset_change() {
+        let mut samples = steady_time_samples(2);
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::milliseconds(500),
+            monotonic: base + Duration::from_millis(500),
+            offset_seconds: 0,
+        });
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::milliseconds(750),
+            monotonic: base + Duration::from_millis(750),
+            offset_seconds: 3600,
+        });
+        samples.extend(steady_time_samples(8));
+        assert_resume_retries_a_latched_start(samples);
+    }
+
+    #[test]
+    fn owner_loop_keeps_a_sub_threshold_clock_gap_as_an_ordinary_tick() {
+        let mut samples = steady_time_samples(2);
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::milliseconds(500),
+            monotonic: base + Duration::from_millis(500),
+            offset_seconds: 0,
+        });
+        samples.push_back(TimeSample {
+            wall: wall + chrono::Duration::milliseconds(1500),
+            monotonic: base + Duration::from_millis(750),
+            offset_seconds: 0,
+        });
+        samples.extend(steady_time_samples(8));
+
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let starts = Arc::new(Mutex::new(0));
+        let backend_starts = starts.clone();
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                scheduled_active_config(),
+                Arc::new(FixedClock(wall)),
+                Box::new(FailingStartBackend {
+                    active: Arc::new(Mutex::new(false)),
+                    starts: backend_starts,
+                    failures_remaining: 1,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: Arc::new(Mutex::new(Vec::new())),
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource { samples },
+            )
+        });
+
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        assert_eq!(
+            *starts.lock().expect("backend start lock"),
+            1,
+            "a gap below the resume threshold must not retry the failed start"
+        );
+        stop_owner_loop(&sender, owner);
+    }
+
+    #[test]
+    fn owner_loop_does_not_classify_slow_backend_processing_as_resume() {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let (entered, entered_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let samples = steady_time_samples(10);
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                scheduled_active_config(),
+                Arc::new(FixedClock(wall)),
+                Box::new(BlockingFailingStartBackend {
+                    entered,
+                    release: release_receiver,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: Arc::new(Mutex::new(Vec::new())),
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource { samples },
+            )
+        });
+
+        entered_receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("startup enters the controlled backend call");
+        release.send(()).expect("startup backend call releases");
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        stop_owner_loop(&sender, owner);
     }
 }
