@@ -2572,6 +2572,7 @@ mod core_helper_tests {
  */
 #[cfg(test)]
 mod tray_asset_contract_tests {
+    use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -2844,6 +2845,95 @@ mod tray_asset_contract_tests {
             builder.contains("runtime::TrayIcon::Waiting => waiting_icon.clone()"),
             "Waiting must select its own initial image"
         );
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn tray_image_for_maps_every_platform_and_state_to_its_runtime_asset() {
+        for (platform, icon, expected) in [
+            (
+                TrayPlatform::Macos,
+                runtime::TrayIcon::Active,
+                &MACOS_ACTIVE[1],
+            ),
+            (
+                TrayPlatform::Macos,
+                runtime::TrayIcon::Inactive,
+                &MACOS_INACTIVE[1],
+            ),
+            (
+                TrayPlatform::Macos,
+                runtime::TrayIcon::Waiting,
+                &MACOS_WAITING[1],
+            ),
+            (
+                TrayPlatform::Linux,
+                runtime::TrayIcon::Active,
+                &LINUX_ACTIVE,
+            ),
+            (
+                TrayPlatform::Linux,
+                runtime::TrayIcon::Inactive,
+                &LINUX_INACTIVE,
+            ),
+            (
+                TrayPlatform::Linux,
+                runtime::TrayIcon::Waiting,
+                &LINUX_WAITING,
+            ),
+            (
+                TrayPlatform::Windows,
+                runtime::TrayIcon::Active,
+                &WINDOWS_ACTIVE,
+            ),
+            (
+                TrayPlatform::Windows,
+                runtime::TrayIcon::Inactive,
+                &WINDOWS_INACTIVE,
+            ),
+            (
+                TrayPlatform::Windows,
+                runtime::TrayIcon::Waiting,
+                &WINDOWS_WAITING,
+            ),
+        ] {
+            assert!(std::ptr::eq(tray_image_for(icon, platform), expected));
+        }
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn platform_template_flags_and_paint_branches_remain_separate() {
+        for image in MACOS_ACTIVE
+            .iter()
+            .chain(MACOS_INACTIVE.iter())
+            .chain(MACOS_WAITING.iter())
+        {
+            assert!(image.template);
+        }
+        for image in [&LINUX_ACTIVE, &LINUX_INACTIVE, &LINUX_WAITING] {
+            assert!(!image.template);
+        }
+
+        let paint = strip_comments(source_scope(
+            &source(),
+            "impl TrayPaintTargets for NativeTrayTargets",
+            "impl TraySink for NativeTraySink",
+        ));
+        let macos = source_scope(
+            paint,
+            "#[cfg(target_os = \"macos\")]",
+            "#[cfg(not(target_os = \"macos\"))]",
+        );
+        let non_macos = source_scope(
+            paint,
+            "#[cfg(not(target_os = \"macos\"))]",
+            "if errors.is_empty",
+        );
+        assert!(macos.contains("set_icon_with_as_template(Some(image), true)"));
+        assert!(!macos.contains("set_icon(Some(image))"));
+        assert!(non_macos.contains("set_icon(Some(image))"));
+        assert!(!non_macos.contains("set_icon_with_as_template"));
     }
 
     // Mutant: restore runtime alpha dimming or its obsolete unit test.
