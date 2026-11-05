@@ -361,6 +361,31 @@ mod tests {
         fail_start: bool,
     }
 
+    struct FailingReleasePower {
+        releases: Arc<AtomicUsize>,
+        failures_remaining: usize,
+    }
+
+    impl PowerInhibitor for FailingReleasePower {
+        fn inhibit_sleep(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn release(&mut self) -> Result<(), String> {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            if self.failures_remaining > 0 {
+                self.failures_remaining -= 1;
+                Err("release failed".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn is_active(&self) -> bool {
+            true
+        }
+    }
+
     impl PowerInhibitor for Power {
         fn inhibit_sleep(&mut self, _: &str) -> Result<(), String> {
             self.inhibits.fetch_add(1, Ordering::SeqCst);
@@ -436,5 +461,38 @@ mod tests {
         crate::runtime::EngineBackend::stop(&mut engine).expect("repeated adapter stop is idle");
         assert_eq!(releases.load(Ordering::SeqCst), 1);
         assert!(!crate::runtime::EngineBackend::is_active(&engine));
+    }
+
+    #[test]
+    fn a_second_stop_retries_a_failed_release_without_starting_another_worker() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let config = Arc::new(Mutex::new(AppConfig {
+            interval_secs: 1,
+            ..AppConfig::default()
+        }));
+        let mut engine = Engine::new(
+            Box::new(Mouse),
+            Box::new(FailingReleasePower {
+                releases: Arc::clone(&releases),
+                failures_remaining: 1,
+            }),
+            config,
+        );
+
+        engine.start().expect("initial acquisition succeeds");
+        assert_eq!(
+            engine.stop(),
+            Err("failed to release sleep inhibition: release failed".to_owned())
+        );
+        assert!(
+            engine.is_active(),
+            "unconfirmed release retains active ownership"
+        );
+        engine
+            .stop()
+            .expect("a later stop retries the retained release");
+
+        assert_eq!(releases.load(Ordering::SeqCst), 2);
+        assert!(!engine.is_active());
     }
 }
