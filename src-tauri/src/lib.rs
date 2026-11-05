@@ -2154,15 +2154,19 @@ fn show_settings_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
-    } else if let Err(e) =
-        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    } else {
+        match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
             .title("Stay Awake Settings")
             .inner_size(480.0, 720.0)
             .resizable(false)
             .center()
             .build()
-    {
-        log::error!("Failed to create settings window: {}", e);
+        {
+            Ok(win) => {
+                let _ = win.set_focus();
+            }
+            Err(e) => log::error!("Failed to create settings window: {}", e),
+        }
     }
 }
 
@@ -2177,15 +2181,19 @@ fn show_about_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("about") {
         let _ = win.show();
         let _ = win.set_focus();
-    } else if let Err(e) =
-        WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
+    } else {
+        match WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
             .title("About Stay Awake")
             .inner_size(360.0, 340.0)
             .resizable(false)
             .center()
             .build()
-    {
-        log::error!("Failed to create about window: {}", e);
+        {
+            Ok(win) => {
+                let _ = win.set_focus();
+            }
+            Err(e) => log::error!("Failed to create about window: {}", e),
+        }
     }
 }
 
@@ -2214,6 +2222,7 @@ fn set_macos_regular_app() {
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        app.activate();
 
         // Set the app icon programmatically (works even in dev mode without a bundle).
         let icon_bytes = include_bytes!("../icons/icon.png");
