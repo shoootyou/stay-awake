@@ -13,6 +13,14 @@ tray-settings = Parametres…
 tray-quit = Quitter
 tray-tooltip-active = Stay Awake — Actif
 tray-tooltip-inactive = Stay Awake — Inactif
+tray-waiting = En attente du créneau
+tray-paused = En pause pour ce créneau
+tray-active-override = Actif (activation manuelle)
+tray-tooltip-waiting = Stay Awake : en attente du créneau
+tray-tooltip-paused = Stay Awake : en pause pour ce créneau
+tray-tooltip-override = Stay Awake : actif par activation manuelle
+tray-next-window = Prochain créneau : { $when }
+tray-no-next-window = Aucun créneau à venir
 
 # Fenetre de parametres
 settings-title = Parametres de Stay Awake
@@ -28,10 +36,12 @@ settings-save = Enregistrer
 settings-cancel = Annuler
 settings-accessibility-banner = Les modes souris necessitent l'autorisation d'accessibilite.
 settings-grant-btn = Accorder l'acces
+settings-mode-info-label = À propos des modes de mouvement
 
 # Planification
 schedule-label = Planification
 schedule-enabled = Activer la planification
+schedule-enabled-hint = Démarre et s’arrête automatiquement en mode Manuel et Toujours actif. En mode WiFi, seuls les mouvements de souris suivent le créneau.
 schedule-start = Heure de debut
 schedule-end = Heure de fin
 schedule-days = Jours actifs
@@ -66,6 +76,7 @@ settings-wifi-none = Aucun réseau enregistré
 settings-wifi-disconnected = Non connecté
 settings-wifi-hint = Lorsqu'activé, Stay Awake s'active uniquement sur les réseaux enregistrés.
 settings-wifi-nm-required = NetworkManager est requis pour le mode WiFi sous Linux.
+settings-wifi-remove-label = Supprimer le réseau { $network }
 
 # xdotool sous Linux
 tray-xdotool-missing = xdotool introuvable — installez xdotool pour le mode souris

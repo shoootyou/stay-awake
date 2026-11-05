@@ -40,6 +40,7 @@ pub fn create_bundle(locale: &str) -> Bundle {
         .unwrap_or_else(|_| "en".parse().expect("en is valid"));
 
     let mut bundle = FluentBundle::new_concurrent(vec![langid]);
+    bundle.set_use_isolating(false);
 
     // Load the requested locale first (if it exists and is not English).
     if locale != "en" {
@@ -72,27 +73,42 @@ pub fn t(bundle: &Bundle, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) fn t_with_args(
-    _bundle: &Bundle,
+    bundle: &Bundle,
     id: &str,
-    _args: Option<&fluent_bundle::FluentArgs<'_>>,
+    args: Option<&fluent_bundle::FluentArgs<'_>>,
 ) -> String {
-    id.to_owned()
+    let Some(pattern) = bundle.get_message(id).and_then(|message| message.value()) else {
+        return id.to_owned();
+    };
+    let mut errors = Vec::new();
+    let formatted = bundle.format_pattern(pattern, args, &mut errors);
+    if errors.is_empty() {
+        formatted.into_owned()
+    } else {
+        id.to_owned()
+    }
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
 pub(crate) struct NextWindowInput<'a> {
     pub(crate) when: chrono::DateTime<chrono::FixedOffset>,
     pub(crate) locale: &'a str,
 }
 
-// skeleton: wired in E3
+// wired in E3b-2
 #[allow(dead_code)]
-pub(crate) fn format_next_window(_input: NextWindowInput<'_>) -> String {
-    String::new()
+pub(crate) fn format_next_window(input: NextWindowInput<'_>) -> String {
+    let date = match input.locale {
+        "es" | "fr" | "pt-BR" => input.when.format("%d/%m/%Y"),
+        "de" => input.when.format("%d.%m.%Y"),
+        "ja" | "zh-Hans" | "ko" => input.when.format("%Y/%m/%d"),
+        _ => input.when.format("%m/%d/%Y"),
+    };
+    format!("{date} {}", input.when.format("%H:%M %:z"))
 }
 
 #[cfg(test)]
