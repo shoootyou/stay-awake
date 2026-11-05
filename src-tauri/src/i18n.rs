@@ -86,6 +86,71 @@ mod tests {
     use super::*;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
+    const NEW_KEYS: [&str; 10] = [
+        "tray-waiting",
+        "tray-paused",
+        "tray-active-override",
+        "tray-tooltip-waiting",
+        "tray-tooltip-paused",
+        "tray-tooltip-override",
+        "tray-next-window",
+        "tray-no-next-window",
+        "schedule-enabled-hint",
+        "settings-wifi-remove-label",
+    ];
+
+    // Test-only final seam: production formats Fluent variables instead of replacing strings.
+    fn t_with_args(bundle: &Bundle, id: &str, _: &[(&str, &str)]) -> String {
+        t(bundle, id)
+    }
+
+    #[test]
+    fn every_locale_defines_schedule_status_keys_and_formats_fluent_arguments() {
+        for (locale, source) in [
+            ("en", LOCALE_EN),
+            ("es", LOCALE_ES),
+            ("fr", LOCALE_FR),
+            ("de", LOCALE_DE),
+            ("pt-BR", LOCALE_PT_BR),
+            ("ja", LOCALE_JA),
+            ("zh-Hans", LOCALE_ZH_HANS),
+            ("ko", LOCALE_KO),
+        ] {
+            for key in NEW_KEYS {
+                assert!(
+                    source
+                        .lines()
+                        .any(|line| line.starts_with(&format!("{key} ="))),
+                    "{locale} must define {key}"
+                );
+            }
+        }
+        let bundle = create_bundle("en");
+        assert_eq!(
+            t_with_args(&bundle, "tray-waiting", &[]),
+            "Waiting for schedule"
+        );
+        assert_eq!(
+            t_with_args(&bundle, "tray-paused", &[]),
+            "Paused for this window"
+        );
+        assert_eq!(
+            t_with_args(&bundle, "tray-active-override", &[]),
+            "Active (manual override)"
+        );
+        assert_eq!(
+            t_with_args(&bundle, "tray-next-window", &[("when", "Mon 09 Nov")]),
+            "Next window: Mon 09 Nov"
+        );
+        assert_eq!(
+            t_with_args(&bundle, "settings-wifi-remove-label", &[("network", "Lab")]),
+            "Remove network Lab"
+        );
+        assert_eq!(
+            t_with_args(&bundle, "tray-no-next-window", &[]),
+            "No upcoming window"
+        );
+    }
 
     fn english_message_ids() -> Vec<String> {
         LOCALE_EN
