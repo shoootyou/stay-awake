@@ -1522,6 +1522,116 @@ mod tests {
         );
     }
 
+    fn assert_unrelated_wifi_save_keeps_manual_activity(
+        label: &str,
+        edit: impl FnOnce(&mut AppConfig),
+        expected_active: bool,
+    ) {
+        let handle = RuntimeHandle::spawn(owner_start_with_config(
+            wifi_config(&["Office"]),
+            Arc::new(Mutex::new(Vec::new())),
+        ))
+        .expect("owner spawn succeeds");
+        handle
+            .post_wifi(WifiObservation {
+                ssid: Some("Guest".to_owned()),
+            })
+            .expect("unregistered observation queues");
+        let initial = handle
+            .query()
+            .expect("query sends")
+            .wait(REQUEST_TIMEOUT)
+            .expect("query replies")
+            .snapshot
+            .expect("startup snapshot exists");
+        if expected_active {
+            assert!(
+                !initial.engine_active,
+                "an unregistered network begins inactive before a manual start"
+            );
+            assert!(
+                send_owner_route(&handle, TrayRoute::TrayToggle)
+                    .snapshot
+                    .expect("manual start returns a snapshot")
+                    .engine_active,
+                "manual start establishes the activity to preserve"
+            );
+        } else {
+            handle
+                .post_wifi(WifiObservation {
+                    ssid: Some("Office".to_owned()),
+                })
+                .expect("registered observation queues");
+            assert!(
+                handle
+                    .query()
+                    .expect("query sends")
+                    .wait(REQUEST_TIMEOUT)
+                    .expect("query replies")
+                    .snapshot
+                    .expect("registered snapshot exists")
+                    .engine_active,
+                "a registered network begins active before a manual stop"
+            );
+            assert!(
+                !send_owner_route(&handle, TrayRoute::TrayToggle)
+                    .snapshot
+                    .expect("manual stop returns a snapshot")
+                    .engine_active,
+                "manual stop establishes the activity to preserve"
+            );
+        }
+
+        let mut candidate = wifi_config(&["Office"]);
+        edit(&mut candidate);
+        let reply = send_owner_config(&handle, candidate);
+        assert_eq!(
+            reply
+                .snapshot
+                .expect("unrelated-save reply includes a snapshot")
+                .engine_active,
+            expected_active,
+            "an unrelated {label} save must preserve manual WiFi activity"
+        );
+        assert!(
+            send_owner_route(&handle, TrayRoute::Quit).terminating,
+            "Quit ends the owner after the unrelated save"
+        );
+    }
+
+    #[test]
+    fn unrelated_wifi_saves_keep_a_manual_stop_on_a_registered_network() {
+        assert_unrelated_wifi_save_keeps_manual_activity(
+            "interval",
+            |config| config.interval_secs = 60,
+            false,
+        );
+        assert_unrelated_wifi_save_keeps_manual_activity(
+            "language",
+            |config| config.language = "es".to_owned(),
+            false,
+        );
+        assert_unrelated_wifi_save_keeps_manual_activity(
+            "jiggle method",
+            |config| config.jiggle_mode = crate::config::JiggleMode::MouseZen,
+            false,
+        );
+        assert_unrelated_wifi_save_keeps_manual_activity(
+            "profile metadata",
+            |config| config.active_profile = "Focus".to_owned(),
+            false,
+        );
+    }
+
+    #[test]
+    fn unrelated_wifi_saves_keep_a_manual_start_on_an_unregistered_network() {
+        assert_unrelated_wifi_save_keeps_manual_activity(
+            "interval",
+            |config| config.interval_secs = 60,
+            true,
+        );
+    }
+
     #[test]
     fn failed_config_publication_blocks_scheduled_automatic_routes_until_recovery() {
         for mode in [
