@@ -127,14 +127,15 @@ fn build_tray_presentation_with_target(
 
 /**
  * @spec-handoff
- * @interface status_menu_label(current: TrayStatus, after_click: TrayStatus, Bundle) -> String
+ * @interface status_menu_lines(current: TrayStatus, after_click: TrayStatus, Bundle)
+ *   -> StatusMenuLines
  * @interface tray_toggle_presentation(RuntimeSnapshot, schedule_owned: bool) -> TrayStatus
  * @interface runtime::schedule_owned(mode: &AppMode, schedule_enabled: bool) -> bool
  * @behavior
- *     - Renders the current localized state, its fixed emoji, and the true click-result state.
- *     - Uses one U+2192 arrow with a single space on each side.
+ *     - Renders the current localized state and fixed emoji in the enabled status item.
+ *     - Renders the true click-result state as a disabled hint prefixed by U+2192 and one space.
  * @edge-cases
- *     - A scheduled Active click targets Paused, while an unscheduled Active click targets Inactive.
+ *     - A scheduled Active click targets Paused; an unscheduled one targets Inactive.
  *     - The target is supplied by lifecycle logic rather than guessed from the current label.
  * @see ./runtime.rs
  */
@@ -316,8 +317,8 @@ mod tray_status_menu_contract_tests {
                         );
                         let bundle = i18n::create_bundle("en");
                         assert_eq!(
-                            status_menu_label(status, advertised, &bundle),
-                            status_menu_label(status, oracle.presentation, &bundle)
+                            status_menu_lines(status, advertised, &bundle),
+                            status_menu_lines(status, oracle.presentation, &bundle)
                         );
                     }
                 }
@@ -363,69 +364,99 @@ mod tray_status_menu_contract_tests {
     }
 
     #[test]
-    fn status_menu_label_uses_fixed_emoji_localized_labels_and_the_click_result() {
+    fn status_menu_lines_separate_fixed_emoji_current_labels_from_click_targets_in_english() {
         let english = i18n::create_bundle("en");
-        for (current, after_click, expected) in [
+        for (current, after_click, primary, hint) in [
             (
                 runtime::TrayStatus::Active,
                 runtime::TrayStatus::Inactive,
-                "🟢 Active → Inactive",
+                "🟢 Active",
+                "→ Inactive",
             ),
             (
                 runtime::TrayStatus::Inactive,
                 runtime::TrayStatus::Active,
-                "⚪ Inactive → Active",
+                "⚪ Inactive",
+                "→ Active",
             ),
             (
                 runtime::TrayStatus::Waiting,
                 runtime::TrayStatus::ActiveOverride,
-                "📅 Waiting for schedule → Active (manual override)",
+                "📅 Waiting for schedule",
+                "→ Active (manual override)",
             ),
             (
                 runtime::TrayStatus::Paused,
                 runtime::TrayStatus::Active,
-                "⏸️ Paused for this window → Active",
+                "⏸️ Paused for this window",
+                "→ Active",
             ),
             (
                 runtime::TrayStatus::ActiveOverride,
                 runtime::TrayStatus::Waiting,
-                "🟢 Active (manual override) → Waiting for schedule",
+                "🟢 Active (manual override)",
+                "→ Waiting for schedule",
             ),
             (
                 runtime::TrayStatus::Active,
                 runtime::TrayStatus::Paused,
-                "🟢 Active → Paused for this window",
+                "🟢 Active",
+                "→ Paused for this window",
             ),
         ] {
-            assert_eq!(status_menu_label(current, after_click, &english), expected);
+            assert_eq!(
+                status_menu_lines(current, after_click, &english),
+                StatusMenuLines {
+                    primary: primary.to_owned(),
+                    hint: hint.to_owned(),
+                }
+            );
         }
     }
 
     #[test]
-    fn status_menu_label_uses_the_selected_locale() {
+    fn status_menu_lines_use_the_selected_locale_for_all_states() {
         let spanish = i18n::create_bundle("es");
-        assert_eq!(
-            status_menu_label(
+        for (current, after_click, primary, hint) in [
+            (
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Inactive,
+                "🟢 Activo",
+                "→ Inactivo",
+            ),
+            (
+                runtime::TrayStatus::Inactive,
+                runtime::TrayStatus::Active,
+                "⚪ Inactivo",
+                "→ Activo",
+            ),
+            (
                 runtime::TrayStatus::Waiting,
                 runtime::TrayStatus::ActiveOverride,
-                &spanish,
+                "📅 En espera del horario",
+                "→ Activo (activación manual)",
             ),
-            "📅 En espera del horario → Activo (activación manual)"
-        );
-    }
-
-    #[test]
-    fn presentation_delegates_all_status_menu_text_to_the_label_function() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
-        )
-        .expect("lib.rs is readable");
-        let production = source
-            .split("#[cfg(test)]\nmod tray_status_menu_contract_tests")
-            .next()
-            .expect("production source precedes this contract");
-        assert!(production.contains("menu_text: status_menu_label("));
-        assert_eq!(production.matches("status_menu_label(").count(), 2);
+            (
+                runtime::TrayStatus::Paused,
+                runtime::TrayStatus::Active,
+                "⏸️ En pausa durante este periodo",
+                "→ Activo",
+            ),
+            (
+                runtime::TrayStatus::ActiveOverride,
+                runtime::TrayStatus::Waiting,
+                "🟢 Activo (activación manual)",
+                "→ En espera del horario",
+            ),
+        ] {
+            assert_eq!(
+                status_menu_lines(current, after_click, &spanish),
+                StatusMenuLines {
+                    primary: primary.to_owned(),
+                    hint: hint.to_owned(),
+                }
+            );
+        }
     }
 }
 
@@ -1028,6 +1059,7 @@ mod tray_refresh_contract_tests {
         TrayPresentation {
             status: runtime::TrayStatus::Active,
             menu_text: text.to_owned(),
+            hint_text: format!("→ {text}"),
             tooltip: text.to_owned(),
             icon: runtime::TrayIcon::Active,
         }
@@ -1137,41 +1169,46 @@ mod tray_refresh_contract_tests {
             (
                 runtime::TrayStatus::Active,
                 false,
-                "🟢 Active → Inactive",
+                "🟢 Active",
+                "→ Inactive",
                 "Stay Awake — Active",
                 runtime::TrayIcon::Active,
             ),
             (
                 runtime::TrayStatus::Inactive,
                 false,
-                "⚪ Inactive → Active",
+                "⚪ Inactive",
+                "→ Active",
                 "Stay Awake — Inactive",
                 runtime::TrayIcon::Inactive,
             ),
             (
                 runtime::TrayStatus::Waiting,
                 true,
-                "📅 Waiting for schedule → Active (manual override)",
+                "📅 Waiting for schedule",
+                "→ Active (manual override)",
                 "Stay Awake: waiting for schedule (No upcoming window)",
                 runtime::TrayIcon::Waiting,
             ),
             (
                 runtime::TrayStatus::Paused,
                 true,
-                "⏸️ Paused for this window → Active",
+                "⏸️ Paused for this window",
+                "→ Active",
                 "Stay Awake: paused for this window (No upcoming window)",
                 runtime::TrayIcon::Inactive,
             ),
             (
                 runtime::TrayStatus::ActiveOverride,
                 true,
-                "🟢 Active (manual override) → Waiting for schedule",
+                "🟢 Active (manual override)",
+                "→ Waiting for schedule",
                 "Stay Awake: active by manual override (No upcoming window)",
                 runtime::TrayIcon::Active,
             ),
         ];
         let mut sink = RecordingSink::default();
-        for (status, schedule_owned, menu_text, tooltip, icon) in cases {
+        for (status, schedule_owned, menu_text, hint_text, tooltip, icon) in cases {
             let state = presentation_snapshot(status, schedule_owned);
             let presentation = build_tray_presentation_with_schedule(
                 PresentationInput {
@@ -1184,14 +1221,14 @@ mod tray_refresh_contract_tests {
             );
             assert_eq!(presentation.status, status);
             assert_eq!(presentation.menu_text, menu_text);
-            assert_eq!(
-                presentation.menu_text,
-                status_menu_label(
-                    status,
-                    tray_toggle_presentation(&state, schedule_owned),
-                    &bundle,
-                )
+            assert_eq!(presentation.hint_text, hint_text);
+            let lines = status_menu_lines(
+                status,
+                tray_toggle_presentation(&state, schedule_owned),
+                &bundle,
             );
+            assert_eq!(presentation.menu_text, lines.primary);
+            assert_eq!(presentation.hint_text, lines.hint);
             assert_eq!(presentation.tooltip, tooltip);
             assert_eq!(presentation.icon, icon);
             refresh_tray_status(
@@ -1211,6 +1248,7 @@ mod tray_refresh_contract_tests {
         let presentation = TrayPresentation {
             status: runtime::TrayStatus::Waiting,
             menu_text: "Waiting for schedule".to_owned(),
+            hint_text: "→ Active (manual override)".to_owned(),
             tooltip: "Stay Awake: waiting for schedule (No upcoming window)".to_owned(),
             icon: runtime::TrayIcon::Waiting,
         };
@@ -1296,18 +1334,16 @@ mod tray_refresh_contract_tests {
             assert_eq!(backend.start_calls, starts, "{route:?}");
             assert_eq!(backend.stop_calls, stops, "{route:?}");
             assert_eq!(sink.calls[0].1.status, status, "{route:?}");
-            assert_eq!(
-                sink.calls[0].1.menu_text,
-                status_menu_label(
-                    status,
-                    tray_toggle_presentation(
-                        &snapshot,
-                        runtime::schedule_owned(&config.mode, config.schedule_enabled),
-                    ),
-                    &bundle,
+            let lines = status_menu_lines(
+                status,
+                tray_toggle_presentation(
+                    &snapshot,
+                    runtime::schedule_owned(&config.mode, config.schedule_enabled),
                 ),
-                "{route:?}"
+                &bundle,
             );
+            assert_eq!(sink.calls[0].1.menu_text, lines.primary, "{route:?}");
+            assert_eq!(sink.calls[0].1.hint_text, lines.hint, "{route:?}");
         }
 
         let mut supervisor = runtime::Supervisor::new();
@@ -1376,16 +1412,20 @@ mod tray_refresh_contract_tests {
             schedule_enabled: true,
             ..AppConfig::default()
         };
-        for (route, initially_active, expected) in [
+        for (route, initially_active, expected, menu_text, hint_text) in [
             (
                 TrayRoute::WifiChanged { active: true },
                 false,
                 runtime::TrayStatus::Active,
+                "🟢 Active",
+                "→ Inactive",
             ),
             (
                 TrayRoute::WifiChanged { active: false },
                 true,
                 runtime::TrayStatus::Inactive,
+                "⚪ Inactive",
+                "→ Active",
             ),
         ] {
             let mut supervisor = runtime::Supervisor::new();
@@ -1407,6 +1447,8 @@ mod tray_refresh_contract_tests {
             );
             assert_eq!(sink.calls.len(), 1);
             assert_eq!(sink.calls[0].1.status, expected);
+            assert_eq!(sink.calls[0].1.menu_text, menu_text);
+            assert_eq!(sink.calls[0].1.hint_text, hint_text);
         }
     }
 
@@ -1432,17 +1474,19 @@ mod tray_refresh_contract_tests {
             },
             false,
         );
-        assert_eq!(english.menu_text, "🟢 Active → Inactive");
-        assert_eq!(spanish.menu_text, "🟢 Activo → Inactivo");
+        assert_eq!(english.menu_text, "🟢 Active");
+        assert_eq!(english.hint_text, "→ Inactive");
+        assert_eq!(spanish.menu_text, "🟢 Activo");
+        assert_eq!(spanish.hint_text, "→ Inactivo");
         assert_ne!(english.menu_text, spanish.menu_text);
-        assert_eq!(
-            spanish.menu_text,
-            status_menu_label(
-                runtime::TrayStatus::Active,
-                runtime::TrayStatus::Inactive,
-                &i18n::create_bundle("es"),
-            )
+        assert_ne!(english.hint_text, spanish.hint_text);
+        let lines = status_menu_lines(
+            runtime::TrayStatus::Active,
+            runtime::TrayStatus::Inactive,
+            &i18n::create_bundle("es"),
         );
+        assert_eq!(spanish.menu_text, lines.primary);
+        assert_eq!(spanish.hint_text, lines.hint);
         let mut sink = RecordingSink::default();
         refresh_tray_status(
             TrayRefreshInput {
@@ -1485,6 +1529,8 @@ mod tray_refresh_contract_tests {
         .is_err());
         assert_eq!(sink.calls.len(), 1);
         assert_eq!(sink.calls[0].1.status, runtime::TrayStatus::Inactive);
+        assert_eq!(sink.calls[0].1.menu_text, "⚪ Inactive");
+        assert_eq!(sink.calls[0].1.hint_text, "→ Active");
     }
 
     #[test]
@@ -3215,6 +3261,7 @@ mod native_wiring_contract_tests {
         TrayPresentation {
             status: runtime::TrayStatus::Inactive,
             menu_text: text.to_owned(),
+            hint_text: format!("→ {text}"),
             tooltip: text.to_owned(),
             icon: runtime::TrayIcon::Inactive,
         }
@@ -3386,6 +3433,34 @@ mod native_wiring_contract_tests {
         assert!(
             !publish_impl.contains("recv_timeout") && !publish_impl.contains(".wait("),
             "owner publication never waits for native UI completion"
+        );
+    }
+
+    #[test]
+    fn tray_menu_places_a_disabled_hint_after_the_enabled_status_and_paints_both_lines() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+        let paint = scoped_block(&source, "impl TrayPaintTargets for NativeTrayTargets {");
+
+        assert!(
+            setup.contains(
+                r#"MenuItem::with_id(app, "toggle_hint", &initial_presentation.hint_text, false"#
+            ),
+            "the hint has its own disabled menu item"
+        );
+        assert!(
+            setup.contains("&toggle_item, &toggle_hint,"),
+            "the hint is immediately after the enabled status item"
+        );
+        assert!(
+            !menu.contains(r#""toggle_hint""#),
+            "the disabled hint has no menu-event branch"
+        );
+        assert!(
+            paint.contains("self.status_item.set_text(&presentation.menu_text)")
+                && paint.contains("self.hint_item.set_text(&presentation.hint_text)"),
+            "every platform paints current and click-target lines through the shared target"
         );
     }
 
