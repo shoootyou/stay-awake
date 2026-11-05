@@ -127,6 +127,84 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
 #[cfg(test)]
 mod tray_status_menu_contract_tests {
     use super::*;
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn lifecycle_result(
+        schedule_owned: bool,
+        inside: bool,
+        active: bool,
+        force_on: bool,
+    ) -> runtime::TrayStatus {
+        let at = Utc
+            .with_ymd_and_hms(2026, 11, 5, 9, 30, 0)
+            .single()
+            .expect("fixed instant exists");
+        let occurrence = schedule::Occurrence {
+            start_day: at.date_naive(),
+            start: at - Duration::minutes(30),
+            end: at + Duration::minutes(30),
+        };
+        let window = schedule::ScheduleEvaluation {
+            at,
+            current: inside.then_some(occurrence),
+            next: Some(schedule::Occurrence {
+                start_day: at.date_naive(),
+                start: at + Duration::hours(1),
+                end: at + Duration::hours(2),
+            }),
+        };
+        let override_state = if force_on {
+            runtime::OverrideState::ForceOn { until: None }
+        } else {
+            runtime::OverrideState::None
+        };
+        let normalized = runtime::normalize_override(runtime::NormalizeInput {
+            mode: &config::AppMode::Manual,
+            schedule_enabled: schedule_owned,
+            window: &window,
+            override_state: &override_state,
+            event: runtime::LifecycleEvent::TrayToggle,
+        });
+        runtime::decide_lifecycle(runtime::LifecycleInput {
+            mode: &config::AppMode::Manual,
+            schedule_enabled: schedule_owned,
+            window: &window,
+            engine_active: active,
+            override_state: &normalized,
+            event: runtime::LifecycleEvent::TrayToggle,
+            previous_policy: None,
+            wifi_active: false,
+        })
+        .presentation
+    }
+
+    #[test]
+    fn status_menu_targets_match_the_real_tray_toggle_lifecycle_results() {
+        assert_eq!(
+            lifecycle_result(false, false, true, false),
+            runtime::TrayStatus::Inactive
+        );
+        assert_eq!(
+            lifecycle_result(false, false, false, false),
+            runtime::TrayStatus::Active
+        );
+        assert_eq!(
+            lifecycle_result(true, false, false, false),
+            runtime::TrayStatus::ActiveOverride
+        );
+        assert_eq!(
+            lifecycle_result(true, true, false, false),
+            runtime::TrayStatus::Active
+        );
+        assert_eq!(
+            lifecycle_result(true, false, true, true),
+            runtime::TrayStatus::Waiting
+        );
+        assert_eq!(
+            lifecycle_result(true, true, true, false),
+            runtime::TrayStatus::Paused
+        );
+    }
 
     #[test]
     fn status_menu_label_uses_fixed_emoji_localized_labels_and_the_click_result() {
