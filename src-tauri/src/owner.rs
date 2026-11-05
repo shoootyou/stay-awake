@@ -16,8 +16,8 @@ use crate::runtime::{
 };
 use crate::schedule::Clock;
 use crate::{
-    build_tray_presentation, handle_runtime_route, refresh_tray_status, PresentationInput,
-    RuntimeRouteInput, TrayRefreshInput, TrayRoute, TraySink,
+    handle_runtime_route, refresh_tray_status, PresentationInput, RuntimeRouteInput,
+    TrayRefreshInput, TrayRoute, TraySink,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -1034,12 +1034,15 @@ fn observe_configuration_fault(
     let snapshot = supervisor.snapshot().cloned();
     let error = snapshot.as_ref().and_then(|snapshot| {
         let bundle = create_bundle(&config.language);
-        let presentation = build_tray_presentation(PresentationInput {
-            snapshot,
-            bundle: &bundle,
-            locale: &config.language,
-            clock: clock.as_ref(),
-        });
+        let presentation = crate::build_tray_presentation_with_schedule(
+            PresentationInput {
+                snapshot,
+                bundle: &bundle,
+                locale: &config.language,
+                clock: clock.as_ref(),
+            },
+            crate::runtime::schedule_owned(&config.mode, config.schedule_enabled),
+        );
         refresh_tray_status(
             TrayRefreshInput {
                 route: TrayRoute::LanguageChanged,

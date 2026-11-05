@@ -79,7 +79,30 @@ pub(crate) struct PresentationInput<'a> {
     pub(crate) clock: &'a dyn schedule::Clock,
 }
 
+#[cfg(test)]
 pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPresentation {
+    let status = input.snapshot.status;
+    let after_click = match status {
+        runtime::TrayStatus::Active => runtime::TrayStatus::Inactive,
+        runtime::TrayStatus::Inactive | runtime::TrayStatus::Paused => runtime::TrayStatus::Active,
+        runtime::TrayStatus::Waiting => runtime::TrayStatus::ActiveOverride,
+        runtime::TrayStatus::ActiveOverride => runtime::TrayStatus::Waiting,
+    };
+    build_tray_presentation_with_target(input, after_click)
+}
+
+pub(crate) fn build_tray_presentation_with_schedule(
+    input: PresentationInput<'_>,
+    schedule_owned: bool,
+) -> TrayPresentation {
+    let after_click = tray_toggle_presentation(input.snapshot, schedule_owned);
+    build_tray_presentation_with_target(input, after_click)
+}
+
+fn build_tray_presentation_with_target(
+    input: PresentationInput<'_>,
+    after_click: runtime::TrayStatus,
+) -> TrayPresentation {
     let status = input.snapshot.status;
     let mut tooltip = i18n::t(input.bundle, status.tooltip_key());
     if matches!(
@@ -108,11 +131,7 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
     }
     TrayPresentation {
         status,
-        menu_text: status_menu_label(
-            status,
-            tray_toggle_presentation(input.snapshot),
-            input.bundle,
-        ),
+        menu_text: status_menu_label(status, after_click, input.bundle),
         tooltip,
         icon: status.icon(),
     }
@@ -428,13 +447,21 @@ fn status_menu_label(
     )
 }
 
-fn tray_toggle_presentation(snapshot: &runtime::RuntimeSnapshot) -> runtime::TrayStatus {
-    match snapshot.status {
-        runtime::TrayStatus::Active if snapshot.window.in_window() => runtime::TrayStatus::Paused,
-        runtime::TrayStatus::Active => runtime::TrayStatus::Inactive,
-        runtime::TrayStatus::Inactive | runtime::TrayStatus::Paused => runtime::TrayStatus::Active,
-        runtime::TrayStatus::Waiting => runtime::TrayStatus::ActiveOverride,
-        runtime::TrayStatus::ActiveOverride => runtime::TrayStatus::Waiting,
+fn tray_toggle_presentation(
+    snapshot: &runtime::RuntimeSnapshot,
+    schedule_owned: bool,
+) -> runtime::TrayStatus {
+    if schedule_owned {
+        match (snapshot.engine_active, snapshot.window.in_window()) {
+            (true, true) => runtime::TrayStatus::Paused,
+            (true, false) => runtime::TrayStatus::Waiting,
+            (false, true) => runtime::TrayStatus::Active,
+            (false, false) => runtime::TrayStatus::ActiveOverride,
+        }
+    } else if snapshot.engine_active {
+        runtime::TrayStatus::Inactive
+    } else {
+        runtime::TrayStatus::Active
     }
 }
 
@@ -805,12 +832,15 @@ pub(crate) fn handle_runtime_route(
             .cloned()
             .ok_or_else(|| "runtime reconciliation produced no snapshot".to_owned())?,
     };
-    let presentation = build_tray_presentation(PresentationInput {
-        snapshot: &snapshot,
-        bundle: input.bundle,
-        locale: &input.config.language,
-        clock: input.clock,
-    });
+    let presentation = build_tray_presentation_with_schedule(
+        PresentationInput {
+            snapshot: &snapshot,
+            bundle: input.bundle,
+            locale: &input.config.language,
+            clock: input.clock,
+        },
+        runtime::schedule_owned(&input.config.mode, input.config.schedule_enabled),
+    );
     let publish_result = refresh_tray_status(
         TrayRefreshInput {
             route: input.route,
@@ -2190,12 +2220,15 @@ pub fn run() {
                 config: &loaded_config,
                 clock: clock.as_ref(),
             })?;
-            let initial_presentation = build_tray_presentation(PresentationInput {
-                snapshot: &initial_snapshot,
-                bundle: &bundle,
-                locale: &loaded_config.language,
-                clock: clock.as_ref(),
-            });
+            let initial_presentation = build_tray_presentation_with_schedule(
+                PresentationInput {
+                    snapshot: &initial_snapshot,
+                    bundle: &bundle,
+                    locale: &loaded_config.language,
+                    clock: clock.as_ref(),
+                },
+                runtime::schedule_owned(&loaded_config.mode, loaded_config.schedule_enabled),
+            );
             let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
             let perm_checker: Arc<dyn PermissionChecker> =
                 Arc::from(platform::create_permission_checker());

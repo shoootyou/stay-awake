@@ -153,6 +153,10 @@ impl TrayStatus {
     }
 }
 
+pub(crate) fn schedule_owned(mode: &AppMode, schedule_enabled: bool) -> bool {
+    schedule_enabled && matches!(effective_mode(mode), AppMode::Manual | AppMode::AlwaysOn)
+}
+
 pub(crate) struct TrayInput<'a> {
     pub(crate) mode: &'a AppMode,
     pub(crate) engine_active: bool,
@@ -162,11 +166,7 @@ pub(crate) struct TrayInput<'a> {
 }
 
 pub(crate) fn derive_tray_status(input: TrayInput<'_>) -> TrayStatus {
-    let schedule_owned = input.schedule_enabled
-        && matches!(
-            effective_mode(input.mode),
-            AppMode::Manual | AppMode::AlwaysOn
-        );
+    let schedule_owned = schedule_owned(input.mode, input.schedule_enabled);
     if !schedule_owned {
         return if input.engine_active {
             TrayStatus::Active
@@ -207,8 +207,7 @@ pub(crate) struct LifecycleDecision {
 
 pub(crate) fn decide_lifecycle(input: LifecycleInput<'_>) -> LifecycleDecision {
     let mode = effective_mode(input.mode);
-    let schedule_owned =
-        input.schedule_enabled && matches!(mode, AppMode::Manual | AppMode::AlwaysOn);
+    let schedule_owned = schedule_owned(input.mode, input.schedule_enabled);
     let status = |active, override_state: NormalizedOverride| {
         let presentation = derive_tray_status(TrayInput {
             mode: input.mode,
