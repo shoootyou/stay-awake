@@ -42,11 +42,12 @@ const stripComments = (source, extension) => extension === ".html"
   ? source.replace(/<!--[\s\S]*?-->/g, "")
   : source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const svgMarkup = (source) => source.match(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi) ?? [];
-const geometry = (source) => normalize(source.replace(/<svg\b[^>]*>|<\/svg>/gi, ""));
+const canonicalSvg = (source) => normalize(source
+  .replace(/\s(?:aria-hidden|focusable|class)=(?:"[^"]*"|'[^']*')/gi, ""));
 const asset = (name) => read(`src/icons/${name}.svg`);
-const assetGeometry = (name) => geometry(asset(name));
+const assetGeometry = (name) => canonicalSvg(asset(name));
 const hasAssetGeometry = (source, name) => svgMarkup(source)
-  .some((svg) => geometry(svg) === assetGeometry(name));
+  .some((svg) => canonicalSvg(svg) === assetGeometry(name));
 const allFiles = (directory) => readdirSync(directory, { recursive: true })
   .map((entry) => join(directory, entry)).filter((path) => statSync(path).isFile());
 const productFiles = [
@@ -82,8 +83,8 @@ test("ships safe canonical regular SVG assets with attribution inside the byte b
   assert.ok(bytes <= 32_768, `SVG assets use ${bytes} bytes; maximum is 32768`);
 });
 
-// Mutant: restore a Phosphor class or replace an inline path with a different geometry.
-test("uses each mapped Settings icon as canonical inline SVG geometry without Phosphor classes", () => {
+// Mutant: restore a Phosphor class or alter an inline SVG element's geometry attributes.
+test("uses each mapped Settings icon as canonical inline SVG elements without Phosphor classes", () => {
   const settingsHtml = read("src/settings.html");
   const settingsJs = stripComments(read("src/settings.js"), ".js");
   assert.doesNotMatch(`${settingsHtml}\n${settingsJs}`,
