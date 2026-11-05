@@ -77,8 +77,9 @@ const assertSettingsOrder = (html, css) => {
   assert.ok(app >= 0 && jiggle >= 0 && interval >= 0 && launch >= 0, "each control needs an enclosing field");
   assert.ok(groups[0]?.includes('id="autostart"'), "Launch at Login must occupy the first group");
   assert.ok(groups[1]?.includes('id="app-mode"'), "App Mode must occupy the second group");
-  const groupAnchors = groups.map((group) => ["autostart", "app-mode", "wifi-section", "schedule-section", "language", "profile-section"]
+  const groupAnchors = groups.map((group) => ["autostart", "app-mode", "wifi-section", "schedule-section", "profile-section"]
     .find((id) => group.includes(`id="${id}"`)) ?? "language-hotkey");
+  assert.ok(groups[4]?.includes('id="language"'), "Language keeps its original double-quoted id");
   assert.deepEqual(groupAnchors, ["autostart", "app-mode", "wifi-section", "schedule-section", "language-hotkey", "profile-section"],
     "Settings groups must place Schedule before Language and Hotkey");
   assert.ok(launch < app, "Launch at Login must precede App Mode");
