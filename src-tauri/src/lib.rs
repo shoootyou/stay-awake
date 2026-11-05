@@ -494,15 +494,6 @@ fn status_menu_lines(
     }
 }
 
-#[cfg(test)]
-fn status_menu_label(
-    current: runtime::TrayStatus,
-    _after_click: runtime::TrayStatus,
-    bundle: &i18n::Bundle,
-) -> String {
-    status_menu_lines(current, current, bundle).primary
-}
-
 fn tray_toggle_presentation(
     snapshot: &runtime::RuntimeSnapshot,
     schedule_owned: bool,

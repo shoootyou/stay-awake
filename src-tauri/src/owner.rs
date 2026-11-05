@@ -1489,14 +1489,13 @@ mod tests {
             assert!(reply.error.is_none());
             let frames = sink.frames.lock().expect("test sink lock");
             assert_eq!(frames.len(), 1);
-            assert_eq!(
-                frames[0].1.menu_text,
-                crate::status_menu_label(
-                    crate::runtime::TrayStatus::Active,
-                    expected,
-                    &create_bundle("en")
-                )
+            let lines = crate::status_menu_lines(
+                crate::runtime::TrayStatus::Active,
+                expected,
+                &create_bundle("en"),
             );
+            assert_eq!(frames[0].1.menu_text, lines.primary);
+            assert_eq!(frames[0].1.hint_text, lines.hint);
         }
     }
 
