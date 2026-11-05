@@ -896,104 +896,6 @@ mod tray_refresh_contract_tests {
     }
 }
 
-/// Persist a new configuration from the frontend and sync autostart.
-#[tauri::command(rename = "save_config")]
-fn legacy_save_config(
-    app: tauri::AppHandle,
-    new_config: AppConfig,
-    runtime: tauri::State<'_, owner::RuntimeHandle>,
-    monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
-) -> Result<(), String> {
-    if new_config.interval_secs == 0 {
-        return Err("Interval must be at least 1 second".to_owned());
-    }
-    if new_config.schedule_start_hour > 23 || new_config.schedule_start_minute > 59 {
-        return Err("Invalid schedule start time".to_owned());
-    }
-    if new_config.schedule_end_hour > 23 || new_config.schedule_end_minute > 59 {
-        return Err("Invalid schedule end time".to_owned());
-    }
-
-    use tauri_plugin_autostart::ManagerExt;
-    let manager = app.autolaunch();
-    if new_config.autostart {
-        if let Err(error) = manager.enable() {
-            log::warn!("Failed to enable autostart: {error}");
-        }
-    } else if let Err(error) = manager.disable() {
-        log::warn!("Failed to disable autostart: {error}");
-    }
-
-    let pending = runtime.update_config(
-        owner::ConfigOrigin::Settings,
-        |config| {
-            *config = new_config;
-            Ok(())
-        },
-        |previous, candidate| {
-            let wifi_changed = previous.wifi_enabled() != candidate.wifi_enabled()
-                || (candidate.wifi_enabled() && previous.wifi.networks != candidate.wifi.networks);
-            if !wifi_changed {
-                return;
-            }
-            match monitor.lock() {
-                Ok(mut monitor) if candidate.wifi_enabled() => {
-                    if let Err(error) = monitor.restart() {
-                        log::warn!("WiFi monitor restart failed: {error}");
-                    }
-                }
-                Ok(mut monitor) => {
-                    if let Err(error) = monitor.stop() {
-                        log::warn!("WiFi monitor stop failed: {error}");
-                    }
-                }
-                Err(_) => log::error!("WiFi monitor lock poisoned"),
-            }
-        },
-    )?;
-    pending
-        .wait(owner::REQUEST_TIMEOUT)?
-        .error
-        .map_or(Ok(()), Err)
-}
-
-/// Return the engine state name (`"idle"`, `"active"`, …).
-#[tauri::command(rename = "get_engine_state")]
-fn legacy_get_engine_state(
-    runtime: tauri::State<'_, owner::RuntimeHandle>,
-) -> Result<String, String> {
-    let reply = runtime.query()?.wait(owner::REQUEST_TIMEOUT)?;
-    let snapshot = reply
-        .snapshot
-        .ok_or_else(|| "runtime has no snapshot".to_owned())?;
-    Ok(if snapshot.engine_active {
-        "active"
-    } else {
-        "idle"
-    }
-    .to_owned())
-}
-
-/// Toggle the engine on/off and return the new state name.
-#[tauri::command(rename = "toggle_engine")]
-fn legacy_toggle_engine(runtime: tauri::State<'_, owner::RuntimeHandle>) -> Result<String, String> {
-    let reply = runtime
-        .request(TrayRoute::IpcToggle)?
-        .wait(owner::REQUEST_TIMEOUT)?;
-    if let Some(error) = reply.error {
-        return Err(error);
-    }
-    let snapshot = reply
-        .snapshot
-        .ok_or_else(|| "runtime has no snapshot".to_owned())?;
-    Ok(if snapshot.engine_active {
-        "active"
-    } else {
-        "idle"
-    }
-    .to_owned())
-}
-
 /// Check whether accessibility permission is granted (macOS-specific).
 #[tauri::command]
 fn check_accessibility(
@@ -1050,26 +952,6 @@ fn get_translation(
     Ok(i18n::t(&b, &key))
 }
 
-/// Replace the shared i18n bundle so the frontend can switch languages at runtime.
-#[tauri::command(rename = "set_language")]
-fn legacy_set_language(
-    language: String,
-    runtime: tauri::State<'_, owner::RuntimeHandle>,
-) -> Result<(), String> {
-    let pending = runtime.update_config(
-        owner::ConfigOrigin::Language,
-        |config| {
-            config.language = language;
-            Ok(())
-        },
-        |_, _| {},
-    )?;
-    pending
-        .wait(owner::REQUEST_TIMEOUT)?
-        .error
-        .map_or(Ok(()), Err)
-}
-
 /// Return all saved profiles.
 #[tauri::command]
 fn list_profiles(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Profile>, String> {
@@ -1122,15 +1004,116 @@ fn save_profile(
     cfg.save()
 }
 
-/// Load a named profile into the current settings.
-#[tauri::command(rename = "load_profile")]
-fn legacy_load_profile(
+#[cfg(desktop)]
+#[tauri::command]
+async fn toggle_engine(runtime: tauri::State<'_, owner::RuntimeHandle>) -> Result<String, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let reply = runtime.request(TrayRoute::IpcToggle)?;
+        let reply = reply.wait(owner::REQUEST_TIMEOUT)?;
+        if let Some(error) = reply.error {
+            return Err(error);
+        }
+        state_name(reply.snapshot)
+    })
+    .await
+    .map_err(|error| format!("toggle task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn get_engine_state(
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<String, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let reply = runtime.query()?.wait(owner::REQUEST_TIMEOUT)?;
+        state_name(reply.snapshot)
+    })
+    .await
+    .map_err(|error| format!("state query task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn save_config(
+    app: tauri::AppHandle,
+    new_config: AppConfig,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+    monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
+) -> Result<(), String> {
+    let runtime = runtime.inner().clone();
+    let monitor = monitor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+
+        let edit = move |config: &mut AppConfig| {
+            *config = new_config;
+            Ok(())
+        };
+        let effects = move |previous: &AppConfig, candidate: &AppConfig| {
+            apply_config_effects(&app, &monitor, previous, candidate);
+        };
+        let pending = runtime.update_config(ConfigOrigin::Settings, edit, effects)?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("config save task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+fn apply_config_effects(
+    app: &tauri::AppHandle,
+    monitor: &Arc<Mutex<wifi::WifiMonitor>>,
+    previous: &AppConfig,
+    candidate: &AppConfig,
+) {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let autostart_result = if candidate.autostart {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    if let Err(error) = autostart_result {
+        log::warn!("Failed to sync autostart: {error}");
+    }
+
+    let wifi_changed = previous.wifi_enabled() != candidate.wifi_enabled()
+        || (candidate.wifi_enabled() && previous.wifi.networks != candidate.wifi.networks);
+    if !wifi_changed {
+        return;
+    }
+    match monitor.lock() {
+        Ok(mut monitor) if candidate.wifi_enabled() => {
+            if let Err(error) = monitor.restart() {
+                log::warn!("WiFi monitor restart failed: {error}");
+            }
+        }
+        Ok(mut monitor) => {
+            if let Err(error) = monitor.stop() {
+                log::warn!("WiFi monitor stop failed: {error}");
+            }
+        }
+        Err(_) => log::error!("WiFi monitor lock poisoned"),
+    }
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn load_profile(
     name: String,
     runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let pending = runtime.update_config(
-        owner::ConfigOrigin::Profile,
-        |config| {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+
+        let edit = move |config: &mut AppConfig| {
             let profile = config
                 .profiles
                 .iter()
@@ -1147,61 +1130,50 @@ fn legacy_load_profile(
             config.schedule_days = profile.schedule_days;
             config.active_profile = name;
             Ok(())
-        },
-        |_, _| {},
-    )?;
-    pending
-        .wait(owner::REQUEST_TIMEOUT)?
-        .error
-        .map_or(Ok(()), Err)
+        };
+        let pending = runtime.update_config(ConfigOrigin::Profile, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("profile load task failed: {error}"))?
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
-#[tauri::command]
-async fn toggle_engine(_runtime: tauri::State<'_, owner::RuntimeHandle>) -> Result<String, String> {
-    Err("toggle IPC skeleton".to_owned())
-}
-
-#[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
-#[tauri::command]
-async fn get_engine_state(
-    _runtime: tauri::State<'_, owner::RuntimeHandle>,
-) -> Result<String, String> {
-    Err("engine state IPC skeleton".to_owned())
-}
-
-#[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
-#[tauri::command]
-async fn save_config(
-    _app: tauri::AppHandle,
-    _new_config: AppConfig,
-    _runtime: tauri::State<'_, owner::RuntimeHandle>,
-    _monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
-) -> Result<(), String> {
-    Err("config IPC skeleton".to_owned())
-}
-
-#[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
-#[tauri::command]
-async fn load_profile(
-    _name: String,
-    _runtime: tauri::State<'_, owner::RuntimeHandle>,
-) -> Result<(), String> {
-    Err("profile IPC skeleton".to_owned())
-}
-
-#[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
 #[tauri::command]
 async fn set_language(
-    _language: String,
-    _runtime: tauri::State<'_, owner::RuntimeHandle>,
+    language: String,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    Err("language IPC skeleton".to_owned())
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+
+        let edit = move |config: &mut AppConfig| {
+            config.language = language;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Language, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("language change task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+fn state_name(snapshot: Option<runtime::RuntimeSnapshot>) -> Result<String, String> {
+    let snapshot = snapshot.ok_or_else(|| "runtime has no snapshot".to_owned())?;
+    Ok(if snapshot.engine_active {
+        "active"
+    } else {
+        "idle"
+    }
+    .to_owned())
 }
 
 /// Delete a named profile.
@@ -1582,19 +1554,24 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_config,
-            legacy_save_config,
-            legacy_get_engine_state,
-            legacy_toggle_engine,
+            #[cfg(desktop)]
+            save_config,
+            #[cfg(desktop)]
+            get_engine_state,
+            #[cfg(desktop)]
+            toggle_engine,
             check_accessibility,
             request_accessibility,
             get_autostart_enabled,
             set_autostart_enabled,
             close_settings_window,
             get_translation,
-            legacy_set_language,
+            #[cfg(desktop)]
+            set_language,
             list_profiles,
             save_profile,
-            legacy_load_profile,
+            #[cfg(desktop)]
+            load_profile,
             delete_profile,
             update_global_hotkey,
             get_app_version,
