@@ -130,85 +130,389 @@ fn get_config(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<AppConf
 mod tray_refresh_contract_tests {
     /*
      * @spec-handoff
-     * @interface refresh_tray_status(route: TrayRoute, sink: &mut dyn TraySink, status: TrayStatus)
+     * @interface TrayRoute::lifecycle_event; build_tray_presentation; refresh_tray_status
      * @behavior
-     *   - Every lifecycle entry route publishes its coherent presentation through one tray seam.
-     *   - WiFi presentation is always Active or Inactive, never a schedule lifecycle label.
+     *   - Every runtime route maps to its prescribed lifecycle event and publishes once.
+     *   - Presentations use the current bundle for menu text, tooltip, and state icon.
      * @edge-cases
-     *   - Language changes refresh without changing lifecycle state.
+     *   - WiFi has only Active or Inactive states; failed backend work publishes actual state.
+     *   - A language change redraws from the replacement bundle without a lifecycle action.
      */
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum TrayRoute {
-        Startup,
-        Toggle,
-        Hotkey,
-        Ipc,
-        WiFi,
-        Boundary,
-        Config,
-        Language,
-        Resume,
-    }
-    // Production rendering consumes every schedule status after this seam is promoted.
-    #[allow(dead_code)]
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum TrayStatus {
-        Active,
-        Inactive,
-        Waiting,
-        Paused,
-        ActiveOverride,
-    }
-    trait TraySink {
-        fn publish(&mut self, route: TrayRoute, status: TrayStatus);
-    }
+    use super::*;
+    use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
+
     #[derive(Default)]
-    struct RecordingSink(Vec<(TrayRoute, TrayStatus)>);
+    struct RecordingSink {
+        calls: Vec<(TrayRoute, TrayPresentation)>,
+    }
+
     impl TraySink for RecordingSink {
-        fn publish(&mut self, route: TrayRoute, status: TrayStatus) {
-            self.0.push((route, status));
+        fn publish(
+            &mut self,
+            route: TrayRoute,
+            presentation: &TrayPresentation,
+        ) -> Result<(), String> {
+            self.calls.push((route, presentation.clone()));
+            Ok(())
         }
     }
 
-    // Test-only placeholder with the production-final seam name.
-    fn refresh_tray_status(sink: &mut dyn TraySink, _: TrayRoute, _: TrayStatus) {
-        sink.publish(TrayRoute::Startup, TrayStatus::Active);
+    struct FixedClock(DateTime<Utc>);
+
+    impl schedule::Clock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+
+        fn to_local(&self, instant: DateTime<Utc>) -> DateTime<FixedOffset> {
+            instant.with_timezone(&FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(&self, local: NaiveDateTime) -> LocalResult<DateTime<Utc>> {
+            LocalResult::Single(local.and_utc())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        active: bool,
+        fail_start: bool,
+    }
+
+    impl runtime::EngineBackend for RecordingBackend {
+        fn start(&mut self) -> Result<(), String> {
+            if self.fail_start {
+                return Err("start failed".to_owned());
+            }
+            self.active = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            self.active = false;
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            self.active
+        }
+
+        fn set_jiggle_policy(&mut self, _: runtime::JigglePolicy) {}
+    }
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 3, 2, hour, 0, 0)
+            .single()
+            .expect("fixed instant exists")
+    }
+
+    fn snapshot(status: runtime::TrayStatus) -> runtime::RuntimeSnapshot {
+        let window = schedule::ScheduleEvaluation {
+            at: at(10),
+            current: None,
+            next: None,
+        };
+        let override_state = runtime::normalize_override(runtime::NormalizeInput {
+            mode: &AppMode::Manual,
+            schedule_enabled: false,
+            window: &window,
+            override_state: &runtime::OverrideState::None,
+            event: runtime::LifecycleEvent::Tick,
+        });
+        runtime::RuntimeSnapshot {
+            engine_active: matches!(
+                status,
+                runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride
+            ),
+            override_state,
+            window,
+            status,
+        }
     }
 
     #[test]
-    fn every_entry_route_uses_the_shared_refresh_seam() {
+    fn every_tray_route_maps_to_its_prescribed_lifecycle_event() {
+        let cases = [
+            (TrayRoute::Startup, Some(runtime::LifecycleEvent::Startup)),
+            (
+                TrayRoute::TrayToggle,
+                Some(runtime::LifecycleEvent::TrayToggle),
+            ),
+            (TrayRoute::Hotkey, Some(runtime::LifecycleEvent::TrayToggle)),
+            (
+                TrayRoute::IpcToggle,
+                Some(runtime::LifecycleEvent::TrayToggle),
+            ),
+            (TrayRoute::Tick, Some(runtime::LifecycleEvent::Tick)),
+            (
+                TrayRoute::WifiChanged { active: true },
+                Some(runtime::LifecycleEvent::WifiChanged { active: true }),
+            ),
+            (
+                TrayRoute::ConfigChanged {
+                    policy_changed: true,
+                },
+                Some(runtime::LifecycleEvent::ConfigChanged {
+                    policy_changed: true,
+                }),
+            ),
+            (
+                TrayRoute::ProfileLoaded {
+                    policy_changed: false,
+                },
+                Some(runtime::LifecycleEvent::ConfigChanged {
+                    policy_changed: false,
+                }),
+            ),
+            (TrayRoute::LanguageChanged, None),
+            (TrayRoute::Resume, Some(runtime::LifecycleEvent::Resume)),
+            (TrayRoute::Quit, Some(runtime::LifecycleEvent::Quit)),
+        ];
+        for (route, expected) in cases {
+            assert_eq!(route.lifecycle_event(), expected, "{route:?}");
+        }
+    }
+
+    #[test]
+    fn builds_and_publishes_the_english_presentation_for_every_status() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let cases = [
+            (
+                runtime::TrayStatus::Active,
+                "Active",
+                "Stay Awake — Active",
+                runtime::TrayIcon::Active,
+            ),
+            (
+                runtime::TrayStatus::Inactive,
+                "Start",
+                "Stay Awake — Inactive",
+                runtime::TrayIcon::Inactive,
+            ),
+            (
+                runtime::TrayStatus::Waiting,
+                "Waiting for schedule",
+                "Stay Awake: waiting for schedule (No upcoming window)",
+                runtime::TrayIcon::Waiting,
+            ),
+            (
+                runtime::TrayStatus::Paused,
+                "Paused for this window",
+                "Stay Awake: paused for this window (No upcoming window)",
+                runtime::TrayIcon::Inactive,
+            ),
+            (
+                runtime::TrayStatus::ActiveOverride,
+                "Active (manual override)",
+                "Stay Awake: active by manual override (No upcoming window)",
+                runtime::TrayIcon::Active,
+            ),
+        ];
+        let mut sink = RecordingSink::default();
+        for (status, menu_text, tooltip, icon) in cases {
+            let state = snapshot(status);
+            let presentation = build_tray_presentation(PresentationInput {
+                snapshot: &state,
+                bundle: &bundle,
+                locale: "en",
+                clock: &clock,
+            });
+            assert_eq!(presentation.status, status);
+            assert_eq!(presentation.menu_text, menu_text);
+            assert_eq!(presentation.tooltip, tooltip);
+            assert_eq!(presentation.icon, icon);
+            refresh_tray_status(
+                TrayRefreshInput {
+                    route: TrayRoute::Tick,
+                    presentation: &presentation,
+                },
+                &mut sink,
+            )
+            .expect("recording sink accepts publication");
+        }
+        assert_eq!(sink.calls.len(), cases.len());
+    }
+
+    #[test]
+    fn refresh_publishes_exactly_one_named_presentation_per_call() {
+        let presentation = TrayPresentation {
+            status: runtime::TrayStatus::Waiting,
+            menu_text: "Waiting for schedule".to_owned(),
+            tooltip: "Stay Awake: waiting for schedule (No upcoming window)".to_owned(),
+            icon: runtime::TrayIcon::Waiting,
+        };
         let routes = [
             TrayRoute::Startup,
-            TrayRoute::Toggle,
-            TrayRoute::Hotkey,
-            TrayRoute::Ipc,
-            TrayRoute::WiFi,
-            TrayRoute::Boundary,
-            TrayRoute::Config,
-            TrayRoute::Language,
-            TrayRoute::Resume,
+            TrayRoute::Tick,
+            TrayRoute::LanguageChanged,
         ];
         let mut sink = RecordingSink::default();
         for route in routes {
-            refresh_tray_status(&mut sink, route, TrayStatus::Inactive);
+            refresh_tray_status(
+                TrayRefreshInput {
+                    route,
+                    presentation: &presentation,
+                },
+                &mut sink,
+            )
+            .expect("recording sink accepts publication");
         }
+        assert_eq!(sink.calls.len(), routes.len());
         assert_eq!(
-            sink.0,
+            sink.calls,
             routes
                 .into_iter()
-                .map(|route| (route, TrayStatus::Inactive))
+                .map(|route| (route, presentation.clone()))
                 .collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn wifi_routes_never_publish_schedule_lifecycle_statuses() {
+    fn every_runtime_route_reaches_the_sink_once() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig::default();
+        let routes = [
+            TrayRoute::Startup,
+            TrayRoute::TrayToggle,
+            TrayRoute::Hotkey,
+            TrayRoute::IpcToggle,
+            TrayRoute::Tick,
+            TrayRoute::WifiChanged { active: true },
+            TrayRoute::ConfigChanged {
+                policy_changed: false,
+            },
+            TrayRoute::ProfileLoaded {
+                policy_changed: true,
+            },
+            TrayRoute::LanguageChanged,
+            TrayRoute::Resume,
+            TrayRoute::Quit,
+        ];
+        for route in routes {
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend::default();
+            let mut sink = RecordingSink::default();
+            let _ = handle_runtime_route(
+                RuntimeRouteInput {
+                    route,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &bundle,
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            );
+            assert_eq!(sink.calls.len(), 1, "{route:?}");
+        }
+    }
+
+    #[test]
+    fn wifi_routes_publish_only_active_or_inactive_states() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig {
+            mode: AppMode::WiFi,
+            schedule_enabled: true,
+            ..AppConfig::default()
+        };
+        for (route, initially_active, expected) in [
+            (
+                TrayRoute::WifiChanged { active: true },
+                false,
+                runtime::TrayStatus::Active,
+            ),
+            (
+                TrayRoute::WifiChanged { active: false },
+                true,
+                runtime::TrayStatus::Inactive,
+            ),
+        ] {
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend {
+                active: initially_active,
+                ..RecordingBackend::default()
+            };
+            let mut sink = RecordingSink::default();
+            let _ = handle_runtime_route(
+                RuntimeRouteInput {
+                    route,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &bundle,
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            );
+            assert_eq!(sink.calls.len(), 1);
+            assert_eq!(sink.calls[0].1.status, expected);
+        }
+    }
+
+    #[test]
+    fn language_change_builds_a_fresh_presentation_from_the_replacement_bundle() {
+        let clock = FixedClock(at(10));
+        let state = snapshot(runtime::TrayStatus::Active);
+        let english = build_tray_presentation(PresentationInput {
+            snapshot: &state,
+            bundle: &i18n::create_bundle("en"),
+            locale: "en",
+            clock: &clock,
+        });
+        let spanish = build_tray_presentation(PresentationInput {
+            snapshot: &state,
+            bundle: &i18n::create_bundle("es"),
+            locale: "es",
+            clock: &clock,
+        });
+        assert_eq!(english.menu_text, "Active");
+        assert_eq!(spanish.menu_text, "Activo");
+        assert_ne!(english.menu_text, spanish.menu_text);
         let mut sink = RecordingSink::default();
-        refresh_tray_status(&mut sink, TrayRoute::WiFi, TrayStatus::Inactive);
-        assert!(matches!(
-            sink.0.last(),
-            Some((TrayRoute::WiFi, TrayStatus::Active | TrayStatus::Inactive))
-        ));
+        refresh_tray_status(
+            TrayRefreshInput {
+                route: TrayRoute::LanguageChanged,
+                presentation: &spanish,
+            },
+            &mut sink,
+        )
+        .expect("recording sink accepts publication");
+        assert_eq!(sink.calls, vec![(TrayRoute::LanguageChanged, spanish)]);
+    }
+
+    #[test]
+    fn failed_backend_operations_publish_the_actual_inactive_state() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig {
+            mode: AppMode::Manual,
+            schedule_enabled: true,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        };
+        let mut supervisor = runtime::Supervisor::new();
+        let mut backend = RecordingBackend {
+            fail_start: true,
+            ..RecordingBackend::default()
+        };
+        let mut sink = RecordingSink::default();
+        assert!(handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::Startup,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        )
+        .is_err());
+        assert_eq!(sink.calls.len(), 1);
+        assert_eq!(sink.calls[0].1.status, runtime::TrayStatus::Inactive);
     }
 }
 
