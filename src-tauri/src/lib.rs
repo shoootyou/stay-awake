@@ -24,8 +24,6 @@ use platform::PermissionChecker;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
-// wired in E3b-2
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrayRoute {
     Startup,
@@ -33,17 +31,22 @@ pub(crate) enum TrayRoute {
     Hotkey,
     IpcToggle,
     Tick,
-    WifiChanged { active: bool },
-    ConfigChanged { policy_changed: bool },
-    ProfileLoaded { policy_changed: bool },
+    WifiChanged {
+        active: bool,
+    },
+    ConfigChanged {
+        policy_changed: bool,
+    },
+    ProfileLoaded {
+        policy_changed: bool,
+    },
     LanguageChanged,
+    #[allow(dead_code)]
     Resume,
     Quit,
 }
 
 impl TrayRoute {
-    // wired in E3b-2
-    #[allow(dead_code)]
     pub(crate) fn lifecycle_event(self) -> Option<runtime::LifecycleEvent> {
         match self {
             Self::Startup => Some(runtime::LifecycleEvent::Startup),
@@ -62,8 +65,6 @@ impl TrayRoute {
     }
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrayPresentation {
     pub(crate) status: runtime::TrayStatus,
@@ -72,8 +73,6 @@ pub(crate) struct TrayPresentation {
     pub(crate) icon: runtime::TrayIcon,
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) struct PresentationInput<'a> {
     pub(crate) snapshot: &'a runtime::RuntimeSnapshot,
     pub(crate) bundle: &'a i18n::Bundle,
@@ -81,8 +80,6 @@ pub(crate) struct PresentationInput<'a> {
     pub(crate) clock: &'a dyn schedule::Clock,
 }
 
-// skeleton: wired in E3
-#[allow(dead_code)]
 pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPresentation {
     let status = input.snapshot.status;
     let mut tooltip = i18n::t(input.bundle, status.tooltip_key());
@@ -118,14 +115,11 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
     }
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) trait TraySink {
     fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) struct TrayImages {
     pub(crate) active: tauri::image::Image<'static>,
     pub(crate) inactive: tauri::image::Image<'static>,
@@ -133,7 +127,6 @@ pub(crate) struct TrayImages {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) struct NativeTrayTargets {
     pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
     pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
@@ -186,7 +179,6 @@ pub(crate) trait UiExecutor: Send + Sync {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // wired in boundary 4b-4d
 struct TauriUiExecutor(tauri::AppHandle);
 
 #[cfg(desktop)]
@@ -199,7 +191,6 @@ impl UiExecutor for TauriUiExecutor {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) struct NativeTraySink {
     targets: Arc<NativeTrayTargets>,
     mailbox: Arc<Mutex<PaintMailbox>>,
@@ -207,7 +198,6 @@ pub(crate) struct NativeTraySink {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // wired in boundary 4b-4d
 impl NativeTraySink {
     pub(crate) fn new(app: tauri::AppHandle, targets: NativeTrayTargets) -> Self {
         Self {
@@ -236,7 +226,8 @@ fn apply_native_paint(
 ) -> Result<(), String> {
     let image = match presentation.icon {
         runtime::TrayIcon::Active => targets.images.active.clone(),
-        runtime::TrayIcon::Inactive | runtime::TrayIcon::Waiting => targets.images.inactive.clone(),
+        runtime::TrayIcon::Inactive => targets.images.inactive.clone(),
+        runtime::TrayIcon::Waiting => targets.images.waiting.clone(),
     };
     let mut errors = Vec::new();
     if let Err(error) = targets.status_item.set_text(&presentation.menu_text) {
@@ -299,7 +290,6 @@ impl TraySink for NativeTraySink {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) struct InitialSnapshotInput<'a> {
     pub(crate) config: &'a config::AppConfig,
     pub(crate) clock: &'a dyn schedule::Clock,
@@ -338,19 +328,40 @@ pub(crate) fn initial_runtime_snapshot(
 
 #[cfg(desktop)]
 pub(crate) fn request_app_exit(app: &tauri::AppHandle, code: i32) -> Result<(), String> {
-    app.exit(code);
+    use owner::SHUTDOWN_TIMEOUT;
+
+    let runtime = app
+        .try_state::<owner::RuntimeHandle>()
+        .ok_or_else(|| "runtime is not initialized".to_owned())?
+        .inner()
+        .clone();
+    if !runtime.claim_exit_coordinator() {
+        return Ok(());
+    }
+    let app = app.clone();
+    let release_claim = runtime.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("stay-awake-exit".to_owned())
+        .spawn(move || {
+            let result = runtime.shutdown(SHUTDOWN_TIMEOUT);
+            runtime.release_exit_coordinator();
+            match result {
+                Ok(()) => app.exit(code),
+                Err(error) => log::error!("Runtime shutdown did not complete: {error}"),
+            }
+        })
+    {
+        release_claim.release_exit_coordinator();
+        return Err(format!("failed to start exit coordinator: {error}"));
+    }
     Ok(())
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) struct TrayRefreshInput<'a> {
     pub(crate) route: TrayRoute,
     pub(crate) presentation: &'a TrayPresentation,
 }
 
-// skeleton: wired in E3
-#[allow(dead_code)]
 pub(crate) fn refresh_tray_status(
     input: TrayRefreshInput<'_>,
     sink: &mut dyn TraySink,
@@ -358,8 +369,6 @@ pub(crate) fn refresh_tray_status(
     sink.publish(input.route, input.presentation)
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) struct RuntimeRouteInput<'a> {
     pub(crate) route: TrayRoute,
     pub(crate) config: &'a config::AppConfig,
@@ -367,8 +376,6 @@ pub(crate) struct RuntimeRouteInput<'a> {
     pub(crate) bundle: &'a i18n::Bundle,
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) fn handle_runtime_route(
     input: RuntimeRouteInput<'_>,
     supervisor: &mut runtime::Supervisor,
@@ -1973,12 +1980,35 @@ pub fn run() {
             #[allow(unused_variables)]
             |app, event| {
                 match &event {
-                    tauri::RunEvent::ExitRequested { api, code, .. }
-                        // Only prevent exit when triggered by all windows closing (code = None).
-                        // Allow explicit app.exit() calls (code = Some) so Quit works.
-                        if code.is_none() => {
+                    tauri::RunEvent::ExitRequested { api, code, .. } => {
+                        if code.is_none() {
                             api.prevent_exit();
                         }
+                        #[cfg(desktop)]
+                        if code.is_some() {
+                            match app.try_state::<owner::RuntimeHandle>() {
+                                Some(runtime) if runtime.exit_ready() => {}
+                                Some(_) => {
+                                    api.prevent_exit();
+                                    if let Err(error) = request_app_exit(app, code.unwrap_or(0)) {
+                                        log::error!("Failed to request app exit: {error}");
+                                    }
+                                }
+                                None => {
+                                    api.prevent_exit();
+                                    log::error!("Exit requested before runtime initialization");
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(desktop)]
+                    tauri::RunEvent::Exit
+                        if app
+                            .try_state::<owner::RuntimeHandle>()
+                            .is_some_and(|runtime| !runtime.exit_ready()) =>
+                    {
+                        log::error!("Application exited before runtime shutdown completed");
+                    }
                     #[cfg(target_os = "macos")]
                     tauri::RunEvent::Ready => {
                         // Set Accessory policy AFTER Tauri finishes setup,
