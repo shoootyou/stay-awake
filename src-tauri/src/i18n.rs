@@ -86,7 +86,7 @@ mod tests {
     use super::*;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
-    const NEW_KEYS: [&str; 10] = [
+    const NEW_KEYS: [&str; 11] = [
         "tray-waiting",
         "tray-paused",
         "tray-active-override",
@@ -96,6 +96,7 @@ mod tests {
         "tray-next-window",
         "tray-no-next-window",
         "schedule-enabled-hint",
+        "settings-mode-info-label",
         "settings-wifi-remove-label",
     ];
 
@@ -149,6 +150,10 @@ mod tests {
         assert_eq!(
             t_with_args(&bundle, "tray-no-next-window", &[]),
             "No upcoming window"
+        );
+        assert_eq!(
+            t_with_args(&bundle, "settings-mode-info-label", &[]),
+            "About jiggle modes"
         );
     }
 
