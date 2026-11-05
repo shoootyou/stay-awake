@@ -5,7 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Mouse jiggle pattern mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,16 +166,47 @@ impl AppConfig {
     /// Uses atomic write-then-rename to prevent data loss on crash.
     pub fn save(&self) -> Result<(), String> {
         let path = Self::config_path()?;
+        self.save_to(&path)
+    }
+
+    /// Saves to a caller-supplied path so tests can avoid the user configuration directory.
+    pub(crate) fn save_to(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+            create_config_dir(parent)?;
         }
         let contents = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, contents).map_err(|e| format!("Failed to write config: {}", e))?;
-        fs::rename(&tmp, &path).map_err(|e| format!("Failed to commit config: {}", e))
+        let tmp = temp_config_path(path);
+        write_private_file(&tmp, contents.as_bytes())?;
+        fs::rename(&tmp, path).map_err(|e| format!("Failed to commit config: {}", e))
     }
+}
+
+fn create_config_dir(path: &Path) -> Result<(), String> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
+        .create(path)
+        .map_err(|error| format!("Failed to create config directory: {error}"))
+}
+
+fn temp_config_path(path: &Path) -> PathBuf {
+    let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("json.{}.{}.tmp", std::process::id(), sequence))
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("Failed to write config: {error}"))?;
+    file.write_all(contents)
+        .map_err(|error| format!("Failed to write config: {error}"))
 }
 
 #[cfg(test)]
