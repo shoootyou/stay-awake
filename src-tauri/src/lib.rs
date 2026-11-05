@@ -123,6 +123,33 @@ pub(crate) trait TraySink {
 }
 
 #[cfg(desktop)]
+pub(crate) type PostSpawnStep<'a> = Box<dyn FnOnce() -> Result<(), String> + 'a>;
+
+/// Runs post-spawn setup steps and shuts the owner down before returning the first failure.
+#[cfg(desktop)]
+pub(crate) fn run_post_spawn_steps<'a, I, S>(
+    runtime: &owner::RuntimeHandle,
+    steps: I,
+    shutdown: S,
+) -> Result<(), String>
+where
+    I: IntoIterator<Item = PostSpawnStep<'a>>,
+    S: FnOnce(&owner::RuntimeHandle) -> Result<(), String>,
+{
+    for step in steps {
+        if let Err(error) = step() {
+            return match shutdown(runtime) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => {
+                    Err(format!("{error}; owner shutdown failed: {cleanup_error}"))
+                }
+            };
+        }
+    }
+    Ok(())
+}
+
+#[cfg(desktop)]
 pub(crate) struct TrayImages {
     pub(crate) active: tauri::image::Image<'static>,
     pub(crate) inactive: tauri::image::Image<'static>,
@@ -2096,112 +2123,76 @@ pub fn run() {
                     sink: Box::new(sink),
                 })?;
                 app.manage(runtime.clone());
-                let shutdown_after_setup_error = |error: String| {
-                    match runtime.shutdown(owner::SHUTDOWN_TIMEOUT) {
-                        Ok(()) => error,
-                        Err(cleanup_error) => {
-                            format!("{error}; owner shutdown failed: {cleanup_error}")
-                        }
-                    }
-                };
+                let post_spawn_steps: Vec<PostSpawnStep<'_>> = vec![Box::new(|| {
+                        use tauri_plugin_global_shortcut::{
+                            Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                        };
 
-                {
-                    use tauri_plugin_global_shortcut::{
-                        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-                    };
+                        let shortcut = parse_shortcut_string(&loaded_config.global_hotkey)
+                            .unwrap_or_else(|| {
+                                log::warn!(
+                                    "Could not parse hotkey \"{}\"; using default CmdOrCtrl+Shift+J",
+                                    loaded_config.global_hotkey
+                                );
+                                #[cfg(target_os = "macos")]
+                                let modifier = Modifiers::META;
+                                #[cfg(not(target_os = "macos"))]
+                                let modifier = Modifiers::CONTROL;
+                                Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
+                            });
 
-                    // Try parsing the user-configured hotkey; fall back to default.
-                    let shortcut = parse_shortcut_string(&loaded_config.global_hotkey)
-                        .unwrap_or_else(|| {
-                            log::warn!(
-                                "Could not parse hotkey \"{}\"; using default CmdOrCtrl+Shift+J",
-                                loaded_config.global_hotkey
-                            );
-                            #[cfg(target_os = "macos")]
-                            let modifier = Modifiers::META;
-                            #[cfg(not(target_os = "macos"))]
-                            let modifier = Modifiers::CONTROL;
-
-                            Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
-                        });
-
-                    app.handle()
-                        .plugin(
-                            tauri_plugin_global_shortcut::Builder::new()
-                                .with_handler(move |app, _shortcut, event| {
-                                    if matches!(event.state(), ShortcutState::Pressed) {
-                                        if let Some(runtime) =
-                                            app.try_state::<owner::RuntimeHandle>()
-                                        {
-                                            if let Err(error) = runtime.post(TrayRoute::Hotkey) {
-                                                log::error!(
-                                                    "Hotkey could not reach runtime: {error}"
-                                                );
+                        app.handle()
+                            .plugin(
+                                tauri_plugin_global_shortcut::Builder::new()
+                                    .with_handler(move |app, _shortcut, event| {
+                                        if matches!(event.state(), ShortcutState::Pressed) {
+                                            if let Some(runtime) =
+                                                app.try_state::<owner::RuntimeHandle>()
+                                            {
+                                                if let Err(error) = runtime.post(TrayRoute::Hotkey) {
+                                                    log::error!(
+                                                        "Hotkey could not reach runtime: {error}"
+                                                    );
+                                                }
                                             }
                                         }
-                                    }
-                                })
-                                .build(),
-                        )
-                        .map_err(|error| {
-                            shutdown_after_setup_error(format!(
-                                "failed to install global shortcut plugin: {error}"
-                            ))
+                                    })
+                                    .build(),
+                            )
+                            .map_err(|error| {
+                                format!("failed to install global shortcut plugin: {error}")
+                            })?;
+                        app.global_shortcut().register(shortcut).map_err(|error| {
+                            format!("failed to register global shortcut: {error}")
                         })?;
-
-                    app.global_shortcut().register(shortcut).map_err(|error| {
-                        shutdown_after_setup_error(format!(
-                            "failed to register global shortcut: {error}"
-                        ))
-                    })?;
-
-                    app.handle()
-                        .plugin(tauri_plugin_autostart::init(
-                            tauri_plugin_autostart::MacosLauncher::AppleScript,
-                            None,
-                        ))
-                        .map_err(|error| {
-                            shutdown_after_setup_error(format!(
-                                "failed to install autostart plugin: {error}"
+                        app.handle()
+                            .plugin(tauri_plugin_autostart::init(
+                                tauri_plugin_autostart::MacosLauncher::AppleScript,
+                                None,
                             ))
-                        })?;
-                }
-            }
+                            .map_err(|error| format!("failed to install autostart plugin: {error}"))?;
 
-            #[cfg(desktop)]
-            {
-                let shutdown_after_setup_error = |error: String| {
-                    let Some(runtime) = app.try_state::<owner::RuntimeHandle>() else {
-                        return format!("{error}; owner runtime is unavailable for cleanup");
-                    };
-                    match runtime.shutdown(owner::SHUTDOWN_TIMEOUT) {
-                        Ok(()) => error,
-                        Err(cleanup_error) => {
-                            format!("{error}; owner shutdown failed: {cleanup_error}")
+                        let wifi_enabled = shared_config
+                            .lock()
+                            .map_err(|error| format!("Config lock: {error}"))?
+                            .wifi_enabled();
+                        if wifi_enabled {
+                            let mut monitor = shared_wifi_monitor
+                                .lock()
+                                .map_err(|error| format!("Monitor lock: {error}"))?;
+                            if let Err(error) = monitor.start() {
+                                log::warn!("WiFi monitor startup failed: {error}");
+                            }
                         }
-                    }
-                };
-                let wifi_enabled = match shared_config.lock() {
-                    Ok(config) => config.wifi_enabled(),
-                    Err(error) => {
-                        return Err(
-                            shutdown_after_setup_error(format!("Config lock: {error}")).into(),
-                        );
-                    }
-                };
-                if wifi_enabled {
-                    let mut monitor = match shared_wifi_monitor.lock() {
-                        Ok(monitor) => monitor,
-                        Err(error) => {
-                            return Err(
-                                shutdown_after_setup_error(format!("Monitor lock: {error}"))
-                                    .into(),
-                            );
-                        }
-                    };
-                    if let Err(error) = monitor.start() {
-                        log::warn!("WiFi monitor startup failed: {error}");
-                    }
+                        Ok(())
+                    })];
+                let setup_result = run_post_spawn_steps(
+                    &runtime,
+                    post_spawn_steps,
+                    |runtime| runtime.shutdown(owner::SHUTDOWN_TIMEOUT),
+                );
+                if let Err(error) = setup_result {
+                    return Err(error.into());
                 }
             }
 
