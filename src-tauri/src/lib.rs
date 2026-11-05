@@ -15,7 +15,9 @@ mod runtime;
 mod schedule;
 mod wifi;
 
-use config::{AppConfig, AppMode, JiggleMode, Profile};
+#[cfg(test)]
+use config::AppMode;
+use config::{AppConfig, JiggleMode, Profile};
 use engine::Engine;
 use i18n::Bundle as I18nBundle;
 use platform::PermissionChecker;
@@ -303,7 +305,6 @@ pub(crate) struct InitialSnapshotInput<'a> {
     pub(crate) clock: &'a dyn schedule::Clock,
 }
 
-#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) fn initial_runtime_snapshot(
     input: InitialSnapshotInput<'_>,
 ) -> Result<runtime::RuntimeSnapshot, String> {
@@ -333,6 +334,12 @@ pub(crate) fn initial_runtime_snapshot(
         window,
         status,
     })
+}
+
+#[cfg(desktop)]
+pub(crate) fn request_app_exit(app: &tauri::AppHandle, code: i32) -> Result<(), String> {
+    app.exit(code);
+    Ok(())
 }
 
 // wired in E3b-2
@@ -894,104 +901,97 @@ mod tray_refresh_contract_tests {
 fn legacy_save_config(
     app: tauri::AppHandle,
     new_config: AppConfig,
-    state: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
     monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
 ) -> Result<(), String> {
-    // Validate config fields.
     if new_config.interval_secs == 0 {
-        return Err("Interval must be at least 1 second".to_string());
+        return Err("Interval must be at least 1 second".to_owned());
     }
     if new_config.schedule_start_hour > 23 || new_config.schedule_start_minute > 59 {
-        return Err("Invalid schedule start time".to_string());
+        return Err("Invalid schedule start time".to_owned());
     }
     if new_config.schedule_end_hour > 23 || new_config.schedule_end_minute > 59 {
-        return Err("Invalid schedule end time".to_string());
+        return Err("Invalid schedule end time".to_owned());
     }
 
-    // Sync autostart with the new config value.
-    {
-        use tauri_plugin_autostart::ManagerExt;
-        let manager = app.autolaunch();
-        if new_config.autostart {
-            if let Err(e) = manager.enable() {
-                log::warn!("Failed to enable autostart: {}", e);
-            }
-        } else {
-            if let Err(e) = manager.disable() {
-                log::warn!("Failed to disable autostart: {}", e);
-            }
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if new_config.autostart {
+        if let Err(error) = manager.enable() {
+            log::warn!("Failed to enable autostart: {error}");
         }
+    } else if let Err(error) = manager.disable() {
+        log::warn!("Failed to disable autostart: {error}");
     }
 
-    // Detect whether WiFi-mode activation changed before overwriting.
-    let wifi_was_enabled = {
-        let cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi_enabled()
-    };
-    let networks_snapshot = new_config.wifi.networks.clone();
-
-    // Update shared config.
-    {
-        let mut cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        *cfg = new_config;
-        cfg.save()?;
-    }
-
-    // Restart or stop the WiFi monitor if WiFi-mode activation changed or
-    // the network list changed while WiFi mode stayed active.
-    let wifi_now_enabled = {
-        let cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi_enabled()
-    };
-    let networks_changed = {
-        let cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi.networks != networks_snapshot
-    };
-    if wifi_was_enabled != wifi_now_enabled || (wifi_now_enabled && networks_changed) {
-        let mut mon = monitor
-            .lock()
-            .map_err(|e| format!("Monitor lock poisoned: {}", e))?;
-        if wifi_now_enabled {
-            log::info!("WiFi mode enabled or networks changed — restarting monitor");
-            if let Err(e) = mon.restart() {
-                log::warn!("WiFi monitor restart failed: {}", e);
+    let pending = runtime.update_config(
+        owner::ConfigOrigin::Settings,
+        |config| {
+            *config = new_config;
+            Ok(())
+        },
+        |previous, candidate| {
+            let wifi_changed = previous.wifi_enabled() != candidate.wifi_enabled()
+                || (candidate.wifi_enabled() && previous.wifi.networks != candidate.wifi.networks);
+            if !wifi_changed {
+                return;
             }
-        } else {
-            log::info!("WiFi mode disabled — stopping monitor");
-            if let Err(e) = mon.stop() {
-                log::warn!("WiFi monitor stop failed: {}", e);
+            match monitor.lock() {
+                Ok(mut monitor) if candidate.wifi_enabled() => {
+                    if let Err(error) = monitor.restart() {
+                        log::warn!("WiFi monitor restart failed: {error}");
+                    }
+                }
+                Ok(mut monitor) => {
+                    if let Err(error) = monitor.stop() {
+                        log::warn!("WiFi monitor stop failed: {error}");
+                    }
+                }
+                Err(_) => log::error!("WiFi monitor lock poisoned"),
             }
-        }
-    }
-
-    Ok(())
+        },
+    )?;
+    pending
+        .wait(owner::REQUEST_TIMEOUT)?
+        .error
+        .map_or(Ok(()), Err)
 }
 
 /// Return the engine state name (`"idle"`, `"active"`, …).
 #[tauri::command(rename = "get_engine_state")]
-fn legacy_get_engine_state(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
-    let eng = engine
-        .lock()
-        .map_err(|e| format!("Engine lock poisoned: {}", e))?;
-    Ok(eng.state_name().to_string())
+fn legacy_get_engine_state(
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<String, String> {
+    let reply = runtime.query()?.wait(owner::REQUEST_TIMEOUT)?;
+    let snapshot = reply
+        .snapshot
+        .ok_or_else(|| "runtime has no snapshot".to_owned())?;
+    Ok(if snapshot.engine_active {
+        "active"
+    } else {
+        "idle"
+    }
+    .to_owned())
 }
 
 /// Toggle the engine on/off and return the new state name.
 #[tauri::command(rename = "toggle_engine")]
-fn legacy_toggle_engine(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
-    let mut eng = engine
-        .lock()
-        .map_err(|e| format!("Engine lock poisoned: {}", e))?;
-    eng.toggle()?;
-    Ok(eng.state_name().to_string())
+fn legacy_toggle_engine(runtime: tauri::State<'_, owner::RuntimeHandle>) -> Result<String, String> {
+    let reply = runtime
+        .request(TrayRoute::IpcToggle)?
+        .wait(owner::REQUEST_TIMEOUT)?;
+    if let Some(error) = reply.error {
+        return Err(error);
+    }
+    let snapshot = reply
+        .snapshot
+        .ok_or_else(|| "runtime has no snapshot".to_owned())?;
+    Ok(if snapshot.engine_active {
+        "active"
+    } else {
+        "idle"
+    }
+    .to_owned())
 }
 
 /// Check whether accessibility permission is granted (macOS-specific).
@@ -1054,14 +1054,20 @@ fn get_translation(
 #[tauri::command(rename = "set_language")]
 fn legacy_set_language(
     language: String,
-    bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let new_bundle = i18n::create_bundle(&language);
-    let mut b = bundle
-        .lock()
-        .map_err(|e| format!("I18n lock poisoned: {}", e))?;
-    *b = new_bundle;
-    Ok(())
+    let pending = runtime.update_config(
+        owner::ConfigOrigin::Language,
+        |config| {
+            config.language = language;
+            Ok(())
+        },
+        |_, _| {},
+    )?;
+    pending
+        .wait(owner::REQUEST_TIMEOUT)?
+        .error
+        .map_or(Ok(()), Err)
 }
 
 /// Return all saved profiles.
@@ -1120,29 +1126,34 @@ fn save_profile(
 #[tauri::command(rename = "load_profile")]
 fn legacy_load_profile(
     name: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-
-    let profile = cfg
-        .profiles
-        .iter()
-        .find(|p| p.name == name)
-        .cloned()
-        .ok_or_else(|| format!("Profile '{}' not found", name))?;
-
-    cfg.jiggle_mode = profile.jiggle_mode;
-    cfg.interval_secs = profile.interval_secs;
-    cfg.schedule_enabled = profile.schedule_enabled;
-    cfg.schedule_start_hour = profile.schedule_start_hour;
-    cfg.schedule_start_minute = profile.schedule_start_minute;
-    cfg.schedule_end_hour = profile.schedule_end_hour;
-    cfg.schedule_end_minute = profile.schedule_end_minute;
-    cfg.schedule_days = profile.schedule_days;
-    cfg.active_profile = name;
-    cfg.save()
+    let pending = runtime.update_config(
+        owner::ConfigOrigin::Profile,
+        |config| {
+            let profile = config
+                .profiles
+                .iter()
+                .find(|profile| profile.name == name)
+                .cloned()
+                .ok_or_else(|| format!("Profile '{name}' not found"))?;
+            config.jiggle_mode = profile.jiggle_mode;
+            config.interval_secs = profile.interval_secs;
+            config.schedule_enabled = profile.schedule_enabled;
+            config.schedule_start_hour = profile.schedule_start_hour;
+            config.schedule_start_minute = profile.schedule_start_minute;
+            config.schedule_end_hour = profile.schedule_end_hour;
+            config.schedule_end_minute = profile.schedule_end_minute;
+            config.schedule_days = profile.schedule_days;
+            config.active_profile = name;
+            Ok(())
+        },
+        |_, _| {},
+    )?;
+    pending
+        .wait(owner::REQUEST_TIMEOUT)?
+        .error
+        .map_or(Ok(()), Err)
 }
 
 #[cfg(desktop)]
@@ -1499,13 +1510,7 @@ fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'st
     tauri::image::Image::new_owned(dimmed, icon.width(), icon.height())
 }
 
-/// Returns true if the current wall-clock time falls within the schedule
-/// window defined in `cfg`. Used at startup to decide whether to auto-start
-/// the engine for `AppMode::Scheduled`.
-///
-/// Delegates to `engine::is_within_schedule` for the actual day/time check,
-/// but returns `false` early when `schedule_enabled` is not set — preventing
-/// an accidental auto-start when the schedule feature is off.
+#[cfg(test)]
 fn is_within_schedule(cfg: &AppConfig) -> bool {
     cfg.schedule_enabled && engine::is_within_schedule(cfg)
 }
@@ -1614,10 +1619,19 @@ pub fn run() {
             let shared_config: Arc<Mutex<AppConfig>> = Arc::new(Mutex::new(loaded_config.clone()));
 
             let bundle = i18n::create_bundle(&loaded_config.language);
-            let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
 
-            let mouse_driver = platform::create_mouse_driver();
-            let power_inhibitor = platform::create_power_inhibitor();
+            let clock: Arc<dyn schedule::Clock> = Arc::new(schedule::SystemClock);
+            let initial_snapshot = initial_runtime_snapshot(InitialSnapshotInput {
+                config: &loaded_config,
+                clock: clock.as_ref(),
+            })?;
+            let initial_presentation = build_tray_presentation(PresentationInput {
+                snapshot: &initial_snapshot,
+                bundle: &bundle,
+                locale: &loaded_config.language,
+                clock: clock.as_ref(),
+            });
+            let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
             let perm_checker: Arc<dyn PermissionChecker> =
                 Arc::from(platform::create_permission_checker());
 
@@ -1630,42 +1644,8 @@ pub fn run() {
                 );
             }
 
-            let engine = Engine::new(mouse_driver, power_inhibitor, Arc::clone(&shared_config));
-            let shared_engine: Arc<Mutex<Engine>> = Arc::new(Mutex::new(engine));
-
-            // Auto-start the engine based on the current AppMode.
-            {
-                let cfg = shared_config.lock().map(|c| c.clone()).unwrap_or_default();
-                match cfg.mode {
-                    AppMode::AlwaysOn => {
-                        if let Ok(mut eng) = shared_engine.lock() {
-                            if let Err(e) = eng.start() {
-                                log::warn!("Engine auto-start (AlwaysOn) failed: {}", e);
-                            }
-                        }
-                    }
-                    AppMode::Scheduled => {
-                        if is_within_schedule(&cfg) {
-                            if let Ok(mut eng) = shared_engine.lock() {
-                                if let Err(e) = eng.start() {
-                                    log::warn!("Engine auto-start (Scheduled) failed: {}", e);
-                                }
-                            }
-                        } else {
-                            log::info!(
-                                "Engine auto-start: Scheduled mode, outside window — not starting"
-                            );
-                        }
-                    }
-                    AppMode::Manual | AppMode::WiFi => {
-                        log::info!("Engine auto-start: {:?} mode — not starting", cfg.mode);
-                    }
-                }
-            }
-
-            // Manage state so Tauri commands can access it.
+            // Managed mirrors are read by existing compatibility commands.
             app.manage(Arc::clone(&shared_config));
-            app.manage(Arc::clone(&shared_engine));
             app.manage(Arc::clone(&perm_checker));
             app.manage(Arc::clone(&shared_bundle));
 
@@ -1673,21 +1653,6 @@ pub fn run() {
                 wifi::WifiMonitor::new(Arc::clone(&shared_config), app.handle().clone());
             let shared_wifi_monitor: Arc<Mutex<wifi::WifiMonitor>> =
                 Arc::new(Mutex::new(wifi_monitor));
-
-            // Start the monitor if WiFi feature is enabled.
-            {
-                let cfg = shared_config
-                    .lock()
-                    .map_err(|e| format!("Config lock: {}", e))?;
-                if cfg.wifi_enabled() {
-                    let mut monitor = shared_wifi_monitor
-                        .lock()
-                        .map_err(|e| format!("Monitor lock: {}", e))?;
-                    if let Err(e) = monitor.start() {
-                        log::warn!("WiFi monitor startup failed: {}", e);
-                    }
-                }
-            }
 
             app.manage(Arc::clone(&shared_wifi_monitor));
 
@@ -1700,39 +1665,13 @@ pub fn run() {
 
             {
                 use tauri::Listener;
-                let engine_for_wifi = Arc::clone(&shared_engine);
-                let config_for_wifi = Arc::clone(&shared_config);
+                let app_handle = app.handle().clone();
                 app.listen("wifi-state-changed", move |event| {
                     if let Ok(payload) = serde_json::from_str::<WifiStateEvent>(event.payload()) {
-                        let mode = config_for_wifi
-                            .lock()
-                            .map(|c| c.mode.clone())
-                            .unwrap_or(AppMode::Manual);
-
-                        // Only act when WiFi Mode is active.
-                        if mode != AppMode::WiFi {
-                            return;
-                        }
-
-                        if let Ok(mut eng) = engine_for_wifi.lock() {
-                            if payload.active {
-                                if !eng.is_active() {
-                                    log::info!(
-                                        "WiFi: registered network {:?} — starting engine",
-                                        payload.ssid
-                                    );
-                                    if let Err(e) = eng.start() {
-                                        log::error!("WiFi-triggered engine start failed: {}", e);
-                                    }
-                                }
-                            } else if eng.is_active() {
-                                log::info!(
-                                    "WiFi: unregistered/disconnected {:?} — stopping engine",
-                                    payload.ssid
-                                );
-                                if let Err(e) = eng.stop() {
-                                    log::error!("WiFi-triggered engine stop failed: {}", e);
-                                }
+                        let _ = payload.active;
+                        if let Some(runtime) = app_handle.try_state::<owner::RuntimeHandle>() {
+                            if let Err(error) = runtime.post_wifi(owner::WifiObservation { ssid: payload.ssid }) {
+                                log::error!("WiFi update could not reach runtime: {error}");
                             }
                         }
                     }
@@ -1748,11 +1687,14 @@ pub fn run() {
                 let tray_bundle = i18n::create_bundle(&loaded_config.language);
                 let tr = |id: &str| i18n::t(&tray_bundle, id);
 
-                let text_inactive = format!("\u{25b6}\u{fe0f} {}", tr("tray-start"));
-                let text_active = format!("\u{1f7e2} {}", tr("tray-running"));
-
                 let toggle_item =
-                    MenuItem::with_id(app, "toggle_active", &text_active, true, None::<&str>)?;
+                    MenuItem::with_id(
+                        app,
+                        "toggle_active",
+                        &initial_presentation.menu_text,
+                        true,
+                        None::<&str>,
+                    )?;
 
                 let mode_power = MenuItem::with_id(
                     app,
@@ -1834,22 +1776,11 @@ pub fn run() {
                     ],
                 )?;
 
-                // Translated tooltip strings for the tray-menu event closure.
-                let tip_active = tr("tray-tooltip-active");
-                let tip_inactive = tr("tray-tooltip-inactive");
                 let acc_ok_text = format!("\u{1f7e2} {}", tr(accessibility_ok_key()));
 
-                // Clones for the tray-menu closure.
-                let engine_for_tray = Arc::clone(&shared_engine);
                 let config_for_tray = Arc::clone(&shared_config);
                 let perm_for_tray = Arc::clone(&perm_checker);
-                let toggle_clone = toggle_item.clone();
                 let accessibility_clone = accessibility_item.clone();
-                let text_active_clone = text_active.clone();
-                let text_inactive_clone = text_inactive.clone();
-                // Extra clones for the global shortcut handler.
-                let tip_active_for_sc = tip_active.clone();
-                let tip_inactive_for_sc = tip_inactive.clone();
 
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon@2x.png");
                 let tray_img = tauri::image::Image::from_bytes(tray_icon_bytes).expect("tray icon");
@@ -1859,11 +1790,6 @@ pub fn run() {
                     tray_img.height(),
                 );
                 let inactive_icon = create_dimmed_icon(&tray_img);
-                let active_icon_clone = active_icon.clone();
-                let inactive_icon_clone = inactive_icon.clone();
-                // Extra clones for the global shortcut handler closure.
-                let active_icon_for_sc = active_icon.clone();
-                let inactive_icon_for_sc = inactive_icon.clone();
 
                 // Under `panic = "abort"` (release profile), a missing
                 // libayatana-appindicator3 causes an unavoidable abort inside
@@ -1890,35 +1816,24 @@ pub fn run() {
                     }));
                 }
 
-                TrayIconBuilder::with_id("main")
-                    .icon(active_icon)
-                    .tooltip(&tip_active)
+                let tray = TrayIconBuilder::with_id("main")
+                    .icon(match initial_presentation.icon {
+                        runtime::TrayIcon::Active => active_icon.clone(),
+                        runtime::TrayIcon::Inactive | runtime::TrayIcon::Waiting => {
+                            inactive_icon.clone()
+                        }
+                    })
+                    .tooltip(&initial_presentation.tooltip)
                     .menu(&menu)
                     .show_menu_on_left_click(true)
                     .on_menu_event(move |app, event| {
                         match event.id().as_ref() {
                             "toggle_active" => {
-                                if let Ok(mut eng) = engine_for_tray.lock() {
-                                    if let Err(e) = eng.toggle() {
-                                        log::error!("Engine toggle failed: {}", e);
-                                        return;
-                                    }
-                                    let active = eng.is_active();
-                                    let label = if active {
-                                        &text_active_clone
-                                    } else {
-                                        &text_inactive_clone
-                                    };
-                                    let _ = toggle_clone.set_text(label);
-                                    if let Some(tray) = app.tray_by_id("main") {
-                                        let tip = if active { &tip_active } else { &tip_inactive };
-                                        let _ = tray.set_tooltip(Some(tip.as_str()));
-                                        let icon = if active {
-                                            active_icon_clone.clone()
-                                        } else {
-                                            inactive_icon_clone.clone()
-                                        };
-                                        let _ = tray.set_icon(Some(icon));
+                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                    if let Err(error) = runtime.post(TrayRoute::TrayToggle) {
+                                        log::error!(
+                                            "Engine toggle could not reach runtime: {error}"
+                                        );
                                     }
                                 }
                             }
@@ -1973,16 +1888,43 @@ pub fn run() {
                                 show_about_window(app);
                             }
                             "quit" => {
-                                // Ensure the engine is stopped before exiting.
-                                if let Ok(mut eng) = engine_for_tray.lock() {
-                                    let _ = eng.stop();
+                                if let Err(error) = request_app_exit(app, 0) {
+                                    log::error!("Failed to request app exit: {error}");
                                 }
-                                app.exit(0);
                             }
                             _ => {}
                         }
                     })
                     .build(app)?;
+
+                let sink = NativeTraySink::new(
+                    app.handle().clone(),
+                    NativeTrayTargets {
+                        tray,
+                        status_item: toggle_item.clone(),
+                        images: TrayImages {
+                            active: active_icon,
+                            inactive: inactive_icon.clone(),
+                            waiting: inactive_icon,
+                        },
+                    },
+                );
+                sink.apply_initial(&initial_presentation)?;
+                let runtime = owner::RuntimeHandle::spawn(owner::OwnerStart {
+                    config: Arc::clone(&shared_config),
+                    bundle: Arc::clone(&shared_bundle),
+                    clock: Arc::clone(&clock),
+                    backend_factory: Box::new(|config, clock| {
+                        Box::new(Engine::new_with_clock(
+                            platform::create_mouse_driver(),
+                            platform::create_power_inhibitor(),
+                            Arc::new(Mutex::new(config)),
+                            clock,
+                        ))
+                    }),
+                    sink: Box::new(sink),
+                })?;
+                app.manage(runtime.clone());
 
                 {
                     use tauri_plugin_global_shortcut::{
@@ -2004,52 +1946,14 @@ pub fn run() {
                             Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
                         });
 
-                    // Clones for the shortcut handler closure (tray UI feedback).
-                    let engine_for_shortcut = Arc::clone(&shared_engine);
-                    let sc_text_active = text_active;
-                    let sc_text_inactive = text_inactive;
-                    let sc_tip_active = tip_active_for_sc;
-                    let sc_tip_inactive = tip_inactive_for_sc;
-                    let sc_active_icon = active_icon_for_sc;
-                    let sc_inactive_icon = inactive_icon_for_sc;
-                    let toggle_for_shortcut = toggle_item;
-
                     app.handle().plugin(
                         tauri_plugin_global_shortcut::Builder::new()
                             .with_handler(move |app, _shortcut, event| {
                                 if matches!(event.state(), ShortcutState::Pressed) {
-                                    if let Ok(mut eng) = engine_for_shortcut.lock() {
-                                        if let Err(e) = eng.toggle() {
-                                            log::error!("Engine toggle via shortcut failed: {}", e);
-                                            return;
+                                    if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                        if let Err(error) = runtime.post(TrayRoute::Hotkey) {
+                                            log::error!("Hotkey could not reach runtime: {error}");
                                         }
-                                        let active = eng.is_active();
-                                        // Update toggle menu item text.
-                                        let label = if active {
-                                            &sc_text_active
-                                        } else {
-                                            &sc_text_inactive
-                                        };
-                                        let _ = toggle_for_shortcut.set_text(label);
-                                        // Update tray icon and tooltip.
-                                        if let Some(tray) = app.tray_by_id("main") {
-                                            let tip = if active {
-                                                &sc_tip_active
-                                            } else {
-                                                &sc_tip_inactive
-                                            };
-                                            let _ = tray.set_tooltip(Some(tip.as_str()));
-                                            let icon = if active {
-                                                sc_active_icon.clone()
-                                            } else {
-                                                sc_inactive_icon.clone()
-                                            };
-                                            let _ = tray.set_icon(Some(icon));
-                                        }
-                                        log::info!(
-                                            "Global shortcut toggled engine → {}",
-                                            eng.state_name()
-                                        );
                                     }
                                 }
                             })
@@ -2057,6 +1961,21 @@ pub fn run() {
                     )?;
 
                     app.global_shortcut().register(shortcut)?;
+                }
+            }
+
+            #[cfg(desktop)]
+            {
+                let cfg = shared_config
+                    .lock()
+                    .map_err(|error| format!("Config lock: {error}"))?;
+                if cfg.wifi_enabled() {
+                    let mut monitor = shared_wifi_monitor
+                        .lock()
+                        .map_err(|error| format!("Monitor lock: {error}"))?;
+                    if let Err(error) = monitor.start() {
+                        log::warn!("WiFi monitor startup failed: {error}");
+                    }
                 }
             }
 

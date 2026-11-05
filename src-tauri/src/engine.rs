@@ -5,7 +5,9 @@ use crate::platform::{MouseDriver, PowerInhibitor};
 use crate::runtime::{
     normalize_override, should_jiggle, JiggleInput, JigglePolicy, LifecycleEvent, NormalizeInput,
 };
-use crate::schedule::{evaluate_schedule, Clock, Schedule, ScheduleInput, SystemClock};
+#[cfg(test)]
+use crate::schedule::SystemClock;
+use crate::schedule::{evaluate_schedule, Clock, Schedule, ScheduleInput};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -21,6 +23,7 @@ struct WorkerControl {
     policy: JigglePolicy,
 }
 
+#[cfg(test)]
 pub fn is_within_schedule(config: &AppConfig) -> bool {
     if !config.schedule_enabled {
         return true;
@@ -51,6 +54,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[cfg(test)]
     pub fn new(
         mouse_driver: Box<dyn MouseDriver>,
         power_inhibitor: Box<dyn PowerInhibitor>,
@@ -108,8 +112,13 @@ impl Engine {
             Err(error) => {
                 self.running.store(false, Ordering::Release);
                 match self.power_inhibitor.release() {
-                    Ok(()) => { self.state = EngineState::Idle; Err(format!("failed to spawn timer worker: {error}")) }
-                    Err(release_error) => Err(format!("failed to spawn timer worker: {error}; failed to release sleep inhibition: {release_error}")),
+                    Ok(()) => {
+                        self.state = EngineState::Idle;
+                        Err(format!("failed to spawn timer worker: {error}"))
+                    }
+                    Err(release_error) => Err(format!(
+                        "failed to spawn timer worker: {error}; failed to release sleep inhibition: {release_error}"
+                    )),
                 }
             }
         }
@@ -140,16 +149,10 @@ impl Engine {
         }
     }
 
-    pub fn toggle(&mut self) -> Result<(), String> {
-        if self.is_active() {
-            self.stop()
-        } else {
-            self.start()
-        }
-    }
     pub fn is_active(&self) -> bool {
         self.state == EngineState::Active
     }
+    #[cfg(test)]
     pub fn state_name(&self) -> &str {
         if self.is_active() {
             "active"
