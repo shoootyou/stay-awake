@@ -2760,7 +2760,7 @@ mod tests {
                 .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
                 .single()
                 .expect("fixed instant exists");
-            let samples = VecDeque::from([
+            let mut samples = VecDeque::from([
                 TimeSample {
                     wall,
                     monotonic: base,
@@ -2769,26 +2769,27 @@ mod tests {
                 TimeSample {
                     wall: wall + chrono::Duration::seconds(6),
                     monotonic: base + Duration::from_millis(250),
-                    offset_seconds: 0,
+                    offset_seconds: 3600,
                 },
                 TimeSample {
                     wall: wall + chrono::Duration::seconds(6) + chrono::Duration::milliseconds(250),
                     monotonic: base + Duration::from_millis(500),
-                    offset_seconds: 0,
+                    offset_seconds: 3600,
                 },
                 TimeSample {
                     wall: wall + chrono::Duration::seconds(6) + chrono::Duration::milliseconds(500),
                     monotonic: base + Duration::from_millis(750),
-                    offset_seconds: 0,
+                    offset_seconds: 3600,
                 },
                 TimeSample {
                     wall: wall + chrono::Duration::seconds(6) + chrono::Duration::milliseconds(750),
                     monotonic: base + Duration::from_secs(1),
-                    offset_seconds: 0,
+                    offset_seconds: 3600,
                 },
             ]);
+            samples.extend(steady_time_samples(8));
             let owner = thread::spawn(move || {
-                owner_loop_with_time_source(
+                owner_loop_with_time_sources(
                     receiver,
                     Arc::downgrade(&shared),
                     scheduled_active_config(),
@@ -2804,17 +2805,24 @@ mod tests {
                         tick_results: Arc::new(Mutex::new(VecDeque::new())),
                     }),
                     &mut ScriptedTimeSource { samples },
+                    &mut ScriptedMonotonicClock {
+                        instants: {
+                            let mut instants = VecDeque::from([base, base]);
+                            instants.extend([base + SUPERVISOR_PERIOD; 32]);
+                            instants
+                        },
+                    },
                 )
             });
 
             assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
-            let query_reply = match command {
+            let (query_reply, command_route) = match command {
                 "query" => {
                     let (reply, reply_receiver) = mpsc::channel();
                     sender
                         .send(OwnerCommand::Query { reply })
                         .expect("query wakes the owner wait");
-                    Some(reply_receiver)
+                    (Some(reply_receiver), None)
                 }
                 "wifi" => {
                     sender
@@ -2825,7 +2833,7 @@ mod tests {
                             reply: None,
                         })
                         .expect("WiFi observation wakes the owner wait");
-                    None
+                    (None, Some(TrayRoute::WifiChanged { active: false }))
                 }
                 "toggle" => {
                     sender
@@ -2834,15 +2842,22 @@ mod tests {
                             reply: None,
                         })
                         .expect("toggle wakes the owner wait");
-                    None
+                    (None, Some(TrayRoute::TrayToggle))
                 }
                 _ => unreachable!("the test enumerates supported command wakes"),
             };
+            if let Some(command_route) = command_route {
+                assert_eq!(
+                    routes.recv_timeout(REQUEST_TIMEOUT),
+                    Ok(command_route),
+                    "{command} is processed before the offset-triggered Resume"
+                );
+            }
 
             assert_eq!(
                 routes
                     .recv_timeout(REQUEST_TIMEOUT)
-                    .expect("a discontinuity is reconciled before the woken command"),
+                    .expect("the discontinuity reconciliation arrives"),
                 TrayRoute::Resume,
                 "{command} must not discard a suspend-like discontinuity"
             );
@@ -2855,12 +2870,17 @@ mod tests {
                 assert!(
                     reply
                         .recv_timeout(REQUEST_TIMEOUT)
-                        .expect("query reply arrives after Resume")
+                        .expect("query reply arrives after command processing")
                         .snapshot
                         .is_some(),
                     "Query still returns the reconciled snapshot"
                 );
             }
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(TrayRoute::Tick),
+                "a discontinuous command wake publishes exactly one Resume before the next Tick"
+            );
             stop_owner_loop(&sender, owner);
         }
     }
@@ -2886,7 +2906,7 @@ mod tests {
             TimeSample {
                 wall: wall + chrono::Duration::milliseconds(250),
                 monotonic: base + Duration::from_millis(250),
-                offset_seconds: 0,
+                offset_seconds: 3600,
             },
             TimeSample {
                 wall: wall + chrono::Duration::milliseconds(500),
@@ -2899,9 +2919,13 @@ mod tests {
                 offset_seconds: 3600,
             },
         ]);
-        samples.extend(steady_time_samples(8));
+        samples.extend((0..8).map(|index| TimeSample {
+            wall: wall + chrono::Duration::milliseconds(1250 + (index * 250) as i64),
+            monotonic: base + Duration::from_millis(1250 + (index * 250) as u64),
+            offset_seconds: 3600,
+        }));
         let owner = thread::spawn(move || {
-            owner_loop_with_time_source(
+            owner_loop_with_time_sources(
                 receiver,
                 Arc::downgrade(&shared),
                 scheduled_active_config(),
@@ -2917,6 +2941,13 @@ mod tests {
                     tick_results: Arc::new(Mutex::new(VecDeque::new())),
                 }),
                 &mut ScriptedTimeSource { samples },
+                &mut ScriptedMonotonicClock {
+                    instants: {
+                        let mut instants = VecDeque::from([base, base]);
+                        instants.extend([base + SUPERVISOR_PERIOD; 32]);
+                        instants
+                    },
+                },
             )
         });
 
@@ -2945,6 +2976,101 @@ mod tests {
                 .expect("post-processing reconciliation arrives"),
             TrayRoute::Resume,
             "an offset change during backend processing must survive until the next reconciliation"
+        );
+        assert_eq!(
+            routes.recv_timeout(REQUEST_TIMEOUT),
+            Ok(TrayRoute::Tick),
+            "the next automatic reconciliation must not repeat the consumed Resume"
+        );
+        stop_owner_loop(&sender, owner);
+    }
+
+    #[test]
+    fn owner_loop_queues_resume_when_a_command_updates_the_offset_baseline() {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let mut samples = VecDeque::from([
+            TimeSample {
+                wall,
+                monotonic: base,
+                offset_seconds: 0,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(250),
+                monotonic: base + Duration::from_millis(250),
+                offset_seconds: 0,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(500),
+                monotonic: base + Duration::from_millis(500),
+                offset_seconds: 3600,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(750),
+                monotonic: base + Duration::from_millis(750),
+                offset_seconds: 3600,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::seconds(1),
+                monotonic: base + Duration::from_secs(1),
+                offset_seconds: 3600,
+            },
+        ]);
+        samples.extend((0..8).map(|index| TimeSample {
+            wall: wall + chrono::Duration::milliseconds(1250 + (index * 250) as i64),
+            monotonic: base + Duration::from_millis(1250 + (index * 250) as u64),
+            offset_seconds: 3600,
+        }));
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_sources(
+                receiver,
+                Arc::downgrade(&shared),
+                scheduled_active_config(),
+                Arc::new(FixedClock(wall)),
+                Box::new(FailingStartBackend {
+                    active: Arc::new(Mutex::new(false)),
+                    starts: Arc::new(Mutex::new(0)),
+                    failures_remaining: 1,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: Arc::new(Mutex::new(Vec::new())),
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource { samples },
+                &mut ScriptedMonotonicClock {
+                    instants: {
+                        let mut instants = VecDeque::from([base, base]);
+                        instants.extend([base + SUPERVISOR_PERIOD; 32]);
+                        instants
+                    },
+                },
+            )
+        });
+
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        let (reply, reply_receiver) = mpsc::channel();
+        sender
+            .send(OwnerCommand::Query { reply })
+            .expect("query reaches the owner loop");
+        reply_receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("query reply arrives");
+        assert_eq!(
+            routes.recv_timeout(REQUEST_TIMEOUT),
+            Ok(TrayRoute::Resume),
+            "an offset baseline change after a command queues one Resume"
+        );
+        assert_eq!(
+            routes.recv_timeout(REQUEST_TIMEOUT),
+            Ok(TrayRoute::Tick),
+            "the queued Resume is consumed before the following automatic reconciliation"
         );
         stop_owner_loop(&sender, owner);
     }
