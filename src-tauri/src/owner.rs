@@ -2336,6 +2336,22 @@ mod tests {
                 2,
                 "recovery may start {mode:?} only after publication succeeds"
             );
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(TrayRoute::Startup),
+                "the successful recovery publishes its Startup route"
+            );
+            *active.lock().expect("backend activity lock") = false;
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(TrayRoute::Tick),
+                "the next deadline reconciliation is published after recovery"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                3,
+                "the recovered deadline path starts inactive {mode:?} exactly once"
+            );
             stop_owner_loop(&sender, owner);
         }
     }
