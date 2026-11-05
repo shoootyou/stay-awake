@@ -17,6 +17,8 @@ import { join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { stripHtmlComments } from "./helpers/strip-html-comments.mjs";
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
 const iconDir = join(root, "src/icons");
@@ -39,7 +41,7 @@ const expectedCsp = "default-src 'self'; style-src 'self'; font-src 'self'; scri
 
 const normalize = (value) => value.replaceAll(/\s+/g, " ").trim();
 const stripComments = (source, extension) => extension === ".html"
-  ? source.replace(/<!--[\s\S]*?-->/g, "")
+  ? stripHtmlComments(source)
   : source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const svgMarkup = (source) => source.match(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi) ?? [];
 const canonicalSvg = (source) => normalize(source

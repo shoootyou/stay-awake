@@ -18,6 +18,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 
+import { stripHtmlComments } from "./helpers/strip-html-comments.mjs";
+
 const root = new URL("../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, root), "utf8");
 const settingsHtml = read("src/settings.html");
@@ -25,7 +27,7 @@ const settingsJs = read("src/settings.js");
 const settingsCss = read("src/settings.css");
 const locales = readdirSync(new URL("src-tauri/locales/", root)).filter((name) => name.endsWith(".ftl"));
 
-const uncommented = (source) => source.replace(/<!--([\s\S]*?)-->/g, "");
+const uncommented = stripHtmlComments;
 const attributes = (tag) => Object.fromEntries([...tag.matchAll(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)]
   .map(([, name, doubleQuoted, singleQuoted, bare]) => [name, doubleQuoted ?? singleQuoted ?? bare ?? ""]));
 const tagWithId = (source, id) => [...source.matchAll(/<\w+\b[^>]*>/g)]

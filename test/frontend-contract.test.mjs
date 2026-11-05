@@ -15,6 +15,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { stripHtmlComments } from "./helpers/strip-html-comments.mjs";
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
 const htmlPaths = ["src/index.html", "src/settings.html", "src/about.html"];
@@ -209,7 +211,6 @@ const stripComments = (source, language = "js") => {
   return output;
 };
 
-const stripHtmlComments = (source) => source.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "));
 const stripCssComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "));
 const stripFtlComments = (source) => source.replace(/^\s*#.*$/gm, (comment) => " ".repeat(comment.length));
 const fontFaces = (source) => [...source.matchAll(/@font-face\s*\{([\s\S]*?)\}/g)].flatMap((match) => {
