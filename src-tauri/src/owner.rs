@@ -551,14 +551,30 @@ fn owner_loop_with_time_source(
                             );
                             continue;
                         }
-                        let result = if configuration_fault && route != TrayRoute::Quit {
-                            observe_configuration_fault(
+                        let fault_blocks_route = configuration_fault
+                            && route != TrayRoute::Quit
+                            && !(matches!(
+                                route,
+                                TrayRoute::TrayToggle | TrayRoute::Hotkey | TrayRoute::IpcToggle
+                            ) && backend.is_active());
+                        let result = if fault_blocks_route {
+                            let mut observed = observe_configuration_fault(
                                 &config,
                                 &clock,
                                 &mut supervisor,
                                 backend.as_ref(),
                                 sink.as_mut(),
-                            )
+                            );
+                            if matches!(
+                                route,
+                                TrayRoute::TrayToggle | TrayRoute::Hotkey | TrayRoute::IpcToggle
+                            ) {
+                                observed.error = Some(
+                                    "configuration fault blocks starting a new backend lease"
+                                        .to_owned(),
+                                );
+                            }
+                            observed
                         } else {
                             route_reply(
                                 route,

@@ -228,7 +228,18 @@ impl NativeTraySink {
     }
 
     pub(crate) fn apply_initial(&self, presentation: &TrayPresentation) -> Result<(), String> {
-        self.targets.paint(presentation)
+        let status_item = InitialStatusItem(&*self.targets);
+        status_item.set_text(presentation)
+    }
+}
+
+#[cfg(desktop)]
+struct InitialStatusItem<'a>(&'a dyn TrayPaintTargets);
+
+#[cfg(desktop)]
+impl InitialStatusItem<'_> {
+    fn set_text(&self, presentation: &TrayPresentation) -> Result<(), String> {
+        self.0.paint(presentation)
     }
 }
 
