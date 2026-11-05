@@ -339,6 +339,7 @@ mod tests {
     use super::*;
     use crate::runtime::OverrideState;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Instant;
 
     struct Mouse;
@@ -370,6 +371,36 @@ mod tests {
 
         fn get_position(&self) -> Result<(i32, i32), String> {
             self.positions.fetch_add(1, Ordering::SeqCst);
+            Ok((0, 0))
+        }
+
+        fn jiggle_zen(&self) -> Result<(), String> {
+            self.moves.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct BarrierMouse {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        moves: Arc<AtomicUsize>,
+    }
+
+    impl MouseDriver for BarrierMouse {
+        fn move_relative(&self, _: i32, _: i32) -> Result<(), String> {
+            self.moves.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn get_position(&self) -> Result<(i32, i32), String> {
+            self.entered
+                .send(())
+                .map_err(|_| "barrier observer disconnected".to_owned())?;
+            self.release
+                .lock()
+                .map_err(|_| "barrier release lock poisoned".to_owned())?
+                .recv_timeout(Duration::from_secs(1))
+                .map_err(|_| "barrier release timed out".to_owned())?;
             Ok((0, 0))
         }
 
@@ -423,6 +454,26 @@ mod tests {
         fn release(&mut self) -> Result<(), String> {
             self.releases.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            true
+        }
+    }
+
+    struct SignalingPower {
+        released: mpsc::Sender<()>,
+    }
+
+    impl PowerInhibitor for SignalingPower {
+        fn inhibit_sleep(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn release(&mut self) -> Result<(), String> {
+            self.released
+                .send(())
+                .map_err(|_| "release observer disconnected".to_owned())
         }
 
         fn is_active(&self) -> bool {
@@ -580,6 +631,61 @@ mod tests {
         mouse_engine.stop().expect("mouse engine stops");
         assert!(mouse_positions.load(Ordering::SeqCst) > 0);
         assert!(mouse_moves.load(Ordering::SeqCst) > 0);
+    }
+
+    #[test]
+    fn stop_releases_inhibition_before_a_blocked_probe_and_starts_no_new_mouse_move() {
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (continue_sender, continue_receiver) = mpsc::channel();
+        let (released_sender, released_receiver) = mpsc::channel();
+        let moves = Arc::new(AtomicUsize::new(0));
+        let config = Arc::new(Mutex::new(AppConfig {
+            jiggle_mode: JiggleMode::MouseSubtle,
+            interval_secs: 1,
+            ..AppConfig::default()
+        }));
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Box::new(BarrierMouse {
+                entered: entered_sender,
+                release: Mutex::new(continue_receiver),
+                moves: moves.clone(),
+            }),
+            Box::new(SignalingPower {
+                released: released_sender,
+            }),
+            config,
+        )));
+        engine
+            .lock()
+            .expect("engine lock")
+            .start()
+            .expect("engine starts");
+        entered_receiver
+            .recv_timeout(Duration::from_millis(1200))
+            .expect("worker reaches its blocked activity probe");
+
+        let stopping_engine = engine.clone();
+        let (stopped_sender, stopped_receiver) = mpsc::channel();
+        let stopper = thread::spawn(move || {
+            stopped_sender.send(stopping_engine.lock().expect("engine lock for stop").stop())
+        });
+        released_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("inhibitor releases before waiting for the blocked worker");
+        continue_sender
+            .send(())
+            .expect("worker probe is allowed to return");
+        stopped_receiver
+            .recv_timeout(Duration::from_millis(1200))
+            .expect("stop completes after the probe returns")
+            .expect("stop succeeds");
+        assert_eq!(stopper.join().expect("stopper joins"), Ok(()));
+
+        assert_eq!(
+            moves.load(Ordering::SeqCst),
+            0,
+            "no mouse movement may begin after inhibitor release"
+        );
     }
 
     fn engine_with_mouse(
