@@ -639,3 +639,7 @@ header h1 svg {
   margin-left: auto;
   flex-shrink: 0;
 }
+
+.group .field-hint {
+  padding: 0 16px;
+}
