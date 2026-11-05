@@ -4,6 +4,19 @@ const { listen } = window.__TAURI__.event;
 
 let originalConfig = {};
 
+
+const ICONS = {
+  x: `<svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></svg>`,
+  mapPin: `<svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M128,64a40,40,0,1,0,40,40A40,40,0,0,0,128,64Zm0,64a24,24,0,1,1,24-24A24,24,0,0,1,128,128Zm0-112a88.1,88.1,0,0,0-88,88c0,31.4,14.51,64.68,42,96.25a254.19,254.19,0,0,0,41.45,38.3,8,8,0,0,0,9.18,0A254.19,254.19,0,0,0,174,200.25c27.45-31.57,42-64.85,42-96.25A88.1,88.1,0,0,0,128,16Zm0,206c-16.53-13-72-60.75-72-118a72,72,0,0,1,144,0C200,161.23,144.53,209,128,222Z"/></svg>`,
+  warning: `<svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M236.8,188.09,149.35,36.22h0a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM222.93,203.8a8.5,8.5,0,0,1-7.48,4.2H40.55a8.5,8.5,0,0,1-7.48-4.2,7.59,7.59,0,0,1,0-7.72L120.52,44.21a8.75,8.75,0,0,1,15,0l87.45,151.87A7.59,7.59,0,0,1,222.93,203.8ZM120,144V104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,180Z"/></svg>`,
+};
+
+function createIcon(markup) {
+  const wrapper = document.createElement("span");
+  wrapper.innerHTML = markup;
+  return wrapper.firstElementChild;
+}
+
 const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
 
 // Linux platform signal, resolved via a backend-sourced command rather than UA-sniffing.
@@ -56,6 +69,20 @@ async function applyTranslations() {
       }
     } catch (_) {
       // Keep original text on failure.
+    }
+  }
+  for (const el of document.querySelectorAll("[data-i18n-aria-label]")) {
+    const key = el.getAttribute("data-i18n-aria-label");
+    try {
+      const ssid = el.getAttribute("data-network");
+      const text = await invoke("get_translation", ssid ? { key, network: ssid } : { key });
+      if (ssid) {
+        el.setAttribute("aria-label", text.replace(/\{\s*\$network\s*\}/, ssid));
+      } else {
+        el.setAttribute("aria-label", text);
+      }
+    } catch (_) {
+      // Keep the existing accessible name on failure.
     }
   }
 }
@@ -411,10 +438,15 @@ function updateLocationBanner(status) {
 
   banner.style.display = "";
   if (status === "not_determined") {
-    banner.innerHTML = '<span>📍 Location permission required to detect WiFi networks.</span>' +
-      '<button id="wifi-grant-location" class="small">Grant Access</button>';
-    const grantBtn = document.getElementById("wifi-grant-location");
-    if (grantBtn) {
+    const message = document.createElement("span");
+    message.textContent = "Location permission required to detect WiFi networks.";
+    const grantBtn = document.createElement("button");
+    grantBtn.id = "wifi-grant-location";
+    grantBtn.className = "small";
+    grantBtn.textContent = "Grant Access";
+    banner.replaceChildren(createIcon(ICONS.mapPin), message, grantBtn);
+    const locationGrantBtn = document.getElementById("wifi-grant-location");
+    if (locationGrantBtn) {
       grantBtn.addEventListener("click", async () => {
         try {
           await invoke("request_location_permission");
@@ -434,7 +466,9 @@ function updateLocationBanner(status) {
       });
     }
   } else if (status === "denied" || status === "restricted") {
-    banner.innerHTML = '<span>⚠️ Location access denied. Enable it in System Settings → Privacy & Security → Location Services.</span>';
+    const message = document.createElement("span");
+    message.textContent = "Location access denied. Enable it in System Settings → Privacy & Security → Location Services.";
+    banner.replaceChildren(createIcon(ICONS.warning), message);
   }
 }
 
@@ -493,7 +527,12 @@ function renderNetworkList(networks) {
 
     const removeBtn = document.createElement("button");
     removeBtn.className = "wifi-remove-btn";
-    removeBtn.innerHTML = '<i class="ph ph-x"></i>';
+    removeBtn.appendChild(createIcon(ICONS.x));
+    removeBtn.setAttribute("data-i18n-aria-label", "settings-wifi-remove-label");
+    removeBtn.setAttribute("data-network", ssid);
+    invoke("get_translation", { key: "settings-wifi-remove-label", network: ssid })
+      .then((text) => removeBtn.setAttribute("aria-label", text.replace(/\{\s*\$network\s*\}/, ssid)))
+      .catch(() => removeBtn.setAttribute("aria-label", `Remove network ${ssid}`));
     removeBtn.title = "Remove";
     removeBtn.addEventListener("click", () => removeNetwork(ssid));
 
@@ -678,7 +717,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("mode-info-btn").addEventListener("click", () => {
     const panel = document.getElementById("mode-info-panel");
-    panel.classList.toggle("hidden");
+    const expanded = panel.classList.toggle("hidden") === false;
+    document.getElementById("mode-info-btn").setAttribute("aria-expanded", String(expanded));
   });
 
   document.getElementById("grant-btn").addEventListener("click", grantAccessibility);

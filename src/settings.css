@@ -458,15 +458,21 @@ button.small:hover {
   font-weight: 600;
 }
 
-/* ── Phosphor icon alignment in labels ── */
-.label i[class^="ph"],
-.group-header i[class^="ph"] {
-  font-size: 15px;
-  vertical-align: -1px;
+.label svg,
+.group-header svg,
+.wifi-hint svg,
+.wifi-location-banner svg,
+.wifi-remove-btn svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  flex-shrink: 0;
 }
 
-header h1 i[class^="ph"] {
-  font-size: 20px;
+header h1 svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
   vertical-align: -2px;
 }
 
@@ -614,11 +620,6 @@ header h1 i[class^="ph"] {
   display: flex;
   align-items: flex-start;
   gap: 4px;
-}
-
-.wifi-hint::before {
-  content: "ⓘ";
-  flex-shrink: 0;
 }
 
 /* ── WiFi Location Services banner ── */
