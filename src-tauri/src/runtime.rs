@@ -332,6 +332,12 @@ pub(crate) fn should_jiggle(input: JiggleInput<'_>) -> bool {
     if !input.engine_active || matches!(input.jiggle_mode, JiggleMode::PowerOnly) {
         return false;
     }
+    if matches!(
+        input.override_state.as_state(),
+        OverrideState::SkipWindow(_)
+    ) {
+        return false;
+    }
     if !input.schedule_enabled {
         return true;
     }
