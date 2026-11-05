@@ -425,4 +425,19 @@ mod tests {
         assert_eq!(inhibits.load(Ordering::SeqCst), 1);
         assert_eq!(releases.load(Ordering::SeqCst), 0);
     }
+
+    #[test]
+    fn engine_backend_adapter_acquires_once_ignores_repeated_start_and_releases_once() {
+        let (mut engine, inhibits, releases) = engine(false);
+
+        crate::runtime::EngineBackend::start(&mut engine).expect("adapter start succeeds");
+        crate::runtime::EngineBackend::start(&mut engine).expect("repeated adapter start is idle");
+        assert_eq!(inhibits.load(Ordering::SeqCst), 1);
+        assert!(crate::runtime::EngineBackend::is_active(&engine));
+
+        crate::runtime::EngineBackend::stop(&mut engine).expect("adapter stop succeeds");
+        crate::runtime::EngineBackend::stop(&mut engine).expect("repeated adapter stop is idle");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        assert!(!crate::runtime::EngineBackend::is_active(&engine));
+    }
 }

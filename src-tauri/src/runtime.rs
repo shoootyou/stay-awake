@@ -1,12 +1,13 @@
 /*
  * @spec-handoff
- * @interface effective_mode(AppMode): AppMode;
- *   normalize_override(NormalizeInput): NormalizedOverride
+ * @interface Supervisor::reconcile(ReconcileInput, EngineBackend): Result<RuntimeSnapshot, String>
  * @behavior
- *   - Normalizes Scheduled to Manual and invalid runtime overrides to None.
- *   - Derives tray status and its text/icon keys from actual activity and normalized state.
+ *   - Reconciles Manual and AlwaysOn schedule windows every 250 ms, independent of jiggle interval.
+ *   - Publishes actual backend state after starts, stops, overrides, and lifecycle errors.
+ *   - Leaves WiFi lifecycle under network control while PowerOnly follows schedule lifecycle.
  * @edge-cases
- *   - ForceOn clears at a current or passed start; expired SkipWindow is dropped.
+ *   - Failed operations are retried only after a meaningful event and retain truthful ownership.
+ *   - ForceOn clears at a window start without reacquiring; missed windows are not replayed.
  */
 #![allow(dead_code)] // skeleton: wired in E3
 
@@ -709,5 +710,530 @@ mod tests {
                 expected
             );
         }
+    }
+
+    struct AdvancingClock {
+        now: std::sync::Mutex<DateTime<Utc>>,
+    }
+
+    impl AdvancingClock {
+        fn new(now: DateTime<Utc>) -> Self {
+            Self {
+                now: std::sync::Mutex::new(now),
+            }
+        }
+
+        fn advance_periods(&self, periods: i64) {
+            let mut now = self.now.lock().expect("test clock lock");
+            *now += chrono::Duration::milliseconds(250 * periods);
+        }
+
+        fn jump_to(&self, instant: DateTime<Utc>) {
+            *self.now.lock().expect("test clock lock") = instant;
+        }
+    }
+
+    impl Clock for AdvancingClock {
+        fn now(&self) -> DateTime<Utc> {
+            *self.now.lock().expect("test clock lock")
+        }
+
+        fn to_local(&self, instant: DateTime<Utc>) -> chrono::DateTime<chrono::FixedOffset> {
+            instant.with_timezone(&chrono::FixedOffset::east_opt(0).expect("UTC offset"))
+        }
+
+        fn resolve_local(
+            &self,
+            local: chrono::NaiveDateTime,
+        ) -> chrono::LocalResult<DateTime<Utc>> {
+            chrono::LocalResult::Single(local.and_utc())
+        }
+    }
+
+    struct RecordingBackend {
+        active: bool,
+        start_calls: usize,
+        stop_calls: usize,
+        start_failures: usize,
+        stop_failures: usize,
+        cleanup_failure_releases: bool,
+        policies: usize,
+    }
+
+    impl RecordingBackend {
+        fn inactive() -> Self {
+            Self {
+                active: false,
+                start_calls: 0,
+                stop_calls: 0,
+                start_failures: 0,
+                stop_failures: 0,
+                cleanup_failure_releases: false,
+                policies: 0,
+            }
+        }
+    }
+
+    impl EngineBackend for RecordingBackend {
+        fn start(&mut self) -> Result<(), String> {
+            self.start_calls += 1;
+            if self.start_failures > 0 {
+                self.start_failures -= 1;
+                return Err("start failed".to_owned());
+            }
+            self.active = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            self.stop_calls += 1;
+            if self.stop_failures > 0 {
+                self.stop_failures -= 1;
+                return Err("stop failed".to_owned());
+            }
+            self.active = false;
+            if self.cleanup_failure_releases {
+                return Err("cleanup failed after release".to_owned());
+            }
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            self.active
+        }
+
+        fn set_jiggle_policy(&mut self, _: JigglePolicy) {
+            self.policies += 1;
+        }
+    }
+
+    fn scheduled_config(mode: AppMode, jiggle_mode: JiggleMode) -> AppConfig {
+        AppConfig {
+            mode,
+            jiggle_mode,
+            interval_secs: 300,
+            schedule_enabled: true,
+            schedule_start_hour: 9,
+            schedule_start_minute: 0,
+            schedule_end_hour: 10,
+            schedule_end_minute: 0,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        }
+    }
+
+    fn reconcile(
+        supervisor: &mut Supervisor,
+        backend: &mut RecordingBackend,
+        config: &AppConfig,
+        clock: &AdvancingClock,
+        event: LifecycleEvent,
+    ) -> Result<RuntimeSnapshot, String> {
+        supervisor.reconcile(
+            ReconcileInput {
+                config,
+                clock,
+                event,
+            },
+            backend,
+        )
+    }
+
+    #[test]
+    fn idle_supervisor_starts_the_next_window_within_one_period_despite_a_300_second_interval() {
+        let clock = AdvancingClock::new(
+            at(8)
+                + chrono::Duration::minutes(59)
+                + chrono::Duration::seconds(59)
+                + chrono::Duration::milliseconds(750),
+        );
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        clock.advance_periods(1);
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .expect("window opening reconciles");
+
+        assert_eq!(SUPERVISOR_PERIOD, Duration::from_millis(250));
+        assert_eq!(backend.start_calls, 1);
+        assert!(snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Active);
+    }
+
+    #[test]
+    fn window_close_stops_once_and_publishes_waiting() {
+        let clock = AdvancingClock::new(at(9));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        clock.advance_periods(14_400);
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .expect("window close reconciles");
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .unwrap();
+
+        assert_eq!(backend.stop_calls, 1);
+        assert!(!snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Waiting);
+    }
+
+    #[test]
+    fn unchanged_reconciliation_makes_no_lifecycle_calls() {
+        let clock = AdvancingClock::new(at(8));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .unwrap();
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (0, 0));
+        assert_eq!(
+            supervisor.snapshot().expect("published snapshot").status,
+            TrayStatus::Waiting
+        );
+    }
+
+    #[test]
+    fn force_on_crossing_a_window_start_stays_active_without_a_stop_or_restart() {
+        let clock = AdvancingClock::new(at(8));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::TrayToggle,
+        )
+        .unwrap();
+        clock.advance_periods(14_400);
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .expect("ForceOn boundary reconciles");
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (1, 0));
+        assert!(snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Active);
+    }
+
+    #[test]
+    fn expired_skip_window_leaves_the_engine_idle_and_publishes_waiting() {
+        let clock = AdvancingClock::new(at(9));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::TrayToggle,
+        )
+        .unwrap();
+        clock.advance_periods(14_400);
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .expect("expired suppression reconciles");
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (1, 1));
+        assert!(!snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Waiting);
+    }
+
+    #[test]
+    fn failed_start_is_inactive_is_not_retried_each_tick_and_retries_on_resume() {
+        let clock = AdvancingClock::new(at(9));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend {
+            start_failures: 1,
+            ..RecordingBackend::inactive()
+        };
+
+        assert_eq!(
+            reconcile(
+                &mut supervisor,
+                &mut backend,
+                &config,
+                &clock,
+                LifecycleEvent::Startup
+            ),
+            Err("start failed".to_owned())
+        );
+        for _ in 0..4 {
+            assert_eq!(
+                reconcile(
+                    &mut supervisor,
+                    &mut backend,
+                    &config,
+                    &clock,
+                    LifecycleEvent::Tick
+                ),
+                Err("start failed".to_owned())
+            );
+        }
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Resume,
+        )
+        .expect("resume rearms a failed start");
+
+        assert_eq!(backend.start_calls, 2);
+        assert!(snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Active);
+    }
+
+    #[test]
+    fn failed_stop_keeps_active_ownership_and_retries_on_later_reconciliation() {
+        let clock = AdvancingClock::new(at(10));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend {
+            active: true,
+            stop_failures: 1,
+            ..RecordingBackend::inactive()
+        };
+
+        assert_eq!(
+            reconcile(
+                &mut supervisor,
+                &mut backend,
+                &config,
+                &clock,
+                LifecycleEvent::Tick
+            ),
+            Err("stop failed".to_owned())
+        );
+        let failed = supervisor.snapshot().expect("failure snapshot");
+        assert!(failed.engine_active);
+        assert_eq!(failed.status, TrayStatus::Active);
+        let recovered = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Resume,
+        )
+        .expect("resume retries failed stop");
+
+        assert_eq!(backend.stop_calls, 2);
+        assert!(!recovered.engine_active);
+        assert_eq!(recovered.status, TrayStatus::Waiting);
+    }
+
+    #[test]
+    fn cleanup_error_does_not_skip_the_release_attempt() {
+        let clock = AdvancingClock::new(at(10));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend {
+            active: true,
+            cleanup_failure_releases: true,
+            ..RecordingBackend::inactive()
+        };
+
+        assert_eq!(
+            reconcile(
+                &mut supervisor,
+                &mut backend,
+                &config,
+                &clock,
+                LifecycleEvent::Tick
+            ),
+            Err("cleanup failed after release".to_owned())
+        );
+
+        assert_eq!(backend.stop_calls, 1);
+        assert!(!backend.active);
+        assert_eq!(
+            supervisor.snapshot().expect("cleanup snapshot").status,
+            TrayStatus::Waiting
+        );
+    }
+
+    #[test]
+    fn resume_after_a_whole_missed_window_does_not_replay_its_start() {
+        let clock = AdvancingClock::new(at(8));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        clock.jump_to(at(11));
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Resume,
+        )
+        .expect("resume reconciles current time");
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (0, 0));
+        assert_eq!(snapshot.status, TrayStatus::Waiting);
+    }
+
+    #[test]
+    fn always_on_with_an_enabled_schedule_stays_stopped_outside_the_window() {
+        let clock = AdvancingClock::new(at(8));
+        let config = scheduled_config(AppMode::AlwaysOn, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .expect("startup reconciles");
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (0, 0));
+        assert!(!snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Waiting);
+    }
+
+    #[test]
+    fn wifi_mode_is_never_started_or_stopped_by_schedule_reconciliation() {
+        let clock = AdvancingClock::new(at(8));
+        let config = scheduled_config(AppMode::WiFi, JiggleMode::MouseSubtle);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend {
+            active: true,
+            ..RecordingBackend::inactive()
+        };
+
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .expect("WiFi tick preserves network lifecycle");
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (0, 0));
+        assert!(snapshot.engine_active);
+        assert_eq!(snapshot.status, TrayStatus::Active);
+    }
+
+    #[test]
+    fn power_only_follows_the_same_scheduled_start_and_stop_lifecycle() {
+        let clock = AdvancingClock::new(at(9));
+        let config = scheduled_config(AppMode::Manual, JiggleMode::PowerOnly);
+        let mut supervisor = Supervisor::new();
+        let mut backend = RecordingBackend::inactive();
+
+        reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Startup,
+        )
+        .unwrap();
+        clock.advance_periods(14_400);
+        let snapshot = reconcile(
+            &mut supervisor,
+            &mut backend,
+            &config,
+            &clock,
+            LifecycleEvent::Tick,
+        )
+        .expect("PowerOnly window close reconciles");
+
+        assert_eq!((backend.start_calls, backend.stop_calls), (1, 1));
+        assert_eq!(snapshot.status, TrayStatus::Waiting);
     }
 }
