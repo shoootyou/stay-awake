@@ -2185,9 +2185,11 @@ mod core_helper_tests {
  * @spec-handoff
  * @interface NativeTraySink::{apply_initial,publish}; request_app_exit
  * @interface async fn {toggle_engine,get_engine_state,save_config,load_profile,set_language}
+ * @interface fn {save_profile,delete_profile,update_global_hotkey}; tray jiggle-mode setters
  * @behavior
  *   - Native publication keeps only the latest pending frame and schedules UI work once.
  *   - Tauri callbacks submit owner work without directly controlling Engine or waiting on UI.
+ *   - Config writers submit update_config through the owner instead of directly locking config.
  *   - Setup paints actual pre-start state, installs Wi-Fi forwarding before monitoring, and
  *     allows process exit only after owner shutdown confirms completion.
  * @edge-cases
@@ -2428,6 +2430,83 @@ mod native_wiring_contract_tests {
                 && !production.contains("eng.stop(")
                 && !production.contains("eng.toggle("),
             "lib.rs leaves engine lifecycle operations to the owner path"
+        );
+    }
+
+    #[test]
+    fn save_profile_updates_config_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, "fn save_profile(");
+
+        assert!(
+            handler.contains("runtime.update_config(ConfigOrigin::Other"),
+            "saving a profile commits its config metadata through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "saving a profile does not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn delete_profile_updates_config_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, "fn delete_profile(");
+
+        assert!(
+            handler.contains("runtime.update_config(ConfigOrigin::Other"),
+            "deleting a profile commits its config metadata through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "deleting a profile does not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn update_global_hotkey_commits_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, "fn update_global_hotkey(");
+
+        assert!(
+            handler.contains("runtime.update_config(ConfigOrigin::Other"),
+            "updating the hotkey commits config through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "updating the hotkey does not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn tray_jiggle_mode_setters_update_config_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, ".on_menu_event(move |app, event| {");
+
+        for setter in ["mode_power", "mode_subtle", "mode_zen", "mode_circle"] {
+            assert!(
+                handler.contains(setter),
+                "tray jiggle-mode setter {setter} remains in the menu handler"
+            );
+        }
+        assert_eq!(
+            handler
+                .matches("runtime.update_config(ConfigOrigin::Other")
+                .count(),
+            4,
+            "each tray jiggle-mode setter commits through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config_for_tray.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "tray jiggle-mode setters do not mutate the shared config directly"
         );
     }
 
