@@ -6,6 +6,7 @@
  *   - Keeps Manual, AlwaysOn, and WiFi as the only selectable App Modes.
  *   - Preserves midnight schedule values through loading and autosave.
  *   - Associates the schedule helper and localized descriptions with their controls.
+ *   - Renders network removal names from translated Fluent arguments without frontend substitution.
  * @edge-cases
  *   - Legacy Scheduled displays as Manual and autosaves as Manual.
  *   - Empty days and disabled schedules retain stored midnight values.
@@ -226,4 +227,66 @@ test("loads midnight start and missing schedule-hour defaults", async () => {
   ].includes(key))));
   assert.equal(missing.elements.get("schedule-start").value, "09:00");
   assert.equal(missing.elements.get("schedule-end").value, "17:00");
+});
+
+test("renders literal translated network names without frontend placeholder substitution", async () => {
+  class NetworkElement {
+    constructor(leaf = false) {
+      this.attributes = new Map();
+      this.children = [];
+      this.classList = { add() {} };
+      this.textContent = "";
+      this.firstElementChild = leaf ? null : new NetworkElement(true);
+    }
+
+    setAttribute(name, value) { this.attributes.set(name, value); }
+    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    appendChild(child) { this.children.push(child); }
+    addEventListener() {}
+  }
+
+  let language = "en";
+  const list = new NetworkElement();
+  const buttons = [];
+  const document = {
+    createElement: () => new NetworkElement(),
+    getElementById: (id) => id === "wifi-network-list" ? list : new NetworkElement(),
+    querySelectorAll: (selector) => selector === "[data-i18n-aria-label]" ? buttons : [],
+  };
+  const invoke = async (command, args) => {
+    if (command !== "get_translation") return undefined;
+    const template = language === "en" ? "Remove network {$network}" : "Quitar red {$network}";
+    return args.network === undefined ? template : template.replace("{$network}", args.network);
+  };
+  const context = vm.createContext({
+    window: {
+      __TAURI__: { core: { invoke }, event: { listen: async () => {} } },
+      addEventListener() {},
+    },
+    document,
+    navigator: { platform: "Linux" },
+    console,
+  });
+  vm.runInContext(settingsJs, context, { filename: "settings.js" });
+
+  const networks = ["$&", "$$", "$1", "$`", "$'", "plain", "<b>x</b>"];
+  context.renderNetworkList(networks);
+  await waitFor(() => list.children.length === networks.length, "network list did not render");
+  for (const item of list.children) buttons.push(item.children[1]);
+  await waitFor(() => buttons.every((button) => button.getAttribute("aria-label")), "names did not translate");
+  for (const [index, network] of networks.entries()) {
+    assert.equal(buttons[index].getAttribute("aria-label"), `Remove network ${network}`);
+    assert.equal(buttons[index].getAttribute("aria-label").split(network).length - 1, 1);
+  }
+
+  language = "es";
+  await context.applyTranslations();
+  for (const [index, network] of networks.entries()) {
+    assert.equal(buttons[index].getAttribute("aria-label"), `Quitar red ${network}`);
+  }
+
+  const dynamicNames = settingsJs.match(/async function (?:applyTranslations|renderNetworkList)[\s\S]*?(?=\nasync function|\nfunction registerCurrentNetwork)/g)
+    ?.join("\n") ?? "";
+  assert.doesNotMatch(dynamicNames, /\.replace(?:All)?\(/,
+    "dynamic network labels must rely on Fluent arguments, not frontend substitution");
 });
