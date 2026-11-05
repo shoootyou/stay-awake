@@ -36,8 +36,8 @@ Click the menu bar icon to open the tray menu. Left-click and right-click both
 open the same menu.
 
 The original app icon is full strength while the engine is active and dimmed
-when it is not active. The tray menu status starts with an emoji and ends with
-the state that the next click will produce.
+when it is not active. The tray menu shows two status lines: an emoji-prefixed
+current state, then a greyed line with the state that the next click will produce.
 On Linux, use that menu text because tooltips and native tray titles are not
 guaranteed by every implementation.
 
@@ -56,8 +56,8 @@ guaranteed by every implementation.
 
 ### Status item
 
-The status item shows the current engine and schedule state, then the state a click will
-produce. Click it to toggle the engine.
+The enabled status item shows the current engine and schedule state. A second,
+greyed line shows the state a click will produce. Click the enabled item to toggle the engine.
 
 - **Active**: the engine is running. Click to stop it.
 - **Inactive**: the engine is stopped. Click to start it.

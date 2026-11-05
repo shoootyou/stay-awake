@@ -53,7 +53,8 @@ To add or change a Settings icon:
 2. Add it to `src/icons/`.
 3. Inline it where it is used with `aria-hidden="true"` and `focusable="false"`.
 
-The tray uses the original app icon and dims it when the engine is not active.
+The tray uses the original app icon and dims it when the engine is not active. Its menu shows
+the current state, then a greyed line with the result of clicking it.
 Do not regenerate separate state-specific tray PNGs.
 
 ## Conventional Commits
