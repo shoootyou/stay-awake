@@ -121,6 +121,8 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
 /**
  * @spec-handoff
  * @interface status_menu_label(current: TrayStatus, after_click: TrayStatus, Bundle) -> String
+ * @interface tray_toggle_presentation(RuntimeSnapshot, schedule_owned: bool) -> TrayStatus
+ * @interface runtime::schedule_owned(mode: &AppMode, schedule_enabled: bool) -> bool
  * @behavior
  *     - Renders the current localized state, its fixed emoji, and the true click-result state.
  *     - Uses one U+2192 arrow with a single space on each side.
@@ -228,11 +230,7 @@ mod tray_status_menu_contract_tests {
                     if !schedule_enabled && inside {
                         continue;
                     }
-                    let schedule_owned = schedule_enabled
-                        && matches!(
-                            runtime::effective_mode(&mode),
-                            config::AppMode::Manual | config::AppMode::AlwaysOn
-                        );
+                    let schedule_owned = runtime::schedule_owned(&mode, schedule_enabled);
                     let current = inside.then(|| schedule::Occurrence {
                         start_day: at.date_naive(),
                         start: at - Duration::minutes(30),
@@ -258,6 +256,8 @@ mod tray_status_menu_contract_tests {
                             vec![
                                 (false, runtime::OverrideState::None),
                                 (true, runtime::OverrideState::ForceOn { until: None }),
+                                (true, runtime::OverrideState::None),
+                                (false, runtime::OverrideState::ForceOn { until: None }),
                             ]
                         }
                     } else {
@@ -302,7 +302,7 @@ mod tray_status_menu_contract_tests {
                             previous_policy: None,
                             wifi_active: false,
                         });
-                        let advertised = tray_toggle_presentation(&snapshot);
+                        let advertised = tray_toggle_presentation(&snapshot, schedule_owned);
                         assert_eq!(
                             advertised, oracle.presentation,
                             "{mode:?}, enabled={schedule_enabled}, inside={inside}, {status:?}"
@@ -316,6 +316,22 @@ mod tray_status_menu_contract_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn schedule_ownership_excludes_wifi_and_includes_legacy_scheduled() {
+        for mode in [
+            config::AppMode::Manual,
+            config::AppMode::AlwaysOn,
+            config::AppMode::WiFi,
+            config::AppMode::Scheduled,
+        ] {
+            assert!(!runtime::schedule_owned(&mode, false), "{mode:?} off");
+        }
+        assert!(runtime::schedule_owned(&config::AppMode::Manual, true));
+        assert!(runtime::schedule_owned(&config::AppMode::AlwaysOn, true));
+        assert!(!runtime::schedule_owned(&config::AppMode::WiFi, true));
+        assert!(runtime::schedule_owned(&config::AppMode::Scheduled, true));
     }
 
     #[test]
