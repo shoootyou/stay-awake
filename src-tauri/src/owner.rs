@@ -1039,6 +1039,51 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_timeout_includes_waiting_for_another_shutdown_caller() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let handle = RuntimeHandle::spawn(owner_start(calls)).expect("owner spawn succeeds");
+        let shared = handle.shared.clone();
+        let (acquired, acquired_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let _gate = shared.shutdown.lock().expect("shutdown gate lock");
+            acquired.send(()).expect("test receives gate acquisition");
+            release_receiver
+                .recv()
+                .expect("test releases shutdown gate");
+        });
+        acquired_receiver
+            .recv()
+            .expect("holder acquired the shutdown gate");
+
+        let concurrent = handle.clone();
+        let (result, result_receiver) = mpsc::channel();
+        let (attempting, attempt_receiver) = mpsc::channel();
+        let caller = thread::spawn(move || {
+            let started = Instant::now();
+            attempting.send(()).expect("test receives shutdown attempt");
+            let outcome = concurrent.shutdown(Duration::from_millis(10));
+            result
+                .send((started.elapsed(), outcome))
+                .expect("test receives concurrent shutdown result");
+        });
+        attempt_receiver
+            .recv()
+            .expect("concurrent caller reached shutdown");
+
+        let returned_within_deadline = result_receiver
+            .recv_timeout(Duration::from_millis(100))
+            .is_ok();
+        release.send(()).expect("release shutdown gate");
+        holder.join().expect("gate holder joins");
+        caller.join().expect("shutdown caller joins");
+        assert!(
+            returned_within_deadline,
+            "a caller with a 10ms deadline must not wait behind another shutdown gate holder"
+        );
+    }
+
+    #[test]
     fn route_reply_builds_its_bundle_from_the_accepted_language() {
         let source = include_str!("owner.rs");
         let route_start = source
