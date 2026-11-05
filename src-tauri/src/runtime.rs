@@ -396,4 +396,318 @@ mod tests {
             }
         }
     }
+
+    fn decide(
+        mode: AppMode,
+        enabled: bool,
+        inside: bool,
+        active: bool,
+        override_state: OverrideState,
+        event: LifecycleEvent,
+        wifi_active: bool,
+    ) -> LifecycleDecision {
+        let window = evaluation(inside);
+        let override_state = normalized(override_state);
+        decide_lifecycle(LifecycleInput {
+            mode: &mode,
+            schedule_enabled: enabled,
+            window: &window,
+            engine_active: active,
+            override_state: &override_state,
+            event,
+            previous_policy: None,
+            wifi_active,
+        })
+    }
+
+    #[test]
+    fn decides_startup_toggle_tick_config_resume_wifi_and_quit_from_the_contract_table() {
+        let cases = [
+            (
+                AppMode::Manual,
+                false,
+                false,
+                false,
+                OverrideState::None,
+                LifecycleEvent::Startup,
+                false,
+                EngineAction::None,
+                TrayStatus::Inactive,
+            ),
+            (
+                AppMode::AlwaysOn,
+                false,
+                false,
+                false,
+                OverrideState::None,
+                LifecycleEvent::Startup,
+                false,
+                EngineAction::Start,
+                TrayStatus::Active,
+            ),
+            (
+                AppMode::Scheduled,
+                true,
+                true,
+                false,
+                OverrideState::None,
+                LifecycleEvent::Startup,
+                false,
+                EngineAction::Start,
+                TrayStatus::Active,
+            ),
+            (
+                AppMode::AlwaysOn,
+                true,
+                false,
+                true,
+                OverrideState::None,
+                LifecycleEvent::Startup,
+                false,
+                EngineAction::Stop,
+                TrayStatus::Waiting,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                true,
+                false,
+                OverrideState::None,
+                LifecycleEvent::TrayToggle,
+                false,
+                EngineAction::Start,
+                TrayStatus::Active,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                true,
+                true,
+                OverrideState::None,
+                LifecycleEvent::TrayToggle,
+                false,
+                EngineAction::Stop,
+                TrayStatus::Paused,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                false,
+                false,
+                OverrideState::None,
+                LifecycleEvent::TrayToggle,
+                false,
+                EngineAction::Start,
+                TrayStatus::ActiveOverride,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                false,
+                true,
+                OverrideState::ForceOn {
+                    until: Some(at(18) + chrono::Duration::days(1)),
+                },
+                LifecycleEvent::TrayToggle,
+                false,
+                EngineAction::Stop,
+                TrayStatus::Waiting,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                true,
+                false,
+                OverrideState::None,
+                LifecycleEvent::Tick,
+                false,
+                EngineAction::Start,
+                TrayStatus::Active,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                false,
+                true,
+                OverrideState::None,
+                LifecycleEvent::Resume,
+                false,
+                EngineAction::Stop,
+                TrayStatus::Waiting,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                false,
+                true,
+                OverrideState::None,
+                LifecycleEvent::WifiChanged { active: false },
+                false,
+                EngineAction::None,
+                TrayStatus::Active,
+            ),
+            (
+                AppMode::WiFi,
+                true,
+                false,
+                false,
+                OverrideState::None,
+                LifecycleEvent::WifiChanged { active: true },
+                false,
+                EngineAction::Start,
+                TrayStatus::Active,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                false,
+                true,
+                OverrideState::None,
+                LifecycleEvent::ConfigChanged {
+                    policy_changed: true,
+                },
+                false,
+                EngineAction::Stop,
+                TrayStatus::Waiting,
+            ),
+            (
+                AppMode::Manual,
+                true,
+                true,
+                true,
+                OverrideState::None,
+                LifecycleEvent::Quit,
+                false,
+                EngineAction::Stop,
+                TrayStatus::Inactive,
+            ),
+        ];
+        for (mode, enabled, inside, active, override_state, event, wifi, action, status) in cases {
+            let decision = decide(mode, enabled, inside, active, override_state, event, wifi);
+            assert_eq!((decision.action, decision.presentation), (action, status));
+        }
+    }
+
+    #[test]
+    fn clears_skipwindow_and_forceon_at_their_required_boundaries() {
+        let skip = decide(
+            AppMode::Manual,
+            true,
+            true,
+            false,
+            OverrideState::SkipWindow(occurrence()),
+            LifecycleEvent::TrayToggle,
+            false,
+        );
+        assert_eq!(
+            (skip.action, skip.override_state.as_state()),
+            (EngineAction::Start, &OverrideState::None)
+        );
+        let force = decide(
+            AppMode::Manual,
+            true,
+            true,
+            true,
+            OverrideState::ForceOn {
+                until: Some(at(18) + chrono::Duration::days(1)),
+            },
+            LifecycleEvent::Tick,
+            false,
+        );
+        assert_eq!(
+            (
+                force.action,
+                force.override_state.as_state(),
+                force.presentation
+            ),
+            (EngineAction::None, &OverrideState::None, TrayStatus::Active)
+        );
+    }
+
+    #[test]
+    fn allows_jiggles_only_for_active_permitted_modes_and_never_for_power_only() {
+        let inside = evaluation(true);
+        let outside = evaluation(false);
+        let cases = [
+            (
+                AppMode::Manual,
+                JiggleMode::MouseSubtle,
+                false,
+                true,
+                &inside,
+                OverrideState::None,
+                false,
+            ),
+            (
+                AppMode::Manual,
+                JiggleMode::MouseSubtle,
+                true,
+                false,
+                &outside,
+                OverrideState::None,
+                true,
+            ),
+            (
+                AppMode::AlwaysOn,
+                JiggleMode::MouseSubtle,
+                true,
+                true,
+                &inside,
+                OverrideState::None,
+                true,
+            ),
+            (
+                AppMode::Manual,
+                JiggleMode::MouseSubtle,
+                true,
+                true,
+                &outside,
+                OverrideState::ForceOn {
+                    until: Some(at(18) + chrono::Duration::days(1)),
+                },
+                true,
+            ),
+            (
+                AppMode::WiFi,
+                JiggleMode::MouseSubtle,
+                true,
+                true,
+                &outside,
+                OverrideState::None,
+                false,
+            ),
+            (
+                AppMode::WiFi,
+                JiggleMode::MouseSubtle,
+                true,
+                true,
+                &inside,
+                OverrideState::None,
+                true,
+            ),
+            (
+                AppMode::Manual,
+                JiggleMode::PowerOnly,
+                true,
+                false,
+                &inside,
+                OverrideState::None,
+                false,
+            ),
+        ];
+        for (mode, jiggle_mode, active, enabled, window, override_state, expected) in cases {
+            let override_state = normalized(override_state);
+            assert_eq!(
+                should_jiggle(JiggleInput {
+                    mode: &mode,
+                    jiggle_mode: &jiggle_mode,
+                    engine_active: active,
+                    schedule_enabled: enabled,
+                    window,
+                    override_state: &override_state
+                }),
+                expected
+            );
+        }
+    }
 }
