@@ -684,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_every_mode_activity_enablement_window_and_normalized_override_combination() {
+    fn derives_status_for_each_normalized_mode_activity_schedule_window_and_override_row() {
         let current = occurrence();
         for mode in [
             AppMode::Manual,
@@ -702,12 +702,19 @@ mod tests {
                                 until: Some(at(18) + chrono::Duration::days(1)),
                             },
                         ] {
-                            let normalized = normalized(override_state.clone());
+                            let window = evaluation(inside);
+                            let normalized = normalize_override(NormalizeInput {
+                                mode: &mode,
+                                schedule_enabled: enabled,
+                                window: &window,
+                                override_state: &override_state,
+                                event: LifecycleEvent::Tick,
+                            });
                             let actual = derive_tray_status(TrayInput {
                                 mode: &mode,
                                 engine_active: active,
                                 schedule_enabled: enabled,
-                                window: &evaluation(inside),
+                                window: &window,
                                 override_state: &normalized,
                             });
                             let expected = if mode == AppMode::WiFi || !enabled {
@@ -718,16 +725,18 @@ mod tests {
                                 }
                             } else if active
                                 && !inside
-                                && matches!(override_state, OverrideState::ForceOn { .. })
+                                && matches!(normalized.as_state(), OverrideState::ForceOn { .. })
                             {
                                 TrayStatus::ActiveOverride
                             } else if active {
                                 TrayStatus::Active
                             } else if inside
-                                && matches!(override_state, OverrideState::SkipWindow(_))
+                                && matches!(normalized.as_state(), OverrideState::SkipWindow(_))
                             {
                                 TrayStatus::Paused
-                            } else if !inside && matches!(override_state, OverrideState::None) {
+                            } else if !inside
+                                && matches!(normalized.as_state(), OverrideState::None)
+                            {
                                 TrayStatus::Waiting
                             } else {
                                 TrayStatus::Inactive
@@ -932,6 +941,61 @@ mod tests {
         for (mode, enabled, inside, active, override_state, event, wifi, action, status) in cases {
             let decision = decide(mode, enabled, inside, active, override_state, event, wifi);
             assert_eq!((decision.action, decision.presentation), (action, status));
+        }
+    }
+
+    #[test]
+    fn retains_valid_overrides_and_preserves_non_owned_manual_activity() {
+        let paused = decide(
+            AppMode::Manual,
+            true,
+            true,
+            false,
+            OverrideState::SkipWindow(occurrence()),
+            LifecycleEvent::Tick,
+            false,
+        );
+        assert_eq!(
+            (paused.action, paused.presentation),
+            (EngineAction::None, TrayStatus::Paused)
+        );
+
+        for event in [LifecycleEvent::Tick, LifecycleEvent::Resume] {
+            let forced = decide(
+                AppMode::AlwaysOn,
+                true,
+                false,
+                false,
+                OverrideState::ForceOn {
+                    until: Some(at(18) + chrono::Duration::days(1)),
+                },
+                event,
+                false,
+            );
+            assert_eq!(
+                (forced.action, forced.presentation),
+                (EngineAction::Start, TrayStatus::ActiveOverride)
+            );
+        }
+
+        for active in [false, true] {
+            let toggled = decide(
+                AppMode::Manual,
+                false,
+                false,
+                active,
+                OverrideState::None,
+                LifecycleEvent::TrayToggle,
+                false,
+            );
+            assert_eq!(
+                toggled.action,
+                if active {
+                    EngineAction::Stop
+                } else {
+                    EngineAction::Start
+                }
+            );
         }
     }
 
