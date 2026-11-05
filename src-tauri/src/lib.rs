@@ -458,22 +458,37 @@ mod tray_refresh_contract_tests {
         let bundle = i18n::create_bundle("en");
         let config = AppConfig::default();
         let routes = [
-            TrayRoute::Startup,
-            TrayRoute::TrayToggle,
-            TrayRoute::Hotkey,
-            TrayRoute::IpcToggle,
-            TrayRoute::Tick,
-            TrayRoute::WifiChanged { active: true },
-            TrayRoute::ConfigChanged {
-                policy_changed: false,
-            },
-            TrayRoute::ProfileLoaded {
-                policy_changed: true,
-            },
-            TrayRoute::Resume,
-            TrayRoute::Quit,
+            (TrayRoute::Startup, 0, 0, runtime::TrayStatus::Inactive),
+            (TrayRoute::TrayToggle, 1, 0, runtime::TrayStatus::Active),
+            (TrayRoute::Hotkey, 1, 0, runtime::TrayStatus::Active),
+            (TrayRoute::IpcToggle, 1, 0, runtime::TrayStatus::Active),
+            (TrayRoute::Tick, 0, 0, runtime::TrayStatus::Inactive),
+            (
+                TrayRoute::WifiChanged { active: true },
+                0,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (
+                TrayRoute::ConfigChanged {
+                    policy_changed: false,
+                },
+                0,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (
+                TrayRoute::ProfileLoaded {
+                    policy_changed: true,
+                },
+                0,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (TrayRoute::Resume, 0, 0, runtime::TrayStatus::Inactive),
+            (TrayRoute::Quit, 0, 0, runtime::TrayStatus::Inactive),
         ];
-        for route in routes {
+        for (route, starts, stops, status) in routes {
             let mut supervisor = runtime::Supervisor::new();
             let mut backend = RecordingBackend::default();
             let mut sink = RecordingSink::default();
@@ -490,7 +505,9 @@ mod tray_refresh_contract_tests {
             );
             assert!(result.is_ok(), "{route:?}");
             assert_eq!(sink.calls.len(), 1, "{route:?}");
-            assert_eq!(backend.start_calls + backend.stop_calls, 0, "{route:?}");
+            assert_eq!(backend.start_calls, starts, "{route:?}");
+            assert_eq!(backend.stop_calls, stops, "{route:?}");
+            assert_eq!(sink.calls[0].1.status, status, "{route:?}");
         }
 
         let mut supervisor = runtime::Supervisor::new();
