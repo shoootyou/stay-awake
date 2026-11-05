@@ -2670,21 +2670,27 @@ mod native_wiring_contract_tests {
         let source = source();
         let handler = scoped_block(&source, ".on_menu_event(move |app, event| {");
 
-        for setter in ["mode_power", "mode_subtle", "mode_zen", "mode_circle"] {
+        for (setter, mode) in [
+            ("mode_power", "JiggleMode::PowerOnly"),
+            ("mode_subtle", "JiggleMode::MouseSubtle"),
+            ("mode_zen", "JiggleMode::MouseZen"),
+            ("mode_circle", "JiggleMode::MouseCircle"),
+        ] {
+            let setter = scoped_block(handler, &format!("\"{setter}\" => {{"));
             assert!(
-                handler.contains(setter),
-                "tray jiggle-mode setter {setter} remains in the menu handler"
+                setter.contains(mode),
+                "tray jiggle-mode setter maps its menu id to {mode}"
             );
         }
-        assert_eq!(
+        assert!(
             handler
                 .matches("runtime.update_config(ConfigOrigin::Other")
-                .count(),
-            4,
-            "each tray jiggle-mode setter commits through the runtime owner"
+                .count()
+                >= 1,
+            "tray jiggle-mode setters commit through the shared owner transaction"
         );
         assert!(
-            !handler.contains("config_for_tray.lock()")
+            !handler.contains("config.lock()")
                 && !handler.contains("*cfg =")
                 && !handler.contains("cfg.save()"),
             "tray jiggle-mode setters do not mutate the shared config directly"
