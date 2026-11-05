@@ -38,13 +38,13 @@ const expectedSelectorIds = [
   "mode-info-panel", "profile-delete-btn", "profile-save-btn", "profile-select", "recheck-btn",
   "schedule-enabled", "schedule-end", "schedule-start", "wifi-current-ssid", "wifi-details",
   "wifi-grant-location", "wifi-location-banner", "wifi-network-list", "wifi-nm-banner",
-  "wifi-register-btn", "wifi-section", "schedule-wifi-alert",
+  "schedule-wifi-alert", "wifi-register-btn", "wifi-section",
 ];
 const expectedTranslationKeys = [
   "mode-desc-circle", "mode-desc-power", "mode-desc-subtle", "mode-desc-zen", "profile-default",
-  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled", "schedule-enabled-hint", "schedule-wifi-alert",
+  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled", "schedule-enabled-hint",
   "schedule-end", "schedule-fri", "schedule-label", "schedule-mon", "schedule-sat", "schedule-start",
-  "schedule-sun", "schedule-thu", "schedule-tue", "schedule-wed", "settings-accessibility-banner",
+  "schedule-sun", "schedule-thu", "schedule-tue", "schedule-wed", "schedule-wifi-alert", "settings-accessibility-banner",
   "settings-app-mode-label", "settings-autostart-label", "settings-grant-btn", "settings-hotkey-hint",
   "settings-hotkey-label", "settings-hotkey-recording", "settings-interval-label", "settings-language-label",
   "settings-mode-info-label", "settings-mode-label", "settings-title", "settings-wifi-current", "settings-wifi-disconnected",

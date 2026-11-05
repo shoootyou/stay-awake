@@ -181,7 +181,7 @@ test("places Launch at Login first without CSS or tabindex ordering", () => {
 });
 
 test("rejects Launch at Login order contract mutants", () => {
-  const green = swapFirstTwoGroups(settingsHtml);
+  const green = settingsHtml;
   assertSettingsOrder(green, settingsCss);
   assert.throws(() => assertSettingsOrder(swapFirstTwoGroups(green), settingsCss), /Launch at Login must occupy the first group/);
   assert.throws(() => assertSettingsOrder(green.replace('id="app-mode-desc"', 'id="detached-desc"'), settingsCss), /description/);
