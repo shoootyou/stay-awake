@@ -2046,4 +2046,183 @@ mod tests {
         assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
         stop_owner_loop(&sender, owner);
     }
+
+    fn run_unreplied_error_case(route: Option<TrayRoute>) -> Vec<String> {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let sink_errors = errors.clone();
+        let mode = if route.is_some() {
+            crate::config::AppMode::Manual
+        } else {
+            crate::config::AppMode::AlwaysOn
+        };
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                AppConfig {
+                    mode,
+                    ..AppConfig::default()
+                },
+                Arc::new(FixedClock(
+                    Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                        .single()
+                        .expect("fixed instant exists"),
+                )),
+                Box::new(FailingStartBackend {
+                    active: Arc::new(Mutex::new(false)),
+                    starts: Arc::new(Mutex::new(0)),
+                    failures_remaining: 1,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: sink_errors,
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource {
+                    samples: steady_time_samples(12),
+                },
+            )
+        });
+
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        if let Some(route) = route {
+            sender
+                .send(OwnerCommand::Route { route, reply: None })
+                .expect("unreplied route reaches the owner loop");
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(route),
+                "the requested no-reply route is processed"
+            );
+        }
+        stop_owner_loop(&sender, owner);
+        let captured = errors.lock().expect("test sink error lock").clone();
+        captured
+    }
+
+    #[test]
+    fn owner_reports_startup_and_no_reply_tray_hotkey_errors_once() {
+        let startup_errors = run_unreplied_error_case(None);
+        let tray_errors = run_unreplied_error_case(Some(TrayRoute::TrayToggle));
+        let hotkey_errors = run_unreplied_error_case(Some(TrayRoute::Hotkey));
+
+        assert_eq!(startup_errors, vec!["backend start failed"]);
+        assert_eq!(tray_errors, vec!["backend start failed"]);
+        assert_eq!(hotkey_errors, vec!["backend start failed"]);
+    }
+
+    #[test]
+    fn owner_coalesces_identical_tick_errors_until_a_success_clears_them() {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let sink_errors = errors.clone();
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                AppConfig::default(),
+                Arc::new(FixedClock(
+                    Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                        .single()
+                        .expect("fixed instant exists"),
+                )),
+                Box::new(SharedRecordingBackend {
+                    calls: Arc::new(Mutex::new(Vec::new())),
+                    active: Arc::new(Mutex::new(false)),
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: sink_errors,
+                    tick_results: Arc::new(Mutex::new(VecDeque::from([
+                        Err("tray enqueue failed".to_owned()),
+                        Err("tray enqueue failed".to_owned()),
+                        Ok(()),
+                        Err("tray enqueue failed".to_owned()),
+                    ]))),
+                }),
+                &mut ScriptedTimeSource {
+                    samples: steady_time_samples(16),
+                },
+            )
+        });
+
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        for _ in 0..4 {
+            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        }
+        stop_owner_loop(&sender, owner);
+        assert_eq!(
+            *errors.lock().expect("test sink error lock"),
+            vec![
+                "tray enqueue failed".to_owned(),
+                "tray enqueue failed".to_owned(),
+            ],
+            "the first and post-success automatic failures report, but the duplicate does not"
+        );
+    }
+
+    #[test]
+    fn owner_returns_explicit_request_errors_without_reporting_them_to_the_sink() {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let sink_errors = errors.clone();
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                AppConfig::default(),
+                Arc::new(FixedClock(
+                    Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                        .single()
+                        .expect("fixed instant exists"),
+                )),
+                Box::new(FailingStartBackend {
+                    active: Arc::new(Mutex::new(false)),
+                    starts: Arc::new(Mutex::new(0)),
+                    failures_remaining: 1,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: sink_errors,
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource {
+                    samples: steady_time_samples(12),
+                },
+            )
+        });
+
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        let (reply, reply_receiver) = mpsc::channel();
+        sender
+            .send(OwnerCommand::Route {
+                route: TrayRoute::TrayToggle,
+                reply: Some(reply),
+            })
+            .expect("explicit request reaches the owner loop");
+        assert_eq!(
+            routes.recv_timeout(REQUEST_TIMEOUT),
+            Ok(TrayRoute::TrayToggle)
+        );
+        assert_eq!(
+            reply_receiver
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("explicit request reply arrives")
+                .error,
+            Some("backend start failed".to_owned()),
+            "the waiting caller receives its operation error"
+        );
+        stop_owner_loop(&sender, owner);
+        assert!(
+            errors.lock().expect("test sink error lock").is_empty(),
+            "an explicit request error must not be duplicated into unattended diagnostics"
+        );
+    }
 }
