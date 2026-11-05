@@ -2843,7 +2843,7 @@ mod tests {
             .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
             .single()
             .expect("fixed instant exists");
-        let samples = VecDeque::from([
+        let mut samples = VecDeque::from([
             TimeSample {
                 wall,
                 monotonic: base,
@@ -2852,7 +2852,7 @@ mod tests {
             TimeSample {
                 wall: wall + chrono::Duration::milliseconds(250),
                 monotonic: base + Duration::from_millis(250),
-                offset_seconds: 3600,
+                offset_seconds: 0,
             },
             TimeSample {
                 wall: wall + chrono::Duration::milliseconds(500),
@@ -2865,6 +2865,7 @@ mod tests {
                 offset_seconds: 3600,
             },
         ]);
+        samples.extend(steady_time_samples(8));
         let owner = thread::spawn(move || {
             owner_loop_with_time_source(
                 receiver,
