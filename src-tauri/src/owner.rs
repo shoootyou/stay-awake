@@ -582,6 +582,8 @@ pub(crate) fn owner_loop_with_time_sources(
     let mut configuration_fault = false;
     let mut last_automatic_error = None;
     let mut before_wait = time_source.sample(clock.as_ref());
+    let mut last_observed_offset = before_wait.offset_seconds;
+    let mut pending_resume = false;
     loop {
         let now = monotonic_clock.now();
         let closing = shared
@@ -589,10 +591,12 @@ pub(crate) fn owner_loop_with_time_sources(
             .is_none_or(|state| state.closing.load(Ordering::Acquire));
         if deadline_due(now, next_tick) && !closing {
             let after_wait = time_source.sample(clock.as_ref());
-            let route = if detect_time_change(TimeChangeInput {
-                previous: &before_wait,
-                current: &after_wait,
-            }) {
+            last_observed_offset = after_wait.offset_seconds;
+            let route = if pending_resume
+                || detect_time_change(TimeChangeInput {
+                    previous: &before_wait,
+                    current: &after_wait,
+                }) {
                 TrayRoute::Resume
             } else {
                 TrayRoute::Tick
@@ -616,8 +620,11 @@ pub(crate) fn owner_loop_with_time_sources(
                 )
             };
             report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
+            pending_resume = false;
             next_tick = monotonic_clock.now() + SUPERVISOR_PERIOD;
             before_wait = time_source.sample(clock.as_ref());
+            pending_resume |= last_observed_offset != before_wait.offset_seconds;
+            last_observed_offset = before_wait.offset_seconds;
             continue;
         }
         let wait = next_tick.saturating_duration_since(now);
@@ -627,13 +634,15 @@ pub(crate) fn owner_loop_with_time_sources(
                 let closing = shared
                     .upgrade()
                     .is_none_or(|state| state.closing.load(Ordering::Acquire));
-                let offset_changed = before_wait.offset_seconds != after_wait.offset_seconds;
+                let offset_changed = last_observed_offset != after_wait.offset_seconds;
+                last_observed_offset = after_wait.offset_seconds;
                 if !closing
                     && !offset_changed
-                    && detect_time_change(TimeChangeInput {
-                        previous: &before_wait,
-                        current: &after_wait,
-                    })
+                    && (pending_resume
+                        || detect_time_change(TimeChangeInput {
+                            previous: &before_wait,
+                            current: &after_wait,
+                        }))
                 {
                     let result = if configuration_fault {
                         observe_configuration_fault(
@@ -654,6 +663,7 @@ pub(crate) fn owner_loop_with_time_sources(
                         )
                     };
                     report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
+                    pending_resume = false;
                 }
                 match command {
                     OwnerCommand::Query { reply } => {
@@ -905,19 +915,24 @@ pub(crate) fn owner_loop_with_time_sources(
                         )
                     };
                     report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
+                    pending_resume = false;
                 }
                 before_wait = time_source.sample(clock.as_ref());
+                pending_resume |= last_observed_offset != before_wait.offset_seconds;
+                last_observed_offset = before_wait.offset_seconds;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let after_wait = time_source.sample(clock.as_ref());
+                last_observed_offset = after_wait.offset_seconds;
                 let closing = shared
                     .upgrade()
                     .is_none_or(|state| state.closing.load(Ordering::Acquire));
                 if !closing {
-                    let route = if detect_time_change(TimeChangeInput {
-                        previous: &before_wait,
-                        current: &after_wait,
-                    }) {
+                    let route = if pending_resume
+                        || detect_time_change(TimeChangeInput {
+                            previous: &before_wait,
+                            current: &after_wait,
+                        }) {
                         TrayRoute::Resume
                     } else {
                         TrayRoute::Tick
@@ -941,9 +956,12 @@ pub(crate) fn owner_loop_with_time_sources(
                         )
                     };
                     report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
+                    pending_resume = false;
                 }
                 next_tick = monotonic_clock.now() + SUPERVISOR_PERIOD;
                 before_wait = time_source.sample(clock.as_ref());
+                pending_resume |= last_observed_offset != before_wait.offset_seconds;
+                last_observed_offset = before_wait.offset_seconds;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let reply = route_reply(
