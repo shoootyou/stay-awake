@@ -3561,9 +3561,11 @@ mod native_wiring_contract_tests {
         let regular_policy = regular
             .find("setActivationPolicy(")
             .expect("Regular policy is set");
+        assert!(regular.contains("#[allow(deprecated)]"), "legacy activation is explicitly scoped");
+        assert!(!regular.contains(".activate()"), "bare macOS 14 activation is forbidden");
         let activate = regular
-            .find(".activate()")
-            .expect("Regular app activates itself");
+            .find("activateIgnoringOtherApps(true)")
+            .expect("Regular app activates on macOS 12+");
         assert!(
             regular_policy < activate,
             "activation follows the Regular policy change"
@@ -3574,8 +3576,9 @@ mod native_wiring_contract_tests {
                 opener.contains("set_macos_regular_app();"),
                 "{name} activates before window work"
             );
+            let existing = scoped_block(opener, "if let Some(win)");
             assert!(
-                opener.contains(".show();") && opener.find(".show()") < opener.find("set_focus()"),
+                existing.contains(".show();") && existing.find(".show()") < existing.find("set_focus()"),
                 "existing {name} window shows before focus"
             );
             assert!(
@@ -3589,7 +3592,7 @@ mod native_wiring_contract_tests {
                 "{name} build failures remain logged"
             );
             assert!(
-                !opener.contains("Accessory"),
+                !opener.to_ascii_lowercase().contains("accessory"),
                 "{name} never resets macOS to Accessory"
             );
         }
