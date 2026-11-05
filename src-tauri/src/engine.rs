@@ -57,6 +57,7 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
 
 #[cfg(test)]
 mod phase_one_contract {
+    use crate::config::JiggleMode;
     /*
      * @spec-handoff
      * @interface evaluate_schedule(schedule, clock) -> ScheduleResult; decide_lifecycle(input) -> Decision
@@ -185,20 +186,44 @@ mod phase_one_contract {
         sink.push(route);
     }
 
+    // Failure controls are read by the production supervisor after promotion.
+    #[allow(dead_code)]
     #[derive(Default)]
     struct FakeBackend {
         acquires: usize,
         releases: usize,
         mouse_calls: usize,
         active: bool,
+        fail_start: bool,
+        fail_release: bool,
+        cleanup_error: bool,
+    }
+
+    #[derive(Default)]
+    struct FakeClock {
+        elapsed_ms: u64,
+    }
+    impl FakeClock {
+        fn advance_250ms(&mut self) {
+            self.elapsed_ms += 250;
+        }
+    }
+    // Failed-start state prevents periodic retries in the promoted supervisor.
+    #[allow(dead_code)]
+    #[derive(Default)]
+    struct Supervisor {
+        owns_inhibitor: bool,
+        failed_start: bool,
     }
 
     fn reconcile_supervisor(
+        _: &mut Supervisor,
+        _: &FakeClock,
         _: &mut FakeBackend,
         _: ScheduleResult,
         _: Override,
-        _: u64,
-        _: bool,
+        _: Event,
+        _: JiggleMode,
     ) -> Result<Presentation, &'static str> {
         Ok(Presentation::Inactive)
     }
@@ -550,45 +575,280 @@ mod phase_one_contract {
         );
     }
 
-    #[test]
-    fn supervisor_reconciles_idle_windows_independently_of_jiggle_interval() {
-        let mut backend = FakeBackend::default();
-        let inside = ScheduleResult {
-            in_window: true,
-            next_start: None,
-        };
-        assert_eq!(
-            reconcile_supervisor(&mut backend, inside, Override::None, 300, false),
-            Ok(Presentation::Active)
-        );
-        assert_eq!(backend.acquires, 1, "opening a window acquires once");
-        assert!(backend.active);
-        assert_eq!(
-            reconcile_supervisor(&mut backend, inside, Override::None, 300, false),
-            Ok(Presentation::Active)
-        );
-        assert_eq!(backend.acquires, 1, "repeated reconciliation is a no-op");
+    fn reconcile(
+        s: &mut Supervisor,
+        c: &FakeClock,
+        b: &mut FakeBackend,
+        inside: bool,
+        over: Override,
+        event: Event,
+        mode: JiggleMode,
+    ) -> Result<Presentation, &'static str> {
+        reconcile_supervisor(
+            s,
+            c,
+            b,
+            ScheduleResult {
+                in_window: inside,
+                next_start: Some(540),
+            },
+            over,
+            event,
+            mode,
+        )
     }
 
     #[test]
-    fn supervisor_releases_on_close_and_power_only_never_calls_mouse() {
-        let mut backend = FakeBackend {
-            active: true,
-            ..FakeBackend::default()
-        };
-        let outside = ScheduleResult {
-            in_window: false,
-            next_start: Some(9 * 60),
-        };
+    fn idle_supervisor_starts_next_window_within_one_250ms_step_despite_300_second_interval() {
+        let (mut s, mut c, mut b) = (
+            Supervisor::default(),
+            FakeClock::default(),
+            FakeBackend::default(),
+        );
+        c.advance_250ms();
         assert_eq!(
-            reconcile_supervisor(&mut backend, outside, Override::None, 300, true),
+            reconcile(
+                &mut s,
+                &c,
+                &mut b,
+                true,
+                Override::None,
+                Event::WindowBoundary,
+                JiggleMode::MouseSubtle
+            ),
+            Ok(Presentation::Active)
+        );
+        assert_eq!(b.acquires, 1);
+    }
+    #[test]
+    fn window_close_releases_once_and_publishes_waiting() {
+        let (mut s, c, mut b) = (
+            Supervisor {
+                owns_inhibitor: true,
+                ..Supervisor::default()
+            },
+            FakeClock::default(),
+            FakeBackend {
+                active: true,
+                ..FakeBackend::default()
+            },
+        );
+        assert_eq!(
+            reconcile(
+                &mut s,
+                &c,
+                &mut b,
+                false,
+                Override::None,
+                Event::WindowBoundary,
+                JiggleMode::MouseSubtle
+            ),
             Ok(Presentation::Waiting)
         );
-        assert_eq!(
-            backend.releases, 1,
-            "window close releases even after worker cleanup error"
+        assert_eq!(b.releases, 1);
+    }
+    #[test]
+    fn unchanged_reconciliation_does_not_reacquire_or_release() {
+        let (mut s, c, mut b) = (
+            Supervisor::default(),
+            FakeClock::default(),
+            FakeBackend::default(),
         );
-        assert_eq!(backend.mouse_calls, 0, "PowerOnly has no mouse action");
+        let _ = reconcile(
+            &mut s,
+            &c,
+            &mut b,
+            true,
+            Override::None,
+            Event::WindowBoundary,
+            JiggleMode::MouseSubtle,
+        );
+        let a = b.acquires;
+        let r = b.releases;
+        let _ = reconcile(
+            &mut s,
+            &c,
+            &mut b,
+            true,
+            Override::None,
+            Event::WindowBoundary,
+            JiggleMode::MouseSubtle,
+        );
+        assert_eq!((b.acquires, b.releases), (a, r));
+    }
+    #[test]
+    fn force_on_crossing_next_start_keeps_running_without_reacquisition() {
+        let (mut s, c, mut b) = (
+            Supervisor {
+                owns_inhibitor: true,
+                ..Supervisor::default()
+            },
+            FakeClock::default(),
+            FakeBackend {
+                active: true,
+                acquires: 1,
+                ..FakeBackend::default()
+            },
+        );
+        assert_eq!(
+            reconcile(
+                &mut s,
+                &c,
+                &mut b,
+                true,
+                Override::ForceOn,
+                Event::WindowBoundary,
+                JiggleMode::MouseSubtle
+            ),
+            Ok(Presentation::Active)
+        );
+        assert_eq!(b.acquires, 1);
+    }
+    #[test]
+    fn skip_window_expires_at_end_and_engine_stays_idle() {
+        let (mut s, c, mut b) = (
+            Supervisor::default(),
+            FakeClock::default(),
+            FakeBackend::default(),
+        );
+        assert_eq!(
+            reconcile(
+                &mut s,
+                &c,
+                &mut b,
+                false,
+                Override::SkipWindow,
+                Event::WindowBoundary,
+                JiggleMode::MouseSubtle
+            ),
+            Ok(Presentation::Waiting)
+        );
+        assert!(!b.active);
+    }
+    #[test]
+    fn failed_start_stays_inactive_without_retrying_each_tick() {
+        let (mut s, c, mut b) = (
+            Supervisor::default(),
+            FakeClock::default(),
+            FakeBackend {
+                fail_start: true,
+                ..FakeBackend::default()
+            },
+        );
+        assert!(reconcile(
+            &mut s,
+            &c,
+            &mut b,
+            true,
+            Override::None,
+            Event::WindowBoundary,
+            JiggleMode::MouseSubtle
+        )
+        .is_err());
+        let n = b.acquires;
+        let _ = reconcile(
+            &mut s,
+            &c,
+            &mut b,
+            true,
+            Override::None,
+            Event::WindowBoundary,
+            JiggleMode::MouseSubtle,
+        );
+        assert_eq!(b.acquires, n);
+    }
+    #[test]
+    fn failed_stop_keeps_ownership_and_does_not_publish_waiting() {
+        let (mut s, c, mut b) = (
+            Supervisor {
+                owns_inhibitor: true,
+                ..Supervisor::default()
+            },
+            FakeClock::default(),
+            FakeBackend {
+                active: true,
+                fail_release: true,
+                ..FakeBackend::default()
+            },
+        );
+        assert!(reconcile(
+            &mut s,
+            &c,
+            &mut b,
+            false,
+            Override::None,
+            Event::WindowBoundary,
+            JiggleMode::MouseSubtle
+        )
+        .is_err());
+        assert!(s.owns_inhibitor);
+    }
+    #[test]
+    fn stop_attempts_release_after_worker_cleanup_error() {
+        let (mut s, c, mut b) = (
+            Supervisor {
+                owns_inhibitor: true,
+                ..Supervisor::default()
+            },
+            FakeClock::default(),
+            FakeBackend {
+                active: true,
+                cleanup_error: true,
+                ..FakeBackend::default()
+            },
+        );
+        let _ = reconcile(
+            &mut s,
+            &c,
+            &mut b,
+            false,
+            Override::None,
+            Event::WindowBoundary,
+            JiggleMode::MouseSubtle,
+        );
+        assert_eq!(b.releases, 1);
+    }
+    #[test]
+    fn power_only_follows_lifecycle_without_mouse_calls() {
+        let (mut s, c, mut b) = (
+            Supervisor::default(),
+            FakeClock::default(),
+            FakeBackend::default(),
+        );
+        assert_eq!(
+            reconcile(
+                &mut s,
+                &c,
+                &mut b,
+                true,
+                Override::None,
+                Event::WindowBoundary,
+                JiggleMode::PowerOnly
+            ),
+            Ok(Presentation::Active)
+        );
+        assert_eq!(b.mouse_calls, 0);
+    }
+    #[test]
+    fn resume_past_entire_window_does_not_replay_missed_start() {
+        let (mut s, c, mut b) = (
+            Supervisor::default(),
+            FakeClock::default(),
+            FakeBackend::default(),
+        );
+        assert_eq!(
+            reconcile(
+                &mut s,
+                &c,
+                &mut b,
+                false,
+                Override::None,
+                Event::Resume,
+                JiggleMode::MouseSubtle
+            ),
+            Ok(Presentation::Waiting)
+        );
+        assert_eq!(b.acquires, 0);
     }
 }
 
