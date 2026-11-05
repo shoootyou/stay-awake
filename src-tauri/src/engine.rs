@@ -142,6 +142,28 @@ mod phase_one_contract {
     fn derive_tray_status(_: Mode, _: bool, _: bool, _: bool, _: Override) -> Presentation {
         Presentation::Inactive
     }
+    #[derive(Debug, Eq, PartialEq)]
+    struct TrayPresentation {
+        state: Presentation,
+        menu_key: &'static str,
+        tooltip_key: &'static str,
+        icon_id: &'static str,
+    }
+    fn derive_tray_presentation(
+        mode: Mode,
+        active: bool,
+        enabled: bool,
+        in_window: bool,
+        override_state: Override,
+    ) -> TrayPresentation {
+        let state = derive_tray_status(mode, active, enabled, in_window, override_state);
+        TrayPresentation {
+            state,
+            menu_key: "tray-start",
+            tooltip_key: "tray-tooltip-inactive",
+            icon_id: "inactive",
+        }
+    }
     fn should_jiggle(_: Mode, _: bool, _: bool, _: bool, _: Override) -> bool {
         false
     }
@@ -322,6 +344,92 @@ mod phase_one_contract {
                 derive_tray_status(mode, active, enabled, in_window, override_state),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn tray_presentation_enumerates_all_five_input_combinations_against_independent_reference() {
+        fn expected(
+            mode: Mode,
+            active: bool,
+            enabled: bool,
+            in_window: bool,
+            override_state: Override,
+        ) -> Presentation {
+            match effective_reference_mode(mode) {
+                Mode::WiFi => {
+                    if active {
+                        Presentation::Active
+                    } else {
+                        Presentation::Inactive
+                    }
+                }
+                Mode::Manual | Mode::AlwaysOn => match (active, enabled, in_window, override_state)
+                {
+                    (true, false, _, _)
+                    | (true, true, _, Override::None | Override::SkipWindow) => {
+                        Presentation::Active
+                    }
+                    (true, true, false, Override::ForceOn) => Presentation::ActiveOverride,
+                    (false, true, true, Override::SkipWindow) => Presentation::Paused,
+                    (false, true, false, Override::None) => Presentation::Waiting,
+                    _ => Presentation::Inactive,
+                },
+                Mode::Scheduled => unreachable!(),
+            }
+        }
+        fn effective_reference_mode(mode: Mode) -> Mode {
+            if mode == Mode::Scheduled {
+                Mode::Manual
+            } else {
+                mode
+            }
+        }
+        for mode in [Mode::Manual, Mode::AlwaysOn, Mode::WiFi, Mode::Scheduled] {
+            for active in [false, true] {
+                for enabled in [false, true] {
+                    for in_window in [false, true] {
+                        for override_state in
+                            [Override::None, Override::SkipWindow, Override::ForceOn]
+                        {
+                            let actual = derive_tray_presentation(
+                                mode,
+                                active,
+                                enabled,
+                                in_window,
+                                override_state,
+                            );
+                            let state = expected(mode, active, enabled, in_window, override_state);
+                            let (menu_key, tooltip_key, icon_id) = match state {
+                                Presentation::Active => {
+                                    ("tray-running", "tray-tooltip-active", "active")
+                                }
+                                Presentation::Inactive => {
+                                    ("tray-start", "tray-tooltip-inactive", "inactive")
+                                }
+                                Presentation::Waiting => {
+                                    ("tray-waiting", "tray-tooltip-waiting", "waiting")
+                                }
+                                Presentation::Paused => {
+                                    ("tray-paused", "tray-tooltip-paused", "inactive")
+                                }
+                                Presentation::ActiveOverride => {
+                                    ("tray-active-override", "tray-tooltip-override", "active")
+                                }
+                            };
+                            assert_eq!(
+                                actual,
+                                TrayPresentation {
+                                    state,
+                                    menu_key,
+                                    tooltip_key,
+                                    icon_id
+                                }
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
