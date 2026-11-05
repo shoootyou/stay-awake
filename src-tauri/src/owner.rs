@@ -1909,6 +1909,206 @@ mod tests {
     }
 
     #[test]
+    fn owner_loop_reconciles_resume_before_commands_that_wake_a_discontinuous_wait() {
+        for command in ["query", "wifi", "toggle"] {
+            let (sender, receiver) = mpsc::channel();
+            let shared = owner_loop_shared(sender.clone());
+            let (route_sender, routes) = mpsc::channel();
+            let starts = Arc::new(Mutex::new(0));
+            let backend_starts = starts.clone();
+            let base = Instant::now();
+            let wall = Utc
+                .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists");
+            let samples = VecDeque::from([
+                TimeSample {
+                    wall,
+                    monotonic: base,
+                    offset_seconds: 0,
+                },
+                TimeSample {
+                    wall: wall + chrono::Duration::seconds(6),
+                    monotonic: base + Duration::from_millis(250),
+                    offset_seconds: 0,
+                },
+                TimeSample {
+                    wall: wall + chrono::Duration::seconds(6) + chrono::Duration::milliseconds(250),
+                    monotonic: base + Duration::from_millis(500),
+                    offset_seconds: 0,
+                },
+                TimeSample {
+                    wall: wall + chrono::Duration::seconds(6) + chrono::Duration::milliseconds(500),
+                    monotonic: base + Duration::from_millis(750),
+                    offset_seconds: 0,
+                },
+                TimeSample {
+                    wall: wall + chrono::Duration::seconds(6) + chrono::Duration::milliseconds(750),
+                    monotonic: base + Duration::from_secs(1),
+                    offset_seconds: 0,
+                },
+            ]);
+            let owner = thread::spawn(move || {
+                owner_loop_with_time_source(
+                    receiver,
+                    Arc::downgrade(&shared),
+                    scheduled_active_config(),
+                    Arc::new(FixedClock(wall)),
+                    Box::new(FailingStartBackend {
+                        active: Arc::new(Mutex::new(false)),
+                        starts: backend_starts,
+                        failures_remaining: 1,
+                    }),
+                    Box::new(RouteSink {
+                        routes: route_sender,
+                        errors: Arc::new(Mutex::new(Vec::new())),
+                        tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                    }),
+                    &mut ScriptedTimeSource { samples },
+                )
+            });
+
+            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+            let query_reply = match command {
+                "query" => {
+                    let (reply, reply_receiver) = mpsc::channel();
+                    sender
+                        .send(OwnerCommand::Query { reply })
+                        .expect("query wakes the owner wait");
+                    Some(reply_receiver)
+                }
+                "wifi" => {
+                    sender
+                        .send(OwnerCommand::Wifi {
+                            observation: WifiObservation {
+                                ssid: Some("Office".to_owned()),
+                            },
+                            reply: None,
+                        })
+                        .expect("WiFi observation wakes the owner wait");
+                    None
+                }
+                "toggle" => {
+                    sender
+                        .send(OwnerCommand::Route {
+                            route: TrayRoute::TrayToggle,
+                            reply: None,
+                        })
+                        .expect("toggle wakes the owner wait");
+                    None
+                }
+                _ => unreachable!("the test enumerates supported command wakes"),
+            };
+
+            assert_eq!(
+                routes
+                    .recv_timeout(REQUEST_TIMEOUT)
+                    .expect("a discontinuity is reconciled before the woken command"),
+                TrayRoute::Resume,
+                "{command} must not discard a suspend-like discontinuity"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                2,
+                "Resume retries the failed scheduled start after a {command} wake"
+            );
+            if let Some(reply) = query_reply {
+                assert!(
+                    reply
+                        .recv_timeout(REQUEST_TIMEOUT)
+                        .expect("query reply arrives after Resume")
+                        .snapshot
+                        .is_some(),
+                    "Query still returns the reconciled snapshot"
+                );
+            }
+            stop_owner_loop(&sender, owner);
+        }
+    }
+
+    #[test]
+    fn owner_loop_retains_an_offset_change_observed_after_command_processing() {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let (entered, entered_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let samples = VecDeque::from([
+            TimeSample {
+                wall,
+                monotonic: base,
+                offset_seconds: 0,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(250),
+                monotonic: base + Duration::from_millis(250),
+                offset_seconds: 3600,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(500),
+                monotonic: base + Duration::from_millis(500),
+                offset_seconds: 3600,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(750),
+                monotonic: base + Duration::from_millis(750),
+                offset_seconds: 3600,
+            },
+        ]);
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_source(
+                receiver,
+                Arc::downgrade(&shared),
+                scheduled_active_config(),
+                Arc::new(FixedClock(wall)),
+                Box::new(BlockingFailingStartBackend {
+                    entered,
+                    release: release_receiver,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: Arc::new(Mutex::new(Vec::new())),
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource { samples },
+            )
+        });
+
+        entered_receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("startup enters the controlled backend call");
+        release.send(()).expect("startup backend call releases");
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        sender
+            .send(OwnerCommand::Route {
+                route: TrayRoute::TrayToggle,
+                reply: None,
+            })
+            .expect("toggle reaches the owner loop");
+        entered_receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("toggle enters the controlled backend call");
+        release.send(()).expect("toggle backend call releases");
+        assert_eq!(
+            routes.recv_timeout(REQUEST_TIMEOUT),
+            Ok(TrayRoute::TrayToggle)
+        );
+        assert_eq!(
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("post-processing reconciliation arrives"),
+            TrayRoute::Resume,
+            "an offset change during backend processing must survive until the next reconciliation"
+        );
+        stop_owner_loop(&sender, owner);
+    }
+
+    #[test]
     fn owner_loop_retries_a_latched_start_after_a_forward_wall_clock_jump() {
         let mut samples = steady_time_samples(2);
         let base = Instant::now();
