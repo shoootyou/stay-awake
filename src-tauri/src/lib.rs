@@ -3631,8 +3631,12 @@ mod native_wiring_contract_tests {
             "the app-mode line has its own disabled menu item"
         );
         assert!(
-            compact_setup.contains("&toggle_item,&toggle_hint,&mode_info,&sep1,"),
-            "the app-mode line is third, before the first separator"
+            setup.contains("let sep0 = PredefinedMenuItem::separator(app)?;"),
+            "the app-mode line has its own preceding separator"
+        );
+        assert!(
+            compact_setup.contains("&toggle_item,&toggle_hint,&sep0,&mode_info,&sep1,"),
+            "the app-mode line follows its separator and precedes the mode submenu"
         );
         assert!(
             !menu.contains(r#""mode_info""#),
