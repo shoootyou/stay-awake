@@ -25,6 +25,7 @@ Stay Awake is a tray utility that prevents your computer from sleeping on macOS 
 - **Mouse Circle**: traces a small square pattern, 1 pixel per step
 - **WiFi mode**: starts the engine on a registered network and stops it on disconnect
 - **Scheduling**: Manual and Always On follow scheduled windows; WiFi schedules filter mouse jiggles
+- **Tray states**: check circle for active, power ring for inactive, and calendar for waiting
 - **Profiles**: save and load named settings profiles
 - **Global hotkey**: toggle active/inactive from anywhere
 - **Idle detection**: skips jiggle while you are using the mouse

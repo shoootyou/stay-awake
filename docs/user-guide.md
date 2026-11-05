@@ -35,6 +35,15 @@ prompt — open **System Settings → Privacy & Security** and click **Open Anyw
 Click the menu bar icon to open the tray menu. Left-click and right-click both
 open the same menu.
 
+The icon shape shows the current state. A check circle means active, a power
+ring means inactive, and a calendar means waiting for a schedule. Active manual
+overrides use the check circle. A paused window uses the power ring.
+
+On macOS, the template images follow the light or dark menu bar. Linux and
+Windows use explicit state images. The tray menu text always names the state.
+On Linux, use that menu text because tooltips and native tray titles are not
+guaranteed by every implementation.
+
 ### Permissions overview
 
 | Feature | Permission needed |
@@ -168,6 +177,7 @@ You can register multiple networks. Remove one with the **×** button next to it
 ## Settings Window
 
 Open from the tray menu via **Settings**. Changes save automatically as you make them.
+Settings use icons instead of emoji prefixes.
 
 ### General
 

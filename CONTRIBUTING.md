@@ -40,6 +40,23 @@ Run the release-workflow contract tests from the repository root:
 npm ci && npm test
 ```
 
+## Icons
+
+Settings icons are inline SVGs from [Phosphor Icons](https://github.com/phosphor-icons/core).
+They are regular-weight assets under `src/icons/`, with MIT attribution in
+`src/icons/LICENSE`. The old icon font and `@phosphor-icons/web` dependency are
+not used.
+
+To add or change a Settings icon:
+
+1. Take the regular SVG from the Phosphor core repository.
+2. Add it to `src/icons/`.
+3. Inline it where it is used with `aria-hidden="true"` and `focusable="false"`.
+
+If a tray shape changes, regenerate its PNG assets and commit them. The checked-in
+PNGs were rendered from `check-circle.svg`, `power.svg`, and `calendar-blank.svg`
+with `@resvg/resvg-js` and `pngjs`; this repository has no generator script.
+
 ## Conventional Commits
 
 All commit messages must follow the
