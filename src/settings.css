@@ -635,6 +635,27 @@ header h1 svg {
   line-height: 1.4;
 }
 
+.schedule-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  background: var(--banner-bg);
+  color: var(--banner-text);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.schedule-alert svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 .wifi-location-banner .small {
   margin-left: auto;
   flex-shrink: 0;

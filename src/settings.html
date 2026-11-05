@@ -15,6 +15,13 @@
       </header>
 
       <section class="group">
+        <label class="field row">
+          <input type="checkbox" id="autostart" />
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M120,128V48a8,8,0,0,1,16,0v80a8,8,0,0,1-16,0Zm60.37-78.7a8,8,0,0,0-8.74,13.4C194.74,77.77,208,101.57,208,128a80,80,0,0,1-160,0c0-26.43,13.26-50.23,36.37-65.3a8,8,0,0,0-8.74-13.4C47.9,67.38,32,96.06,32,128a96,96,0,0,0,192,0C224,96.06,208.1,67.38,180.37,49.3Z"/></svg> <span data-i18n="settings-autostart-label">Launch at Login</span></span>
+        </label>
+      </section>
+
+      <section class="group">
         <label class="field">
           <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H40V56H216V200ZM80,84A12,12,0,1,1,68,72,12,12,0,0,1,80,84Zm40,0a12,12,0,1,1-12-12A12,12,0,0,1,120,84Z"/></svg> <span data-i18n="settings-app-mode-label">App Mode</span></span>
           <select id="app-mode">
@@ -53,13 +60,6 @@
             <span>10s</span>
             <span>300s</span>
           </span>
-        </label>
-      </section>
-
-      <section class="group">
-        <label class="field row">
-          <input type="checkbox" id="autostart" />
-          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M120,128V48a8,8,0,0,1,16,0v80a8,8,0,0,1-16,0Zm60.37-78.7a8,8,0,0,0-8.74,13.4C194.74,77.77,208,101.57,208,128a80,80,0,0,1-160,0c0-26.43,13.26-50.23,36.37-65.3a8,8,0,0,0-8.74-13.4C47.9,67.38,32,96.06,32,128a96,96,0,0,0,192,0C224,96.06,208.1,67.38,180.37,49.3Z"/></svg> <span data-i18n="settings-autostart-label">Launch at Login</span></span>
         </label>
       </section>
 
@@ -120,8 +120,12 @@
           <span class="label" data-i18n="schedule-enabled">Enable schedule</span>
         </label>
         <p id="schedule-enabled-hint" class="field-hint" data-i18n="schedule-enabled-hint">
-          Automatically starts and stops in Manual and Always On. In WiFi mode, only mouse jiggles follow the schedule.
+          Automatically starts and stops the engine with the schedule.
         </p>
+        <div id="schedule-wifi-alert" class="schedule-alert" role="status" hidden>
+          <svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M236.8,188.09,149.35,36.22h0a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM222.93,203.8a8.5,8.5,0,0,1-7.48,4.2H40.55a8.5,8.5,0,0,1-7.48-4.2,7.59,7.59,0,0,1,0-7.72L120.52,44.21a8.75,8.75,0,0,1,15,0l87.45,151.87A7.59,7.59,0,0,1,222.93,203.8ZM120,144V104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,180Z"/></svg>
+          <span data-i18n="schedule-wifi-alert">In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.</span>
+        </div>
         <div class="field schedule-times">
           <label class="time-field">
             <span class="label-sm" data-i18n="schedule-start">Start time</span>

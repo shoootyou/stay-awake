@@ -42,7 +42,8 @@ settings-mode-info-label = 마우스 움직임 모드 정보
 # 일정
 schedule-label = 일정
 schedule-enabled = 일정 활성화
-schedule-enabled-hint = 수동 및 항상 켜짐 모드에서는 일정에 따라 자동으로 시작하고 중지합니다. WiFi 모드에서는 마우스 움직임에만 일정이 적용됩니다.
+schedule-enabled-hint = 일정에 따라 엔진을 자동으로 시작하고 중지합니다.
+schedule-wifi-alert = WiFi 모드에서는 일정이 마우스 움직임만 제한하며 엔진을 시작하거나 중지하지 않습니다.
 schedule-start = 시작 시간
 schedule-end = 종료 시간
 schedule-days = 활성 요일

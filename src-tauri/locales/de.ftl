@@ -42,7 +42,8 @@ settings-mode-info-label = Über Mausbewegungsmodi
 # Zeitplan
 schedule-label = Zeitplan
 schedule-enabled = Zeitplan aktivieren
-schedule-enabled-hint = Startet und stoppt in Manuell und Immer aktiv automatisch. Im WLAN-Modus richtet sich nur die Mausbewegung nach dem Zeitplan.
+schedule-enabled-hint = Startet und stoppt die Engine automatisch nach dem Zeitplan.
+schedule-wifi-alert = Im WLAN-Modus filtert der Zeitplan nur Mausbewegungen; er startet oder stoppt die Engine nicht.
 schedule-start = Startzeit
 schedule-end = Endzeit
 schedule-days = Aktive Tage

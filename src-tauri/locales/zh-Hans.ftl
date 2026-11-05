@@ -42,7 +42,8 @@ settings-mode-info-label = 关于鼠标移动模式
 # 定时计划
 schedule-label = 定时计划
 schedule-enabled = 启用定时计划
-schedule-enabled-hint = 在手动和始终开启模式下，按计划自动启动和停止。在 WiFi 模式下，计划仅限制鼠标移动。
+schedule-enabled-hint = 按计划自动启动和停止引擎。
+schedule-wifi-alert = 在 WiFi 模式下，计划仅限制鼠标移动；不会启动或停止引擎。
 schedule-start = 开始时间
 schedule-end = 结束时间
 schedule-days = 活动日

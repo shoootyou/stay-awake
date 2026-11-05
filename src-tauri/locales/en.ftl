@@ -42,7 +42,8 @@ settings-mode-info-label = About jiggle modes
 # Scheduling
 schedule-label = Schedule
 schedule-enabled = Enable schedule
-schedule-enabled-hint = Automatically starts and stops in Manual and Always On. In WiFi mode, only mouse jiggles follow the schedule.
+schedule-enabled-hint = Automatically starts and stops the engine with the schedule.
+schedule-wifi-alert = In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.
 schedule-start = Start time
 schedule-end = End time
 schedule-days = Active days

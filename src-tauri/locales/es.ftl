@@ -42,7 +42,8 @@ settings-mode-info-label = Acerca de los modos de movimiento
 # Programacion
 schedule-label = Programacion
 schedule-enabled = Activar programacion
-schedule-enabled-hint = Inicia y detiene automáticamente en Manual y Siempre activo. En modo WiFi, el horario solo controla los movimientos del mouse.
+schedule-enabled-hint = Inicia y detiene automáticamente el motor según el horario.
+schedule-wifi-alert = En el modo WiFi, el horario solo filtra los movimientos del mouse; no inicia ni detiene el motor.
 schedule-start = Hora de inicio
 schedule-end = Hora de fin
 schedule-days = Dias activos

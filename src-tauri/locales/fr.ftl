@@ -42,7 +42,8 @@ settings-mode-info-label = À propos des modes de mouvement
 # Planification
 schedule-label = Planification
 schedule-enabled = Activer la planification
-schedule-enabled-hint = Démarre et s’arrête automatiquement en mode Manuel et Toujours actif. En mode WiFi, seuls les mouvements de souris suivent le créneau.
+schedule-enabled-hint = Démarre et arrête automatiquement le moteur selon la planification.
+schedule-wifi-alert = En mode WiFi, la planification filtre uniquement les mouvements de souris ; elle ne démarre ni n’arrête le moteur.
 schedule-start = Heure de debut
 schedule-end = Heure de fin
 schedule-days = Jours actifs

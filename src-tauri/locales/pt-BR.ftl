@@ -42,7 +42,8 @@ settings-mode-info-label = Sobre os modos de movimento
 # Agendamento
 schedule-label = Agendamento
 schedule-enabled = Ativar agendamento
-schedule-enabled-hint = Inicia e para automaticamente nos modos Manual e Sempre ativo. No modo WiFi, apenas os movimentos do mouse seguem o horário.
+schedule-enabled-hint = Inicia e para o mecanismo automaticamente conforme o agendamento.
+schedule-wifi-alert = No modo WiFi, o agendamento filtra apenas os movimentos do mouse; ele não inicia nem para o mecanismo.
 schedule-start = Hora de inicio
 schedule-end = Hora de termino
 schedule-days = Dias ativos

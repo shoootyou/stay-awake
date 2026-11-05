@@ -102,6 +102,7 @@ async function loadConfig() {
     const modeValue = supportedModes.includes(cfg.mode) ? cfg.mode : "Manual";
     document.getElementById("app-mode").value = modeValue;
     updateModeDescription();
+    updateScheduleWifiAlert(modeValue);
     document.getElementById("autostart").checked = cfg.autostart;
     document.getElementById("language").value = cfg.language;
     document.getElementById("hotkey").textContent = formatHotkeyDisplay(cfg.global_hotkey);
@@ -197,6 +198,10 @@ function updateModeDescription() {
   desc.textContent = select.value === "WiFi"
     ? wifiModeDescription()
     : (MODE_DESCRIPTIONS[select.value] || "");
+}
+
+function updateScheduleWifiAlert(mode) {
+  document.getElementById("schedule-wifi-alert").hidden = mode !== "WiFi";
 }
 
 async function autoSave() {
@@ -681,6 +686,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("interval").addEventListener("change", autoSave);
   document.getElementById("app-mode").addEventListener("change", async () => {
     const mode = document.getElementById("app-mode").value;
+    updateScheduleWifiAlert(mode);
     const wifiSection = document.getElementById("wifi-section");
 
     if (mode === "WiFi") {

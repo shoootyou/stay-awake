@@ -42,7 +42,8 @@ settings-mode-info-label = マウス操作モードについて
 # スケジュール
 schedule-label = スケジュール
 schedule-enabled = スケジュールを有効化
-schedule-enabled-hint = 手動モードと常時オンモードでは、スケジュールに従って自動的に開始・停止します。WiFiモードでは、マウス操作だけがスケジュールに従います。
+schedule-enabled-hint = スケジュールに従ってエンジンを自動的に開始・停止します。
+schedule-wifi-alert = WiFiモードでは、スケジュールはマウス操作のみを制限し、エンジンの開始・停止は行いません。
 schedule-start = 開始時刻
 schedule-end = 終了時刻
 schedule-days = 有効な曜日
