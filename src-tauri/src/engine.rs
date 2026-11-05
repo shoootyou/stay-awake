@@ -263,6 +263,14 @@ impl Engine {
     ) -> Self {
         Self::new(mouse_driver, power_inhibitor, config)
     }
+
+    #[allow(dead_code)] // skeleton: wired in boundary 3/4
+    pub(crate) fn update_config(
+        &mut self,
+        _config: crate::config::AppConfig,
+    ) -> Result<(), String> {
+        Err("engine config skeleton".to_owned())
+    }
 }
 
 impl crate::runtime::EngineBackend for Engine {
@@ -280,6 +288,10 @@ impl crate::runtime::EngineBackend for Engine {
 
     fn set_jiggle_policy(&mut self, policy: crate::runtime::JigglePolicy) {
         Engine::set_jiggle_policy(self, policy)
+    }
+
+    fn update_config(&mut self, config: crate::config::AppConfig) -> Result<(), String> {
+        Engine::update_config(self, config)
     }
 }
 

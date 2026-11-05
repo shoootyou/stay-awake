@@ -364,6 +364,9 @@ pub(crate) trait EngineBackend: Send {
     fn stop(&mut self) -> Result<(), String>;
     fn is_active(&self) -> bool;
     fn set_jiggle_policy(&mut self, policy: JigglePolicy);
+    fn update_config(&mut self, _config: AppConfig) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,6 +510,11 @@ impl Supervisor {
 
     pub(crate) fn snapshot(&self) -> Option<&RuntimeSnapshot> {
         self.last_snapshot.as_ref()
+    }
+
+    #[allow(dead_code)] // skeleton: wired in boundary 3/4
+    pub(crate) fn reset_wifi_activation(&mut self) {
+        self.wifi_active = false;
     }
 }
 

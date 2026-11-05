@@ -8,6 +8,8 @@
 mod config;
 mod engine;
 mod i18n;
+#[cfg(desktop)]
+mod owner;
 mod platform;
 mod runtime;
 mod schedule;
@@ -118,6 +120,89 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
 #[allow(dead_code)]
 pub(crate) trait TraySink {
     fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+pub(crate) struct TrayImages {
+    pub(crate) active: tauri::image::Image<'static>,
+    pub(crate) inactive: tauri::image::Image<'static>,
+    pub(crate) waiting: tauri::image::Image<'static>,
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+pub(crate) struct NativeTrayTargets {
+    pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
+    pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) images: TrayImages,
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+struct PaintMailbox {
+    pending: Option<(TrayRoute, TrayPresentation)>,
+    last_requested: Option<TrayPresentation>,
+    scheduled: bool,
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+pub(crate) struct NativeTraySink {
+    app: tauri::AppHandle,
+    targets: Arc<NativeTrayTargets>,
+    mailbox: Arc<Mutex<PaintMailbox>>,
+}
+
+#[cfg(desktop)]
+impl NativeTraySink {
+    #[allow(dead_code)] // skeleton: wired in boundary 3/4
+    pub(crate) fn new(app: tauri::AppHandle, targets: NativeTrayTargets) -> Self {
+        Self {
+            app,
+            targets: Arc::new(targets),
+            mailbox: Arc::new(Mutex::new(PaintMailbox {
+                pending: None,
+                last_requested: None,
+                scheduled: false,
+            })),
+        }
+    }
+
+    #[allow(dead_code)] // skeleton: wired in boundary 3/4
+    pub(crate) fn apply_initial(&self, _presentation: &TrayPresentation) -> Result<(), String> {
+        Err("initial native paint skeleton".to_owned())
+    }
+}
+
+#[cfg(desktop)]
+impl TraySink for NativeTraySink {
+    fn publish(
+        &mut self,
+        _route: TrayRoute,
+        _presentation: &TrayPresentation,
+    ) -> Result<(), String> {
+        Err("native tray publication skeleton".to_owned())
+    }
+}
+
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+pub(crate) struct InitialSnapshotInput<'a> {
+    pub(crate) config: &'a config::AppConfig,
+    pub(crate) clock: &'a dyn schedule::Clock,
+}
+
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+pub(crate) fn initial_runtime_snapshot(
+    _input: InitialSnapshotInput<'_>,
+) -> Result<runtime::RuntimeSnapshot, String> {
+    Err("initial snapshot skeleton".to_owned())
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+pub(crate) fn request_app_exit(_app: &tauri::AppHandle, _code: i32) -> Result<(), String> {
+    Err("app exit coordinator skeleton".to_owned())
 }
 
 // wired in E3b-2
@@ -675,8 +760,8 @@ mod tray_refresh_contract_tests {
 }
 
 /// Persist a new configuration from the frontend and sync autostart.
-#[tauri::command]
-fn save_config(
+#[tauri::command(rename = "save_config")]
+fn legacy_save_config(
     app: tauri::AppHandle,
     new_config: AppConfig,
     state: tauri::State<'_, Arc<Mutex<AppConfig>>>,
@@ -761,8 +846,8 @@ fn save_config(
 }
 
 /// Return the engine state name (`"idle"`, `"active"`, …).
-#[tauri::command]
-fn get_engine_state(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
+#[tauri::command(rename = "get_engine_state")]
+fn legacy_get_engine_state(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
     let eng = engine
         .lock()
         .map_err(|e| format!("Engine lock poisoned: {}", e))?;
@@ -770,8 +855,8 @@ fn get_engine_state(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<Stri
 }
 
 /// Toggle the engine on/off and return the new state name.
-#[tauri::command]
-fn toggle_engine(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
+#[tauri::command(rename = "toggle_engine")]
+fn legacy_toggle_engine(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
     let mut eng = engine
         .lock()
         .map_err(|e| format!("Engine lock poisoned: {}", e))?;
@@ -836,8 +921,8 @@ fn get_translation(
 }
 
 /// Replace the shared i18n bundle so the frontend can switch languages at runtime.
-#[tauri::command]
-fn set_language(
+#[tauri::command(rename = "set_language")]
+fn legacy_set_language(
     language: String,
     bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
 ) -> Result<(), String> {
@@ -902,8 +987,8 @@ fn save_profile(
 }
 
 /// Load a named profile into the current settings.
-#[tauri::command]
-fn load_profile(
+#[tauri::command(rename = "load_profile")]
+fn legacy_load_profile(
     name: String,
     config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
 ) -> Result<(), String> {
@@ -928,6 +1013,54 @@ fn load_profile(
     cfg.schedule_days = profile.schedule_days;
     cfg.active_profile = name;
     cfg.save()
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[tauri::command]
+async fn toggle_engine(_runtime: tauri::State<'_, owner::RuntimeHandle>) -> Result<String, String> {
+    Err("toggle IPC skeleton".to_owned())
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[tauri::command]
+async fn get_engine_state(
+    _runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<String, String> {
+    Err("engine state IPC skeleton".to_owned())
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[tauri::command]
+async fn save_config(
+    _app: tauri::AppHandle,
+    _new_config: AppConfig,
+    _runtime: tauri::State<'_, owner::RuntimeHandle>,
+    _monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
+) -> Result<(), String> {
+    Err("config IPC skeleton".to_owned())
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[tauri::command]
+async fn load_profile(
+    _name: String,
+    _runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<(), String> {
+    Err("profile IPC skeleton".to_owned())
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[tauri::command]
+async fn set_language(
+    _language: String,
+    _runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<(), String> {
+    Err("language IPC skeleton".to_owned())
 }
 
 /// Delete a named profile.
@@ -1314,19 +1447,19 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_config,
-            save_config,
-            get_engine_state,
-            toggle_engine,
+            legacy_save_config,
+            legacy_get_engine_state,
+            legacy_toggle_engine,
             check_accessibility,
             request_accessibility,
             get_autostart_enabled,
             set_autostart_enabled,
             close_settings_window,
             get_translation,
-            set_language,
+            legacy_set_language,
             list_profiles,
             save_profile,
-            load_profile,
+            legacy_load_profile,
             delete_profile,
             update_global_hotkey,
             get_app_version,
