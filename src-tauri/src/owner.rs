@@ -2352,6 +2352,16 @@ mod tests {
                 3,
                 "the recovered deadline path starts inactive {mode:?} exactly once"
             );
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(TrayRoute::Tick),
+                "the following deadline reconciliation is published"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                3,
+                "the following Tick does not start already active {mode:?} again"
+            );
             stop_owner_loop(&sender, owner);
         }
     }
@@ -2970,17 +2980,22 @@ mod tests {
             routes.recv_timeout(REQUEST_TIMEOUT),
             Ok(TrayRoute::TrayToggle)
         );
-        assert_eq!(
+        let automatic_routes = [
             routes
                 .recv_timeout(Duration::from_millis(500))
                 .expect("post-processing reconciliation arrives"),
-            TrayRoute::Resume,
-            "an offset change during backend processing must survive until the next reconciliation"
-        );
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("following automatic reconciliation arrives"),
+        ];
+        assert_eq!(automatic_routes, [TrayRoute::Resume, TrayRoute::Tick]);
         assert_eq!(
-            routes.recv_timeout(REQUEST_TIMEOUT),
-            Ok(TrayRoute::Tick),
-            "the next automatic reconciliation must not repeat the consumed Resume"
+            automatic_routes
+                .iter()
+                .filter(|route| **route == TrayRoute::Resume)
+                .count(),
+            1,
+            "an offset change during processing publishes exactly one Resume"
         );
         stop_owner_loop(&sender, owner);
     }
@@ -3062,15 +3077,129 @@ mod tests {
         reply_receiver
             .recv_timeout(REQUEST_TIMEOUT)
             .expect("query reply arrives");
+        let automatic_routes = [
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("queued Resume arrives"),
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("following automatic reconciliation arrives"),
+        ];
+        assert_eq!(automatic_routes, [TrayRoute::Resume, TrayRoute::Tick]);
         assert_eq!(
-            routes.recv_timeout(REQUEST_TIMEOUT),
-            Ok(TrayRoute::Resume),
+            automatic_routes
+                .iter()
+                .filter(|route| **route == TrayRoute::Resume)
+                .count(),
+            1,
             "an offset baseline change after a command queues one Resume"
         );
+        stop_owner_loop(&sender, owner);
+    }
+
+    #[test]
+    fn owner_loop_clears_pending_resume_after_an_offset_triggered_resume() {
+        let (sender, receiver) = mpsc::channel();
+        let shared = owner_loop_shared(sender.clone());
+        let (route_sender, routes) = mpsc::channel();
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let mut samples = VecDeque::from([
+            TimeSample {
+                wall,
+                monotonic: base,
+                offset_seconds: 0,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(250),
+                monotonic: base + Duration::from_millis(250),
+                offset_seconds: 0,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(500),
+                monotonic: base + Duration::from_millis(500),
+                offset_seconds: 3600,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(750),
+                monotonic: base + Duration::from_millis(750),
+                offset_seconds: 7200,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::seconds(1),
+                monotonic: base + Duration::from_secs(1),
+                offset_seconds: 7200,
+            },
+            TimeSample {
+                wall: wall + chrono::Duration::milliseconds(1250),
+                monotonic: base + Duration::from_millis(1250),
+                offset_seconds: 7200,
+            },
+        ]);
+        samples.extend((0..8).map(|index| TimeSample {
+            wall: wall + chrono::Duration::milliseconds(1500 + (index * 250) as i64),
+            monotonic: base + Duration::from_millis(1500 + (index * 250) as u64),
+            offset_seconds: 7200,
+        }));
+        let owner = thread::spawn(move || {
+            owner_loop_with_time_sources(
+                receiver,
+                Arc::downgrade(&shared),
+                scheduled_active_config(),
+                Arc::new(FixedClock(wall)),
+                Box::new(FailingStartBackend {
+                    active: Arc::new(Mutex::new(false)),
+                    starts: Arc::new(Mutex::new(0)),
+                    failures_remaining: 1,
+                }),
+                Box::new(RouteSink {
+                    routes: route_sender,
+                    errors: Arc::new(Mutex::new(Vec::new())),
+                    tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                &mut ScriptedTimeSource { samples },
+                &mut ScriptedMonotonicClock {
+                    instants: VecDeque::from([
+                        base,
+                        base + SUPERVISOR_PERIOD,
+                        base + SUPERVISOR_PERIOD,
+                        base + SUPERVISOR_PERIOD,
+                        base + (SUPERVISOR_PERIOD * 2),
+                        base + (SUPERVISOR_PERIOD * 2),
+                        base + (SUPERVISOR_PERIOD * 2),
+                    ]),
+                },
+            )
+        });
+
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        let (reply, reply_receiver) = mpsc::channel();
+        sender
+            .send(OwnerCommand::Query { reply })
+            .expect("query reaches the owner loop");
+        reply_receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("query reply arrives");
+        let following_routes = [
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("offset-triggered Resume arrives"),
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("following automatic reconciliation arrives"),
+        ];
+        assert_eq!(following_routes, [TrayRoute::Resume, TrayRoute::Tick]);
         assert_eq!(
-            routes.recv_timeout(REQUEST_TIMEOUT),
-            Ok(TrayRoute::Tick),
-            "the queued Resume is consumed before the following automatic reconciliation"
+            following_routes
+                .iter()
+                .filter(|route| **route == TrayRoute::Resume)
+                .count(),
+            1,
+            "the command wake publishes exactly one Resume"
         );
         stop_owner_loop(&sender, owner);
     }
