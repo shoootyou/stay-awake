@@ -269,10 +269,17 @@ mod tests {
     fn parses_weekday_tokens_case_insensitively_and_rejects_invalid_times() {
         let mut config = AppConfig {
             schedule_enabled: true,
+            schedule_start_hour: 0,
+            schedule_start_minute: 30,
+            schedule_end_hour: 23,
+            schedule_end_minute: 45,
             schedule_days: vec!["MON".into(), "wed".into(), "Mon".into(), "noday".into()],
             ..AppConfig::default()
         };
         let parsed = Schedule::from_config(&config).expect("valid fields parse");
+        assert!(parsed.enabled);
+        assert_eq!(parsed.start, NaiveTime::from_hms_opt(0, 30, 0).unwrap());
+        assert_eq!(parsed.end, NaiveTime::from_hms_opt(23, 45, 0).unwrap());
         assert_eq!(parsed.days, vec![Weekday::Mon, Weekday::Wed]);
         config.schedule_start_hour = 24;
         assert!(Schedule::from_config(&config).is_err());
