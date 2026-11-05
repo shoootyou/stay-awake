@@ -2897,7 +2897,9 @@ mod tray_asset_contract_tests {
                 &WINDOWS_WAITING,
             ),
         ] {
-            assert!(std::ptr::eq(tray_image_for(icon, platform), expected));
+            let actual = tray_image_for(icon, platform);
+            assert_eq!(actual.bytes, expected.bytes);
+            assert_eq!(actual.template, expected.template);
         }
     }
 
@@ -2921,12 +2923,12 @@ mod tray_asset_contract_tests {
             "impl TraySink for NativeTraySink",
         ));
         let macos = source_scope(
-            paint,
+            &paint,
             "#[cfg(target_os = \"macos\")]",
             "#[cfg(not(target_os = \"macos\"))]",
         );
         let non_macos = source_scope(
-            paint,
+            &paint,
             "#[cfg(not(target_os = \"macos\"))]",
             "if errors.is_empty",
         );
