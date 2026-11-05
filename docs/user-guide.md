@@ -181,16 +181,18 @@ Settings use icons instead of emoji prefixes.
 
 | Setting | Description |
 |---------|-------------|
-| **App Mode** | When the engine activates: Manual, Always On, or WiFi. First Settings control. |
+| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. First Settings control. |
+| **App Mode** | When the engine activates: Manual, Always On, or WiFi. Second Settings control. |
 | **Jiggle Mode** | How the engine keeps the computer awake (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 s). Default: 30 s. |
-| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. |
 | **Language** | UI display language (8 languages available). |
 | **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
 
 ### Scheduling
 
 Enable a time window and active days for automatic keep-awake. See [Scheduling](#scheduling).
+The card says the schedule starts and stops the engine. In WiFi mode, it also shows an alert
+that the schedule only filters mouse jiggles and does not start or stop the engine.
 
 ### Profiles
 
