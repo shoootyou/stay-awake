@@ -1181,4 +1181,36 @@ mod tests {
             "a failed release retains backend activity rather than deriving it from the call log"
         );
     }
+
+    #[test]
+    fn a_second_shutdown_does_not_report_exit_ready_after_a_failed_join() {
+        let (sender, _receiver) = mpsc::channel();
+        let shared = Arc::new(Shared {
+            sender,
+            config: Arc::new(Mutex::new(AppConfig::default())),
+            bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            mutations: Mutex::new(()),
+            owner: Mutex::new(Some(thread::spawn(|| Err("owner failed".to_owned())))),
+            shutdown: Mutex::new(()),
+            closing: AtomicBool::new(false),
+            alive: AtomicBool::new(false),
+            exit_ready: AtomicBool::new(false),
+            exit_coordinator_running: AtomicBool::new(false),
+        });
+        let handle = RuntimeHandle { shared };
+
+        assert_eq!(
+            handle.shutdown(SHUTDOWN_TIMEOUT),
+            Err("owner failed".to_owned()),
+            "the failed join must remain visible"
+        );
+        assert!(
+            handle.shutdown(SHUTDOWN_TIMEOUT).is_err(),
+            "a consumed failed join must not become idempotent shutdown success"
+        );
+        assert!(
+            !handle.exit_ready(),
+            "only a successfully joined owner may make exit readiness true"
+        );
+    }
 }
