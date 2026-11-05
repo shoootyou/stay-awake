@@ -117,6 +117,11 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
 
 pub(crate) trait TraySink {
     fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
+
+    /// Reports an owner operation error when no caller is waiting for a reply.
+    fn report_error(&mut self, error: &str) {
+        log::error!("runtime operation failed: {error}");
+    }
 }
 
 #[cfg(desktop)]

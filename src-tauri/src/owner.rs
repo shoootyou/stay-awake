@@ -32,6 +32,7 @@ pub(crate) struct OwnerStart {
     pub(crate) bundle: Arc<Mutex<Bundle>>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) backend_factory: BackendFactory,
+    /// Injected presentation and diagnostics sink; its default diagnostic path logs errors.
     pub(crate) sink: Box<dyn TraySink + Send>,
 }
 
@@ -450,7 +451,7 @@ fn owner_loop_with_time_source(
     let _alive = OwnerAlive(shared.clone());
     let mut supervisor = Supervisor::new();
     let mut next_tick = Instant::now() + SUPERVISOR_PERIOD;
-    let _startup = route_reply(
+    let startup = route_reply(
         TrayRoute::Startup,
         &config,
         &clock,
@@ -458,15 +459,17 @@ fn owner_loop_with_time_source(
         backend.as_mut(),
         sink.as_mut(),
     );
+    report_unreplied_error(sink.as_mut(), &startup);
     let mut last_ssid = None;
     let mut configuration_fault = false;
+    let mut last_automatic_error = None;
     loop {
         let now = Instant::now();
         let closing = shared
             .upgrade()
             .is_none_or(|state| state.closing.load(Ordering::Acquire));
         if deadline_due(now, next_tick) && !closing {
-            let _ = route_reply(
+            let result = route_reply(
                 TrayRoute::Tick,
                 &config,
                 &clock,
@@ -474,6 +477,7 @@ fn owner_loop_with_time_source(
                 backend.as_mut(),
                 sink.as_mut(),
             );
+            report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
             next_tick = Instant::now() + SUPERVISOR_PERIOD;
             continue;
         }
@@ -527,6 +531,10 @@ fn owner_loop_with_time_source(
                         let terminating = route == TrayRoute::Quit
                             && !backend.is_active()
                             && result.error.is_none();
+                        let no_reply = reply.is_none();
+                        if no_reply {
+                            report_unreplied_error(sink.as_mut(), &result);
+                        }
                         send_reply(
                             reply,
                             OwnerReply {
@@ -669,6 +677,10 @@ fn owner_loop_with_time_source(
                                 sink.as_mut(),
                             )
                         };
+                        let no_reply = reply.is_none();
+                        if no_reply {
+                            report_unreplied_error(sink.as_mut(), &result);
+                        }
                         send_reply(reply, result);
                     }
                 }
@@ -679,7 +691,7 @@ fn owner_loop_with_time_source(
                     .upgrade()
                     .is_none_or(|state| state.closing.load(Ordering::Acquire));
                 if !closing {
-                    let _ = route_reply(
+                    let result = route_reply(
                         if detect_time_change(TimeChangeInput {
                             previous: &before_wait,
                             current: &after_wait,
@@ -694,6 +706,7 @@ fn owner_loop_with_time_source(
                         backend.as_mut(),
                         sink.as_mut(),
                     );
+                    report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
                 }
                 next_tick = Instant::now() + SUPERVISOR_PERIOD;
             }
@@ -746,6 +759,27 @@ fn route_reply(
 fn send_reply(reply: Option<mpsc::Sender<OwnerReply>>, value: OwnerReply) {
     if let Some(reply) = reply {
         let _ = reply.send(value);
+    }
+}
+
+fn report_unreplied_error(sink: &mut dyn TraySink, reply: &OwnerReply) {
+    if let Some(error) = &reply.error {
+        sink.report_error(error);
+    }
+}
+
+fn report_automatic_error(
+    sink: &mut dyn TraySink,
+    last_error: &mut Option<String>,
+    reply: &OwnerReply,
+) {
+    match &reply.error {
+        Some(error) if last_error.as_deref() != Some(error) => {
+            sink.report_error(error);
+            *last_error = Some(error.clone());
+        }
+        Some(_) => {}
+        None => *last_error = None,
     }
 }
 
