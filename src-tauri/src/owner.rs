@@ -1037,6 +1037,7 @@ fn observe_configuration_fault(
         let presentation = crate::build_tray_presentation_with_schedule(
             PresentationInput {
                 snapshot,
+                mode: &config.mode,
                 bundle: &bundle,
                 locale: &config.language,
                 clock: clock.as_ref(),

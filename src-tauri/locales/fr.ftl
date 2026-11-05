@@ -22,6 +22,10 @@ tray-tooltip-paused = Stay Awake : en pause pour ce créneau
 tray-tooltip-override = Stay Awake : actif par activation manuelle
 tray-next-window = Prochain créneau : { $when }
 tray-no-next-window = Aucun créneau à venir
+tray-app-mode = Mode : { "{" } $mode { "}" }
+tray-app-mode-manual = Manuel
+tray-app-mode-always-on = Toujours actif
+tray-app-mode-wifi = WiFi
 
 # Fenetre de parametres
 settings-title = Parametres de Stay Awake

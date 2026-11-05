@@ -20,9 +20,7 @@ mod runtime;
 mod schedule;
 mod wifi;
 
-#[cfg(test)]
-use config::AppMode;
-use config::{AppConfig, JiggleMode, Profile};
+use config::{AppConfig, AppMode, JiggleMode, Profile};
 use engine::Engine;
 use i18n::Bundle as I18nBundle;
 use platform::PermissionChecker;
@@ -68,15 +66,26 @@ pub(crate) struct TrayPresentation {
     pub(crate) status: runtime::TrayStatus,
     pub(crate) menu_text: String,
     pub(crate) hint_text: String,
+    pub(crate) mode_text: String,
     pub(crate) tooltip: String,
     pub(crate) icon: runtime::TrayIcon,
 }
 
 pub(crate) struct PresentationInput<'a> {
     pub(crate) snapshot: &'a runtime::RuntimeSnapshot,
+    pub(crate) mode: &'a AppMode,
     pub(crate) bundle: &'a i18n::Bundle,
     pub(crate) locale: &'a str,
     pub(crate) clock: &'a dyn schedule::Clock,
+}
+
+fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String {
+    let mode_key = match mode {
+        AppMode::Manual | AppMode::Scheduled => "tray-app-mode-manual",
+        AppMode::AlwaysOn => "tray-app-mode-always-on",
+        AppMode::WiFi => "tray-app-mode-wifi",
+    };
+    i18n::t(bundle, "tray-app-mode").replace("{ $mode }", &i18n::t(bundle, mode_key))
 }
 
 pub(crate) fn build_tray_presentation_with_schedule(
@@ -122,6 +131,7 @@ fn build_tray_presentation_with_target(
         status,
         menu_text: menu_lines.primary,
         hint_text: menu_lines.hint,
+        mode_text: mode_menu_label(input.mode, input.bundle),
         tooltip,
         icon: status.icon(),
     }
@@ -593,6 +603,7 @@ pub(crate) struct NativeTrayTargets {
     pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
     pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
     pub(crate) hint_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) mode_item: tauri::menu::MenuItem<tauri::Wry>,
     pub(crate) images: TrayImages,
 }
 
@@ -715,6 +726,9 @@ impl TrayPaintTargets for NativeTrayTargets {
             errors.push(error.to_string());
         }
         if let Err(error) = self.hint_item.set_text(&presentation.hint_text) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.mode_item.set_text(&presentation.mode_text) {
             errors.push(error.to_string());
         }
         if let Err(error) = self.tray.set_tooltip(Some(&presentation.tooltip)) {
@@ -886,6 +900,7 @@ pub(crate) fn handle_runtime_route(
     let presentation = build_tray_presentation_with_schedule(
         PresentationInput {
             snapshot: &snapshot,
+            mode: &input.config.mode,
             bundle: input.bundle,
             locale: &input.config.language,
             clock: input.clock,
@@ -1071,6 +1086,7 @@ mod tray_refresh_contract_tests {
             status: runtime::TrayStatus::Active,
             menu_text: text.to_owned(),
             hint_text: format!("→ {text}"),
+            mode_text: text.to_owned(),
             tooltip: text.to_owned(),
             icon: runtime::TrayIcon::Active,
         }
@@ -1224,6 +1240,7 @@ mod tray_refresh_contract_tests {
             let presentation = build_tray_presentation_with_schedule(
                 PresentationInput {
                     snapshot: &state,
+                    mode: &AppMode::Manual,
                     bundle: &bundle,
                     locale: "en",
                     clock: &clock,
@@ -1260,6 +1277,7 @@ mod tray_refresh_contract_tests {
             status: runtime::TrayStatus::Waiting,
             menu_text: "Waiting for schedule".to_owned(),
             hint_text: "→ Active (manual override)".to_owned(),
+            mode_text: "Mode: Manual".to_owned(),
             tooltip: "Stay Awake: waiting for schedule (No upcoming window)".to_owned(),
             icon: runtime::TrayIcon::Waiting,
         };
@@ -1470,6 +1488,7 @@ mod tray_refresh_contract_tests {
         let english = build_tray_presentation_with_schedule(
             PresentationInput {
                 snapshot: &state,
+                mode: &AppMode::Manual,
                 bundle: &i18n::create_bundle("en"),
                 locale: "en",
                 clock: &clock,
@@ -1479,6 +1498,7 @@ mod tray_refresh_contract_tests {
         let spanish = build_tray_presentation_with_schedule(
             PresentationInput {
                 snapshot: &state,
+                mode: &AppMode::Manual,
                 bundle: &i18n::create_bundle("es"),
                 locale: "es",
                 clock: &clock,
@@ -2343,6 +2363,7 @@ pub fn run() {
             let initial_presentation = build_tray_presentation_with_schedule(
                 PresentationInput {
                     snapshot: &initial_snapshot,
+                    mode: &loaded_config.mode,
                     bundle: &bundle,
                     locale: &loaded_config.language,
                     clock: clock.as_ref(),
@@ -2415,6 +2436,8 @@ pub fn run() {
                     )?;
                 #[rustfmt::skip]
                 let toggle_hint = MenuItem::with_id(app, "toggle_hint", &initial_presentation.hint_text, false, None::<&str>)?;
+                #[rustfmt::skip]
+                let mode_info = MenuItem::with_id(app, "mode_info", &initial_presentation.mode_text, false, None::<&str>)?;
 
                 let mode_power = MenuItem::with_id(
                     app,
@@ -2485,6 +2508,7 @@ pub fn run() {
                     &[
                         &toggle_item,
                         &toggle_hint,
+                        &mode_info,
                         &sep1,
                         &mode_submenu,
                         &sep2,
@@ -2628,6 +2652,7 @@ pub fn run() {
                         tray,
                         status_item: toggle_item.clone(),
                         hint_item: toggle_hint.clone(),
+                        mode_item: mode_info.clone(),
                         images: tray_images,
                     },
                 );
@@ -3277,6 +3302,7 @@ mod native_wiring_contract_tests {
             status: runtime::TrayStatus::Inactive,
             menu_text: text.to_owned(),
             hint_text: format!("→ {text}"),
+            mode_text: text.to_owned(),
             tooltip: text.to_owned(),
             icon: runtime::TrayIcon::Inactive,
         }
@@ -3497,7 +3523,9 @@ mod native_wiring_contract_tests {
             "tray presentations retain the localized app-mode text"
         );
         assert!(
-            setup.contains(r#"MenuItem::with_id(app, "mode_info", &initial_presentation.mode_text, false"#),
+            setup.contains(
+                r#"MenuItem::with_id(app, "mode_info", &initial_presentation.mode_text, false"#
+            ),
             "the app-mode line has its own disabled menu item"
         );
         assert!(
@@ -3521,19 +3549,40 @@ mod native_wiring_contract_tests {
         let settings = scoped_block(&source, "fn show_settings_window(app: &tauri::AppHandle) {");
         let about = scoped_block(&source, "fn show_about_window(app: &tauri::AppHandle) {");
 
-        let regular_policy = regular.find("setActivationPolicy(").expect("Regular policy is set");
-        let activate = regular.find(".activate()").expect("Regular app activates itself");
-        assert!(regular_policy < activate, "activation follows the Regular policy change");
+        let regular_policy = regular
+            .find("setActivationPolicy(")
+            .expect("Regular policy is set");
+        let activate = regular
+            .find(".activate()")
+            .expect("Regular app activates itself");
+        assert!(
+            regular_policy < activate,
+            "activation follows the Regular policy change"
+        );
         for (name, opener) in [("Settings", settings), ("About", about)] {
             assert!(opener.starts_with("fn"));
-            assert!(opener.contains("set_macos_regular_app();"), "{name} activates before window work");
-            assert!(opener.contains(".show();") && opener.find(".show()") < opener.find("set_focus()"),
-                "existing {name} window shows before focus");
-            assert!(opener.contains(".build()") && opener.contains("Ok(win)") && opener.contains("win.set_focus()"),
-                "new {name} window focuses after build");
-            assert!(opener.contains("Err(e)") && opener.contains("log::error!"),
-                "{name} build failures remain logged");
-            assert!(!opener.contains("Accessory"), "{name} never resets macOS to Accessory");
+            assert!(
+                opener.contains("set_macos_regular_app();"),
+                "{name} activates before window work"
+            );
+            assert!(
+                opener.contains(".show();") && opener.find(".show()") < opener.find("set_focus()"),
+                "existing {name} window shows before focus"
+            );
+            assert!(
+                opener.contains(".build()")
+                    && opener.contains("Ok(win)")
+                    && opener.contains("win.set_focus()"),
+                "new {name} window focuses after build"
+            );
+            assert!(
+                opener.contains("Err(e)") && opener.contains("log::error!"),
+                "{name} build failures remain logged"
+            );
+            assert!(
+                !opener.contains("Accessory"),
+                "{name} never resets macOS to Accessory"
+            );
         }
     }
 

@@ -22,6 +22,10 @@ tray-tooltip-paused = Stay Awake: 此时段已暂停
 tray-tooltip-override = Stay Awake: 因手动启用而运行
 tray-next-window = 下个时段：{ $when }
 tray-no-next-window = 没有即将到来的时段
+tray-app-mode = 模式：{ "{" } $mode { "}" }
+tray-app-mode-manual = 手动
+tray-app-mode-always-on = 始终开启
+tray-app-mode-wifi = WiFi
 
 # 设置窗口
 settings-title = Stay Awake 设置

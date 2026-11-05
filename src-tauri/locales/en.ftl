@@ -22,6 +22,10 @@ tray-tooltip-paused = Stay Awake: paused for this window
 tray-tooltip-override = Stay Awake: active by manual override
 tray-next-window = Next window: { $when }
 tray-no-next-window = No upcoming window
+tray-app-mode = Mode: { "{" } $mode { "}" }
+tray-app-mode-manual = Manual
+tray-app-mode-always-on = Always On
+tray-app-mode-wifi = WiFi
 
 # Settings window
 settings-title = Stay Awake Settings
