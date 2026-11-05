@@ -38,7 +38,9 @@ open the same menu.
 The original app icon is full strength while the engine is active and dimmed
 when it is not active. The tray menu shows two status lines: an emoji-prefixed
 current state, then a greyed line with the state that the next click will produce.
-It follows with a greyed, non-clickable App Mode line: Manual, Always On, or WiFi.
+A separator follows the status lines, then a greyed, non-clickable App Mode line:
+Manual, Always On, or WiFi. Another separator follows the App Mode line before the
+Mode submenu.
 On Linux, use that menu text because tooltips and native tray titles are not
 guaranteed by every implementation.
 
@@ -58,8 +60,10 @@ guaranteed by every implementation.
 ### Status item
 
 The enabled status item shows the current engine and schedule state. A second,
-greyed line shows the state a click will produce. A third, greyed line shows the
-current App Mode: Manual, Always On, or WiFi. Click the enabled item to toggle the engine.
+greyed line shows the state a click will produce. A separator follows the status lines.
+A third, greyed line shows the current App Mode: Manual, Always On, or WiFi. Another
+separator follows the App Mode line before the Mode submenu. Click the enabled item to
+toggle the engine.
 
 - **Active**: the engine is running. Click to stop it.
 - **Inactive**: the engine is stopped. Click to start it.
