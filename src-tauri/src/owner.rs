@@ -1,25 +1,14 @@
-/*
- * @spec-handoff
- * @interface RuntimeHandle::spawn(OwnerStart) -> Result<RuntimeHandle, String>
- * @interface RuntimeHandle::{post, request, query, update_config, shutdown}
- * @behavior
- *   - The owner serializes Startup, routes, snapshots, and config revisions on one thread.
- *   - Replies report actual backend state and retain queued work after a caller timeout.
- *   - Shutdown rejects new work and becomes exit-ready only after confirmed cleanup and one join.
- * @edge-cases
- *   - Disconnected replies, poisoned mirrors, and failed cleanup return errors without defaults.
- */
-#![allow(dead_code)] // skeleton: wired in boundary 3/4
+#![allow(dead_code)]
 
 use crate::config::AppConfig;
-use crate::i18n::Bundle;
-use crate::runtime::{EngineBackend, RuntimeSnapshot};
+use crate::i18n::{create_bundle, Bundle};
+use crate::runtime::{EngineBackend, RuntimeSnapshot, Supervisor, SUPERVISOR_PERIOD};
 use crate::schedule::Clock;
-use crate::{TrayRoute, TraySink};
-use std::sync::atomic::AtomicBool;
+use crate::{handle_runtime_route, RuntimeRouteInput, TrayRoute, TraySink};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,8 +49,18 @@ pub(crate) struct PendingReply {
 }
 
 impl PendingReply {
-    pub(crate) fn wait(self, _timeout: Duration) -> Result<OwnerReply, String> {
-        Err("owner reply skeleton".to_owned())
+    /// A timeout leaves the queued command alone; callers must query rather than replay it.
+    pub(crate) fn wait(self, timeout: Duration) -> Result<OwnerReply, String> {
+        self.receiver
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => {
+                    "owner reply timed out; operation outcome is unknown".to_owned()
+                }
+                mpsc::RecvTimeoutError::Disconnected => {
+                    "owner reply channel disconnected".to_owned()
+                }
+            })
     }
 }
 
@@ -84,6 +83,16 @@ enum OwnerCommand {
     },
 }
 
+struct OwnerAlive(std::sync::Weak<Shared>);
+
+impl Drop for OwnerAlive {
+    fn drop(&mut self) {
+        if let Some(shared) = self.0.upgrade() {
+            shared.alive.store(false, Ordering::Release);
+        }
+    }
+}
+
 struct Shared {
     sender: mpsc::Sender<OwnerCommand>,
     config: Arc<Mutex<AppConfig>>,
@@ -102,79 +111,485 @@ pub(crate) struct RuntimeHandle {
     shared: Arc<Shared>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TimeSample {
+    pub(crate) wall: chrono::DateTime<chrono::Utc>,
+    pub(crate) monotonic: Instant,
+    pub(crate) offset_seconds: i32,
+}
+
+pub(crate) struct TimeChangeInput<'a> {
+    pub(crate) previous: &'a TimeSample,
+    pub(crate) current: &'a TimeSample,
+}
+
+/// Treat substantial sleeping, wall-clock jumps, and offset changes as a resume hint.
+pub(crate) fn detect_time_change(input: TimeChangeInput<'_>) -> bool {
+    let monotonic = input
+        .current
+        .monotonic
+        .saturating_duration_since(input.previous.monotonic);
+    let wall = input
+        .current
+        .wall
+        .signed_duration_since(input.previous.wall);
+    let wall = wall.to_std().unwrap_or_default();
+    monotonic >= Duration::from_secs(2)
+        || monotonic.abs_diff(wall) >= Duration::from_secs(2)
+        || input.previous.offset_seconds != input.current.offset_seconds
+}
+
+/// Chooses whether the loop must reconcile before accepting another queued command.
+pub(crate) fn deadline_due(now: Instant, next_tick: Instant) -> bool {
+    now >= next_tick
+}
+
+/// Test seam for persistence failures without changing the production save path.
+pub(crate) fn persist_config_with<F>(config: &AppConfig, persist: F) -> Result<(), String>
+where
+    F: FnOnce(&AppConfig) -> Result<(), String>,
+{
+    persist(config)
+}
+
 impl RuntimeHandle {
-    pub(crate) fn spawn(_input: OwnerStart) -> Result<Self, String> {
-        Err("owner spawn skeleton".to_owned())
+    pub(crate) fn spawn(input: OwnerStart) -> Result<Self, String> {
+        let initial_config = input
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_owned())?
+            .clone();
+        let (sender, receiver) = mpsc::channel();
+        let shared = Arc::new(Shared {
+            sender,
+            config: input.config,
+            bundle: input.bundle,
+            mutations: Mutex::new(()),
+            owner: Mutex::new(None),
+            shutdown: Mutex::new(()),
+            closing: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            exit_ready: AtomicBool::new(false),
+            exit_coordinator_running: AtomicBool::new(false),
+        });
+        let weak = Arc::downgrade(&shared);
+        let clock = input.clock;
+        let owner = thread::Builder::new()
+            .name("stay-awake-owner".to_owned())
+            .spawn(move || {
+                let backend = (input.backend_factory)(initial_config.clone(), Arc::clone(&clock));
+                owner_loop(receiver, weak, initial_config, clock, backend, input.sink)
+            })
+            .map_err(|error| format!("failed to spawn owner thread: {error}"))?;
+        shared
+            .owner
+            .lock()
+            .map_err(|_| "owner lock poisoned".to_owned())?
+            .replace(owner);
+        Ok(Self { shared })
     }
 
-    pub(crate) fn post(&self, _route: TrayRoute) -> Result<(), String> {
-        Err("owner post skeleton".to_owned())
+    fn send(&self, command: OwnerCommand) -> Result<(), String> {
+        if self.is_closing() || !self.shared.alive.load(Ordering::Acquire) {
+            return Err("runtime is shutting down".to_owned());
+        }
+        self.shared
+            .sender
+            .send(command)
+            .map_err(|_| "runtime owner channel disconnected".to_owned())
     }
 
-    pub(crate) fn post_wifi(&self, _observation: WifiObservation) -> Result<(), String> {
-        Err("owner wifi skeleton".to_owned())
+    pub(crate) fn post(&self, route: TrayRoute) -> Result<(), String> {
+        if !matches!(
+            route,
+            TrayRoute::TrayToggle | TrayRoute::Hotkey | TrayRoute::IpcToggle | TrayRoute::Resume
+        ) {
+            return Err("route requires an internal owner command".to_owned());
+        }
+        self.send(OwnerCommand::Route { route, reply: None })
     }
-
-    pub(crate) fn request(&self, _route: TrayRoute) -> Result<PendingReply, String> {
-        Err("owner request skeleton".to_owned())
+    pub(crate) fn post_wifi(&self, observation: WifiObservation) -> Result<(), String> {
+        self.send(OwnerCommand::Wifi {
+            observation,
+            reply: None,
+        })
     }
-
+    pub(crate) fn request(&self, route: TrayRoute) -> Result<PendingReply, String> {
+        if !matches!(
+            route,
+            TrayRoute::TrayToggle | TrayRoute::Hotkey | TrayRoute::IpcToggle | TrayRoute::Resume
+        ) {
+            return Err("route requires an internal owner command".to_owned());
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.send(OwnerCommand::Route {
+            route,
+            reply: Some(sender),
+        })?;
+        Ok(PendingReply { receiver })
+    }
     pub(crate) fn query(&self) -> Result<PendingReply, String> {
-        Err("owner query skeleton".to_owned())
+        let (reply, receiver) = mpsc::channel();
+        self.send(OwnerCommand::Query { reply })?;
+        Ok(PendingReply { receiver })
     }
 
     pub(crate) fn update_config<F, E>(
         &self,
-        _origin: ConfigOrigin,
-        _edit: F,
-        _effects: E,
+        origin: ConfigOrigin,
+        edit: F,
+        effects: E,
     ) -> Result<PendingReply, String>
     where
         F: FnOnce(&mut AppConfig) -> Result<(), String>,
         E: FnOnce(&AppConfig, &AppConfig),
     {
-        Err("owner config skeleton".to_owned())
+        let _mutations = self
+            .shared
+            .mutations
+            .lock()
+            .map_err(|_| "configuration mutation lock poisoned".to_owned())?;
+        if self.is_closing() || !self.shared.alive.load(Ordering::Acquire) {
+            return Err("runtime is shutting down".to_owned());
+        }
+        let previous = self
+            .shared
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned".to_owned())?
+            .clone();
+        let mut candidate = previous.clone();
+        edit(&mut candidate)?;
+        if candidate.interval_secs == 0 {
+            return Err("interval must be at least one second".to_owned());
+        }
+        crate::schedule::Schedule::from_config(&candidate)?;
+        persist_config_with(&candidate, AppConfig::save)?;
+        if candidate.language != previous.language {
+            let replacement = create_bundle(&candidate.language);
+            *self
+                .shared
+                .bundle
+                .lock()
+                .map_err(|_| "bundle lock poisoned after configuration save".to_owned())? =
+                replacement;
+        }
+        *self
+            .shared
+            .config
+            .lock()
+            .map_err(|_| "config lock poisoned after configuration save".to_owned())? =
+            candidate.clone();
+        let (reply, receiver) = mpsc::channel();
+        self.shared
+            .sender
+            .send(OwnerCommand::Config {
+                origin,
+                config: candidate.clone(),
+                reply,
+            })
+            .map_err(|_| "configuration saved, runtime unavailable".to_owned())?;
+        effects(&previous, &candidate);
+        Ok(PendingReply { receiver })
     }
 
-    pub(crate) fn shutdown(&self, _timeout: Duration) -> Result<(), String> {
-        Err("owner shutdown skeleton".to_owned())
+    pub(crate) fn shutdown(&self, timeout: Duration) -> Result<(), String> {
+        let _shutdown = self
+            .shared
+            .shutdown
+            .lock()
+            .map_err(|_| "shutdown lock poisoned".to_owned())?;
+        if self.exit_ready() {
+            return Ok(());
+        }
+        self.shared.closing.store(true, Ordering::Release);
+        let deadline = Instant::now() + timeout;
+        if self.shared.alive.load(Ordering::Acquire) {
+            let (reply, receiver) = mpsc::channel();
+            self.shared
+                .sender
+                .send(OwnerCommand::Route {
+                    route: TrayRoute::Quit,
+                    reply: Some(reply),
+                })
+                .map_err(|_| "runtime owner channel disconnected".to_owned())?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let reply = receiver
+                .recv_timeout(remaining)
+                .map_err(|_| "owner shutdown reply timed out".to_owned())?;
+            if !reply.terminating {
+                return Err(reply
+                    .error
+                    .unwrap_or_else(|| "owner cleanup is incomplete".to_owned()));
+            }
+        }
+        let mut owner = self
+            .shared
+            .owner
+            .lock()
+            .map_err(|_| "owner lock poisoned".to_owned())?;
+        let Some(handle) = owner.as_ref() else {
+            self.shared.exit_ready.store(true, Ordering::Release);
+            return Ok(());
+        };
+        while !handle.is_finished() {
+            if Instant::now() >= deadline {
+                return Err("owner shutdown join timed out".to_owned());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let handle = owner
+            .take()
+            .ok_or_else(|| "owner join handle disappeared".to_owned())?;
+        handle
+            .join()
+            .map_err(|_| "owner thread panicked during shutdown".to_owned())??;
+        self.shared.exit_ready.store(true, Ordering::Release);
+        Ok(())
     }
-
     pub(crate) fn is_closing(&self) -> bool {
-        self.shared
-            .closing
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.shared.closing.load(Ordering::Acquire)
     }
-
     pub(crate) fn exit_ready(&self) -> bool {
-        self.shared
-            .exit_ready
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.shared.exit_ready.load(Ordering::Acquire)
     }
-
     pub(crate) fn claim_exit_coordinator(&self) -> bool {
         let claimed = self
             .shared
             .exit_coordinator_running
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
         if claimed {
-            self.shared
-                .closing
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.shared.closing.store(true, Ordering::Release);
         }
         claimed
     }
-
     pub(crate) fn release_exit_coordinator(&self) {
         self.shared
             .exit_coordinator_running
-            .store(false, std::sync::atomic::Ordering::Release);
+            .store(false, Ordering::Release);
+    }
+}
+
+fn owner_loop(
+    receiver: mpsc::Receiver<OwnerCommand>,
+    shared: std::sync::Weak<Shared>,
+    mut config: AppConfig,
+    clock: Arc<dyn Clock>,
+    mut backend: Box<dyn EngineBackend>,
+    mut sink: Box<dyn TraySink + Send>,
+) -> Result<(), String> {
+    let _alive = OwnerAlive(shared.clone());
+    let mut supervisor = Supervisor::new();
+    let mut next_tick = Instant::now() + SUPERVISOR_PERIOD;
+    let _startup = route_reply(
+        TrayRoute::Startup,
+        &config,
+        &clock,
+        &mut supervisor,
+        backend.as_mut(),
+        sink.as_mut(),
+    );
+    let mut last_ssid: Option<String>;
+    loop {
+        let now = Instant::now();
+        if deadline_due(now, next_tick) {
+            let _ = route_reply(
+                TrayRoute::Tick,
+                &config,
+                &clock,
+                &mut supervisor,
+                backend.as_mut(),
+                sink.as_mut(),
+            );
+            next_tick = Instant::now() + SUPERVISOR_PERIOD;
+            continue;
+        }
+        let wait = next_tick.saturating_duration_since(now);
+        match receiver.recv_timeout(wait) {
+            Ok(command) => {
+                let closing = shared
+                    .upgrade()
+                    .is_none_or(|state| state.closing.load(Ordering::Acquire));
+                match command {
+                    OwnerCommand::Query { reply } => {
+                        let _ = reply.send(OwnerReply {
+                            snapshot: supervisor.snapshot().cloned(),
+                            error: None,
+                            terminating: false,
+                        });
+                    }
+                    OwnerCommand::Route { route, reply } => {
+                        if closing && route != TrayRoute::Quit {
+                            send_reply(
+                                reply,
+                                OwnerReply {
+                                    snapshot: supervisor.snapshot().cloned(),
+                                    error: Some("runtime is shutting down".to_owned()),
+                                    terminating: false,
+                                },
+                            );
+                            continue;
+                        }
+                        let result = route_reply(
+                            route,
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_mut(),
+                            sink.as_mut(),
+                        );
+                        let result = if route == TrayRoute::Quit && !backend.is_active() {
+                            match backend.stop() {
+                                Ok(()) => result,
+                                Err(error) => OwnerReply {
+                                    snapshot: result.snapshot,
+                                    error: Some(error),
+                                    terminating: false,
+                                },
+                            }
+                        } else {
+                            result
+                        };
+                        let terminating = route == TrayRoute::Quit
+                            && !backend.is_active()
+                            && result.error.is_none();
+                        send_reply(
+                            reply,
+                            OwnerReply {
+                                terminating,
+                                ..result
+                            },
+                        );
+                        if terminating {
+                            return Ok(());
+                        }
+                    }
+                    OwnerCommand::Config {
+                        origin,
+                        config: candidate,
+                        reply,
+                    } => {
+                        if closing {
+                            let _ = reply.send(OwnerReply {
+                                snapshot: supervisor.snapshot().cloned(),
+                                error: Some(
+                                    "configuration saved, runtime is shutting down".to_owned(),
+                                ),
+                                terminating: false,
+                            });
+                            continue;
+                        }
+                        match backend.update_config(candidate.clone()) {
+                            Ok(()) => {
+                                config = candidate;
+                                let route = match origin {
+                                    ConfigOrigin::Profile => TrayRoute::ProfileLoaded {
+                                        policy_changed: true,
+                                    },
+                                    ConfigOrigin::Language => TrayRoute::LanguageChanged,
+                                    _ => TrayRoute::ConfigChanged {
+                                        policy_changed: true,
+                                    },
+                                };
+                                let result = route_reply(
+                                    route,
+                                    &config,
+                                    &clock,
+                                    &mut supervisor,
+                                    backend.as_mut(),
+                                    sink.as_mut(),
+                                );
+                                let _ = reply.send(result);
+                            }
+                            Err(error) => {
+                                let stop = backend.stop();
+                                let message = match stop { Ok(()) => format!("configuration update failed: {error}"), Err(stop_error) => format!("configuration update failed: {error}; cleanup failed: {stop_error}") };
+                                let _ = reply.send(OwnerReply {
+                                    snapshot: supervisor.snapshot().cloned(),
+                                    error: Some(message),
+                                    terminating: false,
+                                });
+                            }
+                        }
+                    }
+                    OwnerCommand::Wifi { observation, reply } => {
+                        last_ssid = observation.ssid;
+                        let active = last_ssid.as_ref().is_some_and(|ssid| {
+                            config.wifi.networks.iter().any(|network| network == ssid)
+                        });
+                        let result = route_reply(
+                            TrayRoute::WifiChanged { active },
+                            &config,
+                            &clock,
+                            &mut supervisor,
+                            backend.as_mut(),
+                            sink.as_mut(),
+                        );
+                        send_reply(reply, result);
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = route_reply(
+                    TrayRoute::Tick,
+                    &config,
+                    &clock,
+                    &mut supervisor,
+                    backend.as_mut(),
+                    sink.as_mut(),
+                );
+                next_tick = Instant::now() + SUPERVISOR_PERIOD;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let reply = route_reply(
+                    TrayRoute::Quit,
+                    &config,
+                    &clock,
+                    &mut supervisor,
+                    backend.as_mut(),
+                    sink.as_mut(),
+                );
+                return reply.error.map_or(Ok(()), Err);
+            }
+        }
+    }
+}
+
+fn route_reply(
+    route: TrayRoute,
+    config: &AppConfig,
+    clock: &Arc<dyn Clock>,
+    supervisor: &mut Supervisor,
+    backend: &mut dyn EngineBackend,
+    sink: &mut dyn TraySink,
+) -> OwnerReply {
+    match handle_runtime_route(
+        RuntimeRouteInput {
+            route,
+            config,
+            clock: clock.as_ref(),
+            bundle: &create_bundle(&config.language),
+        },
+        supervisor,
+        backend,
+        sink,
+    ) {
+        Ok(snapshot) => OwnerReply {
+            snapshot: Some(snapshot),
+            error: None,
+            terminating: false,
+        },
+        Err(error) => OwnerReply {
+            snapshot: supervisor.snapshot().cloned(),
+            error: Some(error),
+            terminating: false,
+        },
+    }
+}
+fn send_reply(reply: Option<mpsc::Sender<OwnerReply>>, value: OwnerReply) {
+    if let Some(reply) = reply {
+        let _ = reply.send(value);
     }
 }
 

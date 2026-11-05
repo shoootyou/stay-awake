@@ -409,7 +409,10 @@ impl Supervisor {
         if let LifecycleEvent::WifiChanged { active } = input.event {
             self.wifi_active = active;
         }
-        let schedule = Schedule::from_config(input.config)?;
+        let schedule = match Schedule::from_config(input.config) {
+            Ok(schedule) => schedule,
+            Err(error) => return self.fail_closed(input, backend, at, error),
+        };
         let policy = RuntimePolicy {
             mode: effective_mode(&input.config.mode),
             schedule: schedule.clone(),
@@ -418,11 +421,14 @@ impl Supervisor {
             .previous_policy
             .as_ref()
             .is_some_and(|previous| previous != &policy);
-        let window = crate::schedule::evaluate_schedule(crate::schedule::ScheduleInput {
+        let window = match crate::schedule::evaluate_schedule(crate::schedule::ScheduleInput {
             schedule: &schedule,
             at,
             clock: input.clock,
-        })?;
+        }) {
+            Ok(window) => window,
+            Err(error) => return self.fail_closed(input, backend, at, error),
+        };
         let current_changed = self.previous_current != window.current;
         let normalized = normalize_override(NormalizeInput {
             mode: &input.config.mode,
@@ -506,6 +512,52 @@ impl Supervisor {
             Some(message) => Err(message),
             None => Ok(snapshot),
         }
+    }
+
+    fn fail_closed(
+        &mut self,
+        input: ReconcileInput<'_>,
+        backend: &mut dyn EngineBackend,
+        at: DateTime<Utc>,
+        evaluation_error: String,
+    ) -> Result<RuntimeSnapshot, String> {
+        self.override_state = OverrideState::None;
+        let stop_error = if backend.is_active() {
+            backend.stop().err()
+        } else {
+            None
+        };
+        let engine_active = backend.is_active();
+        let window = ScheduleEvaluation {
+            at,
+            current: None,
+            next: None,
+        };
+        let schedule_owned = matches!(
+            effective_mode(&input.config.mode),
+            AppMode::Manual | AppMode::AlwaysOn
+        ) && input.config.schedule_enabled;
+        let status = if engine_active {
+            TrayStatus::Active
+        } else if schedule_owned {
+            TrayStatus::Waiting
+        } else {
+            TrayStatus::Inactive
+        };
+        let snapshot = RuntimeSnapshot {
+            engine_active,
+            override_state: NormalizedOverride(OverrideState::None),
+            window,
+            status,
+        };
+        self.last_snapshot = Some(snapshot);
+        self.failed_action = stop_error.as_ref().map(|_| EngineAction::Stop);
+        let message = match stop_error {
+            Some(error) => format!("{evaluation_error}; fail-closed stop failed: {error}"),
+            None => evaluation_error,
+        };
+        self.last_error = Some(message.clone());
+        Err(message)
     }
 
     pub(crate) fn snapshot(&self) -> Option<&RuntimeSnapshot> {
