@@ -1,20 +1,9 @@
-/*
- * @spec-handoff
- * @interface evaluate_schedule(ScheduleInput): Result<ScheduleEvaluation, String>
- * @behavior
- *   - Evaluates selected start-day-owned windows at a supplied UTC instant.
- *   - Returns current membership and the earliest later occurrence using Clock rules.
- *   - Resolves gaps forward, start folds earlier, and end folds later.
- * @edge-cases
- *   - Disabled, empty-day, equal-time, invalid, and collapsed windows are inactive.
- *   - Resolution stops with an error after 48 hours without a valid local minute.
- */
-#![allow(dead_code)] // skeleton: wired in E3
+#![allow(dead_code)] // wired in E3b
 
 use crate::config::AppConfig;
 use chrono::{
-    DateTime, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc,
-    Weekday,
+    DateTime, Datelike, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
+    TimeZone, Utc, Weekday,
 };
 
 pub(crate) trait Clock: Send + Sync {
@@ -51,12 +40,43 @@ pub(crate) struct Schedule {
 }
 
 impl Schedule {
-    pub(crate) fn from_config(_config: &AppConfig) -> Result<Self, String> {
+    pub(crate) fn from_config(config: &AppConfig) -> Result<Self, String> {
+        let start = NaiveTime::from_hms_opt(
+            u32::from(config.schedule_start_hour),
+            u32::from(config.schedule_start_minute),
+            0,
+        )
+        .ok_or_else(|| "invalid schedule start time".to_owned())?;
+        let end = NaiveTime::from_hms_opt(
+            u32::from(config.schedule_end_hour),
+            u32::from(config.schedule_end_minute),
+            0,
+        )
+        .ok_or_else(|| "invalid schedule end time".to_owned())?;
+
+        let mut days = Vec::new();
+        for (token, weekday) in [
+            ("mon", Weekday::Mon),
+            ("tue", Weekday::Tue),
+            ("wed", Weekday::Wed),
+            ("thu", Weekday::Thu),
+            ("fri", Weekday::Fri),
+            ("sat", Weekday::Sat),
+            ("sun", Weekday::Sun),
+        ] {
+            if config
+                .schedule_days
+                .iter()
+                .any(|day| day.eq_ignore_ascii_case(token))
+            {
+                days.push(weekday);
+            }
+        }
         Ok(Self {
-            enabled: false,
-            start: NaiveTime::MIN,
-            end: NaiveTime::MIN,
-            days: Vec::new(),
+            enabled: config.schedule_enabled,
+            start,
+            end,
+            days,
         })
     }
 }
@@ -93,8 +113,25 @@ pub(crate) struct BoundaryInput<'a> {
     pub(crate) clock: &'a dyn Clock,
 }
 
-pub(crate) fn resolve_boundary(_input: BoundaryInput<'_>) -> Result<DateTime<Utc>, String> {
-    Err("schedule boundary skeleton".to_owned())
+pub(crate) fn resolve_boundary(input: BoundaryInput<'_>) -> Result<DateTime<Utc>, String> {
+    let mut local = input.local;
+    for _ in 0..=2_880 {
+        match input.clock.resolve_local(local) {
+            LocalResult::Single(value) => return Ok(value),
+            LocalResult::Ambiguous(first, second) => {
+                return Ok(match input.edge {
+                    BoundaryEdge::Start => first.min(second),
+                    BoundaryEdge::End => first.max(second),
+                });
+            }
+            LocalResult::None => {
+                local = local
+                    .checked_add_signed(chrono::Duration::minutes(1))
+                    .ok_or_else(|| "schedule boundary overflow".to_owned())?;
+            }
+        }
+    }
+    Err("could not resolve schedule boundary within 48 hours".to_owned())
 }
 
 pub(crate) struct ScheduleInput<'a> {
@@ -104,11 +141,70 @@ pub(crate) struct ScheduleInput<'a> {
 }
 
 pub(crate) fn evaluate_schedule(input: ScheduleInput<'_>) -> Result<ScheduleEvaluation, String> {
-    Ok(ScheduleEvaluation {
+    let mut evaluation = ScheduleEvaluation {
         at: input.at,
         current: None,
         next: None,
-    })
+    };
+    if !input.schedule.enabled
+        || input.schedule.days.is_empty()
+        || input.schedule.start == input.schedule.end
+    {
+        return Ok(evaluation);
+    }
+
+    let local_date = input.clock.to_local(input.at).date_naive();
+    let mut found_candidate = false;
+    for offset in -2..=14 {
+        let Some(start_day) = local_date.checked_add_signed(chrono::Duration::days(offset)) else {
+            return Err("schedule date overflow".to_owned());
+        };
+        if !input.schedule.days.contains(&start_day.weekday()) {
+            continue;
+        }
+        found_candidate = true;
+        let start_local = start_day.and_time(input.schedule.start);
+        let end_day = if input.schedule.start > input.schedule.end {
+            start_day
+                .checked_add_signed(chrono::Duration::days(1))
+                .ok_or_else(|| "schedule date overflow".to_owned())?
+        } else {
+            start_day
+        };
+        let end_local = end_day.and_time(input.schedule.end);
+        let start = resolve_boundary(BoundaryInput {
+            local: start_local,
+            edge: BoundaryEdge::Start,
+            clock: input.clock,
+        })?;
+        let end = resolve_boundary(BoundaryInput {
+            local: end_local,
+            edge: BoundaryEdge::End,
+            clock: input.clock,
+        })?;
+        if end <= start {
+            continue;
+        }
+        let occurrence = Occurrence {
+            start_day,
+            start,
+            end,
+        };
+        if occurrence.start <= input.at && input.at < occurrence.end {
+            evaluation.current = Some(occurrence);
+        } else if occurrence.start > input.at
+            && evaluation
+                .next
+                .as_ref()
+                .is_none_or(|next| occurrence.start < next.start)
+        {
+            evaluation.next = Some(occurrence);
+        }
+    }
+    if found_candidate && evaluation.next.is_none() && evaluation.current.is_none() {
+        return Err("no upcoming schedule occurrence in search horizon".to_owned());
+    }
+    Ok(evaluation)
 }
 
 #[cfg(test)]

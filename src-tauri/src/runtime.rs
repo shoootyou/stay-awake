@@ -1,15 +1,4 @@
-/*
- * @spec-handoff
- * @interface Supervisor::reconcile(ReconcileInput, EngineBackend): Result<RuntimeSnapshot, String>
- * @behavior
- *   - Reconciles Manual and AlwaysOn schedule windows every 250 ms, independent of jiggle interval.
- *   - Publishes actual backend state after starts, stops, overrides, and lifecycle errors.
- *   - Leaves WiFi lifecycle under network control while PowerOnly follows schedule lifecycle.
- * @edge-cases
- *   - Failed operations are retried only after a meaningful event and retain truthful ownership.
- *   - ForceOn clears at a window start without reacquiring; missed windows are not replayed.
- */
-#![allow(dead_code)] // skeleton: wired in E3
+#![allow(dead_code)] // wired in E3b
 
 use crate::config::{AppConfig, AppMode, JiggleMode};
 use crate::schedule::{Clock, Occurrence, Schedule, ScheduleEvaluation};
@@ -19,7 +8,10 @@ use std::time::Duration;
 pub(crate) const SUPERVISOR_PERIOD: Duration = Duration::from_millis(250);
 
 pub(crate) fn effective_mode(mode: &AppMode) -> AppMode {
-    mode.clone()
+    match mode {
+        AppMode::Scheduled => AppMode::Manual,
+        _ => mode.clone(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,8 +58,41 @@ pub(crate) struct NormalizeInput<'a> {
     pub(crate) event: LifecycleEvent,
 }
 
-pub(crate) fn normalize_override(_input: NormalizeInput<'_>) -> NormalizedOverride {
-    NormalizedOverride(OverrideState::None)
+pub(crate) fn normalize_override(input: NormalizeInput<'_>) -> NormalizedOverride {
+    let reset = matches!(input.event, LifecycleEvent::Startup | LifecycleEvent::Quit)
+        || matches!(
+            input.event,
+            LifecycleEvent::ConfigChanged {
+                policy_changed: true
+            }
+        );
+    if reset || !input.schedule_enabled || effective_mode(input.mode) == AppMode::WiFi {
+        return NormalizedOverride(OverrideState::None);
+    }
+    match input.override_state {
+        OverrideState::None => NormalizedOverride(OverrideState::None),
+        OverrideState::SkipWindow(occurrence)
+            if input.window.current.as_ref() == Some(occurrence)
+                && input.window.at < occurrence.end =>
+        {
+            NormalizedOverride(OverrideState::SkipWindow(occurrence.clone()))
+        }
+        OverrideState::SkipWindow(_) => NormalizedOverride(OverrideState::None),
+        OverrideState::ForceOn { .. } if input.window.in_window() => {
+            NormalizedOverride(OverrideState::None)
+        }
+        OverrideState::ForceOn { until: Some(until) } if input.window.at >= *until => {
+            NormalizedOverride(OverrideState::None)
+        }
+        OverrideState::ForceOn { until: Some(until) } => {
+            NormalizedOverride(OverrideState::ForceOn {
+                until: Some(*until),
+            })
+        }
+        OverrideState::ForceOn { until: None } => NormalizedOverride(OverrideState::ForceOn {
+            until: input.window.next.as_ref().map(|next| next.start),
+        }),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,15 +120,31 @@ pub(crate) enum TrayIcon {
 
 impl TrayStatus {
     pub(crate) fn menu_key(self) -> &'static str {
-        "tray-start"
+        match self {
+            Self::Active => "tray-running",
+            Self::Inactive => "tray-start",
+            Self::Waiting => "tray-waiting",
+            Self::Paused => "tray-paused",
+            Self::ActiveOverride => "tray-active-override",
+        }
     }
 
     pub(crate) fn tooltip_key(self) -> &'static str {
-        "tray-tooltip-inactive"
+        match self {
+            Self::Active => "tray-tooltip-active",
+            Self::Inactive => "tray-tooltip-inactive",
+            Self::Waiting => "tray-tooltip-waiting",
+            Self::Paused => "tray-tooltip-paused",
+            Self::ActiveOverride => "tray-tooltip-override",
+        }
     }
 
     pub(crate) fn icon(self) -> TrayIcon {
-        TrayIcon::Inactive
+        match self {
+            Self::Active | Self::ActiveOverride => TrayIcon::Active,
+            Self::Waiting => TrayIcon::Waiting,
+            Self::Inactive | Self::Paused => TrayIcon::Inactive,
+        }
     }
 }
 
@@ -115,8 +156,30 @@ pub(crate) struct TrayInput<'a> {
     pub(crate) override_state: &'a NormalizedOverride,
 }
 
-pub(crate) fn derive_tray_status(_input: TrayInput<'_>) -> TrayStatus {
-    TrayStatus::Inactive
+pub(crate) fn derive_tray_status(input: TrayInput<'_>) -> TrayStatus {
+    let schedule_owned = input.schedule_enabled
+        && matches!(
+            effective_mode(input.mode),
+            AppMode::Manual | AppMode::AlwaysOn
+        );
+    if !schedule_owned {
+        return if input.engine_active {
+            TrayStatus::Active
+        } else {
+            TrayStatus::Inactive
+        };
+    }
+    match (
+        input.engine_active,
+        input.window.in_window(),
+        input.override_state.as_state(),
+    ) {
+        (true, false, OverrideState::ForceOn { .. }) => TrayStatus::ActiveOverride,
+        (true, _, _) => TrayStatus::Active,
+        (false, true, OverrideState::SkipWindow(_)) => TrayStatus::Paused,
+        (false, false, OverrideState::None) => TrayStatus::Waiting,
+        _ => TrayStatus::Inactive,
+    }
 }
 
 pub(crate) struct LifecycleInput<'a> {
@@ -137,11 +200,122 @@ pub(crate) struct LifecycleDecision {
     pub(crate) presentation: TrayStatus,
 }
 
-pub(crate) fn decide_lifecycle(_input: LifecycleInput<'_>) -> LifecycleDecision {
+pub(crate) fn decide_lifecycle(input: LifecycleInput<'_>) -> LifecycleDecision {
+    let mode = effective_mode(input.mode);
+    let schedule_owned =
+        input.schedule_enabled && matches!(mode, AppMode::Manual | AppMode::AlwaysOn);
+    let status = |active, override_state: NormalizedOverride| {
+        let presentation = derive_tray_status(TrayInput {
+            mode: input.mode,
+            engine_active: active,
+            schedule_enabled: input.schedule_enabled,
+            window: input.window,
+            override_state: &override_state,
+        });
+        (presentation, override_state)
+    };
+    let target = |wanted| match (wanted, input.engine_active) {
+        (true, false) => EngineAction::Start,
+        (false, true) => EngineAction::Stop,
+        _ => EngineAction::None,
+    };
+    if matches!(input.event, LifecycleEvent::Quit) {
+        return LifecycleDecision {
+            action: target(false),
+            override_state: NormalizedOverride(OverrideState::None),
+            presentation: TrayStatus::Inactive,
+        };
+    }
+    if matches!(input.event, LifecycleEvent::WifiChanged { .. }) && mode != AppMode::WiFi {
+        let (presentation, override_state) =
+            status(input.engine_active, input.override_state.clone());
+        return LifecycleDecision {
+            action: EngineAction::None,
+            override_state,
+            presentation,
+        };
+    }
+    if schedule_owned {
+        let mut override_state = if input.window.in_window()
+            && matches!(
+                input.override_state.as_state(),
+                OverrideState::ForceOn { .. }
+            ) {
+            NormalizedOverride(OverrideState::None)
+        } else {
+            input.override_state.clone()
+        };
+        if matches!(input.event, LifecycleEvent::TrayToggle) {
+            if input.engine_active {
+                override_state = match input.window.current.clone() {
+                    Some(current) => NormalizedOverride(OverrideState::SkipWindow(current)),
+                    None => NormalizedOverride(OverrideState::None),
+                };
+                let (presentation, override_state) = status(false, override_state);
+                return LifecycleDecision {
+                    action: EngineAction::Stop,
+                    override_state,
+                    presentation,
+                };
+            }
+            override_state = if input.window.in_window() {
+                NormalizedOverride(OverrideState::None)
+            } else {
+                NormalizedOverride(OverrideState::ForceOn {
+                    until: input.window.next.as_ref().map(|next| next.start),
+                })
+            };
+            let (presentation, override_state) = status(true, override_state);
+            return LifecycleDecision {
+                action: EngineAction::Start,
+                override_state,
+                presentation,
+            };
+        }
+        let wanted = matches!(override_state.as_state(), OverrideState::ForceOn { .. })
+            || (input.window.in_window()
+                && !matches!(override_state.as_state(), OverrideState::SkipWindow(_)));
+        let (presentation, override_state) = status(wanted, override_state);
+        return LifecycleDecision {
+            action: target(wanted),
+            override_state,
+            presentation,
+        };
+    }
+    let override_state = NormalizedOverride(OverrideState::None);
+    let wanted = match input.event {
+        LifecycleEvent::Startup => match mode {
+            AppMode::AlwaysOn => true,
+            AppMode::WiFi => input.wifi_active,
+            _ => false,
+        },
+        LifecycleEvent::TrayToggle => !input.engine_active,
+        LifecycleEvent::WifiChanged { active } if mode == AppMode::WiFi => active,
+        LifecycleEvent::ConfigChanged {
+            policy_changed: true,
+        } => match mode {
+            AppMode::AlwaysOn => input.previous_policy.is_none_or(|previous| {
+                previous.mode != AppMode::AlwaysOn || previous.schedule.enabled
+            }),
+            AppMode::WiFi => {
+                if input
+                    .previous_policy
+                    .is_none_or(|previous| previous.mode != AppMode::WiFi)
+                {
+                    input.wifi_active
+                } else {
+                    input.engine_active
+                }
+            }
+            _ => input.engine_active,
+        },
+        _ => input.engine_active,
+    };
+    let (presentation, override_state) = status(wanted, override_state);
     LifecycleDecision {
-        action: EngineAction::None,
-        override_state: NormalizedOverride(OverrideState::None),
-        presentation: TrayStatus::Inactive,
+        action: target(wanted),
+        override_state,
+        presentation,
     }
 }
 
@@ -154,8 +328,24 @@ pub(crate) struct JiggleInput<'a> {
     pub(crate) override_state: &'a NormalizedOverride,
 }
 
-pub(crate) fn should_jiggle(_input: JiggleInput<'_>) -> bool {
-    false
+pub(crate) fn should_jiggle(input: JiggleInput<'_>) -> bool {
+    if !input.engine_active || matches!(input.jiggle_mode, JiggleMode::PowerOnly) {
+        return false;
+    }
+    if !input.schedule_enabled {
+        return true;
+    }
+    match effective_mode(input.mode) {
+        AppMode::WiFi => input.window.in_window(),
+        AppMode::Manual | AppMode::AlwaysOn => {
+            input.window.in_window()
+                || matches!(
+                    input.override_state.as_state(),
+                    OverrideState::ForceOn { .. }
+                )
+        }
+        AppMode::Scheduled => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,20 +393,110 @@ impl Supervisor {
     pub(crate) fn reconcile(
         &mut self,
         input: ReconcileInput<'_>,
-        _backend: &mut dyn EngineBackend,
+        backend: &mut dyn EngineBackend,
     ) -> Result<RuntimeSnapshot, String> {
-        let snapshot = RuntimeSnapshot {
-            engine_active: false,
-            override_state: NormalizedOverride(OverrideState::None),
-            window: ScheduleEvaluation {
-                at: input.clock.now(),
-                current: None,
-                next: None,
+        let at = input.clock.now();
+        let previous_wifi_active = self.wifi_active;
+        if let LifecycleEvent::WifiChanged { active } = input.event {
+            self.wifi_active = active;
+        }
+        let schedule = Schedule::from_config(input.config)?;
+        let policy = RuntimePolicy {
+            mode: effective_mode(&input.config.mode),
+            schedule: schedule.clone(),
+        };
+        let policy_changed = self
+            .previous_policy
+            .as_ref()
+            .is_some_and(|previous| previous != &policy);
+        let window = crate::schedule::evaluate_schedule(crate::schedule::ScheduleInput {
+            schedule: &schedule,
+            at,
+            clock: input.clock,
+        })?;
+        let current_changed = self.previous_current != window.current;
+        let normalized = normalize_override(NormalizeInput {
+            mode: &input.config.mode,
+            schedule_enabled: schedule.enabled,
+            window: &window,
+            override_state: &self.override_state,
+            event: if policy_changed {
+                LifecycleEvent::ConfigChanged {
+                    policy_changed: true,
+                }
+            } else {
+                input.event
             },
-            status: TrayStatus::Inactive,
+        });
+        let decision = decide_lifecycle(LifecycleInput {
+            mode: &input.config.mode,
+            schedule_enabled: schedule.enabled,
+            window: &window,
+            engine_active: backend.is_active(),
+            override_state: &normalized,
+            event: if policy_changed {
+                LifecycleEvent::ConfigChanged {
+                    policy_changed: true,
+                }
+            } else {
+                input.event
+            },
+            previous_policy: self.previous_policy.as_ref(),
+            wifi_active: self.wifi_active,
+        });
+        self.override_state = decision.override_state.0.clone();
+        backend.set_jiggle_policy(JigglePolicy {
+            override_state: self.override_state.clone(),
+        });
+
+        let explicit_retry = matches!(
+            input.event,
+            LifecycleEvent::TrayToggle | LifecycleEvent::Resume | LifecycleEvent::Quit
+        ) || policy_changed
+            || current_changed
+            || matches!(input.event, LifecycleEvent::WifiChanged { active } if active != previous_wifi_active);
+        if decision.action != self.failed_action.unwrap_or(EngineAction::None) || explicit_retry {
+            self.failed_action = None;
+        }
+        let mut error = None;
+        if decision.action != EngineAction::None && self.failed_action != Some(decision.action) {
+            let result = match decision.action {
+                EngineAction::Start => backend.start(),
+                EngineAction::Stop => backend.stop(),
+                EngineAction::None => Ok(()),
+            };
+            if let Err(message) = result {
+                self.failed_action = Some(decision.action);
+                self.last_error = Some(message.clone());
+                error = Some(message);
+            } else {
+                self.failed_action = None;
+                self.last_error = None;
+            }
+        } else if self.failed_action == Some(decision.action) {
+            error = self.last_error.clone();
+        }
+        let engine_active = backend.is_active();
+        let status = derive_tray_status(TrayInput {
+            mode: &input.config.mode,
+            engine_active,
+            schedule_enabled: schedule.enabled,
+            window: &window,
+            override_state: &decision.override_state,
+        });
+        let snapshot = RuntimeSnapshot {
+            engine_active,
+            override_state: decision.override_state,
+            window,
+            status,
         };
         self.last_snapshot = Some(snapshot.clone());
-        Ok(snapshot)
+        self.previous_policy = Some(policy);
+        self.previous_current = snapshot.window.current.clone();
+        match error {
+            Some(message) => Err(message),
+            None => Ok(snapshot),
+        }
     }
 
     pub(crate) fn snapshot(&self) -> Option<&RuntimeSnapshot> {
