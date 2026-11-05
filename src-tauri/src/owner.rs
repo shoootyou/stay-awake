@@ -913,9 +913,14 @@ mod tests {
     #[test]
     fn route_reply_builds_its_bundle_from_the_accepted_language() {
         let source = include_str!("owner.rs");
-        let route_reply = &source[source
+        let route_start = source
             .find("fn route_reply(")
-            .expect("route reply remains defined")..];
+            .expect("route reply remains defined");
+        let route_reply = &source[route_start
+            ..source[route_start..]
+                .find("fn send_reply(")
+                .map(|offset| route_start + offset)
+                .expect("route reply has a bounded production scope")];
 
         assert!(
             route_reply.contains("bundle: &create_bundle(&config.language)"),
