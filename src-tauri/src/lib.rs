@@ -2481,6 +2481,21 @@ mod native_wiring_contract_tests {
     }
 
     #[test]
+    fn setup_shuts_down_the_owner_before_propagating_a_post_spawn_setup_error() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let spawn = setup
+            .find("owner::RuntimeHandle::spawn")
+            .expect("setup starts the owner");
+        let post_spawn = &setup[spawn..];
+
+        assert!(
+            post_spawn.contains("shutdown(owner::SHUTDOWN_TIMEOUT)"),
+            "every fallible setup step after owner spawn must use bounded owner cleanup"
+        );
+    }
+
+    #[test]
     fn ipc_commands_are_desktop_async_owner_requests_with_bounded_blocking_waits() {
         let source = source();
         let handlers = handler_table(&source);
