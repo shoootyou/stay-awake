@@ -55,44 +55,6 @@ pub fn is_within_schedule(config: &AppConfig) -> bool {
     }
 }
 
-#[cfg(test)]
-mod phase_one_contract {
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum Event {
-        Startup,
-        Tray,
-        Hotkey,
-        Ipc,
-        WiFi,
-        WindowBoundary,
-        Config,
-        Language,
-        Resume,
-    }
-    fn refresh_tray_status(route: Event, sink: &mut Vec<Event>) {
-        sink.push(route);
-    }
-    #[test]
-    fn every_state_producing_route_refreshes_the_shared_tray_seam() {
-        let mut sink = Vec::new();
-        let expected = vec![
-            Event::Startup,
-            Event::Tray,
-            Event::Hotkey,
-            Event::Ipc,
-            Event::WiFi,
-            Event::WindowBoundary,
-            Event::Config,
-            Event::Language,
-            Event::Resume,
-        ];
-        for route in expected.iter().copied() {
-            refresh_tray_status(route, &mut sink);
-        }
-        assert_eq!(sink, expected);
-    }
-}
-
 /// Engine operational state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineState {
