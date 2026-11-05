@@ -1412,24 +1412,50 @@ mod tray_refresh_contract_tests {
     #[test]
     fn runtime_routes_rebuild_mode_text_from_config_and_language() {
         let clock = FixedClock(at(10));
-        let mut config = AppConfig::default();
-        config.mode = AppMode::WiFi;
+        let config = AppConfig {
+            mode: AppMode::WiFi,
+            ..AppConfig::default()
+        };
         for (route, locale, expected) in [
             (TrayRoute::Startup, "en", "Mode: WiFi"),
             (TrayRoute::Tick, "en", "Mode: WiFi"),
-            (TrayRoute::ConfigChanged { policy_changed: false }, "en", "Mode: WiFi"),
+            (
+                TrayRoute::ConfigChanged {
+                    policy_changed: false,
+                },
+                "en",
+                "Mode: WiFi",
+            ),
             (TrayRoute::LanguageChanged, "es", "Modo: WiFi"),
         ] {
             let mut supervisor = runtime::Supervisor::new();
             let mut backend = RecordingBackend::default();
             let mut sink = RecordingSink::default();
-            handle_runtime_route(RuntimeRouteInput { route: TrayRoute::Startup, config: &config, clock: &clock,
-                bundle: &i18n::create_bundle("en") }, &mut supervisor, &mut backend, &mut sink)
-                .expect("startup publishes");
+            handle_runtime_route(
+                RuntimeRouteInput {
+                    route: TrayRoute::Startup,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &i18n::create_bundle("en"),
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("startup publishes");
             sink.calls.clear();
-            handle_runtime_route(RuntimeRouteInput { route, config: &config, clock: &clock,
-                bundle: &i18n::create_bundle(locale) }, &mut supervisor, &mut backend, &mut sink)
-                .expect("route publishes");
+            handle_runtime_route(
+                RuntimeRouteInput {
+                    route,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &i18n::create_bundle(locale),
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("route publishes");
             assert_eq!(sink.calls[0].1.mode_text, expected, "{route:?}");
         }
     }
@@ -1576,12 +1602,22 @@ mod tray_refresh_contract_tests {
             ("ja", AppMode::Scheduled, "モード: 手動"),
         ];
         for (locale, mode, expected) in cases {
-            let presentation = build_tray_presentation_with_schedule(PresentationInput {
-                snapshot: &state, mode: &mode, bundle: &i18n::create_bundle(locale), locale, clock: &clock,
-            }, false);
+            let presentation = build_tray_presentation_with_schedule(
+                PresentationInput {
+                    snapshot: &state,
+                    mode: &mode,
+                    bundle: &i18n::create_bundle(locale),
+                    locale,
+                    clock: &clock,
+                },
+                false,
+            );
             assert_eq!(presentation.mode_text, expected, "{locale} {mode:?}");
             if matches!(locale, "es" | "ja") {
-                assert!(!presentation.mode_text.chars().any(|c| ('\u{1f300}'..='\u{1faff}').contains(&c)));
+                assert!(!presentation
+                    .mode_text
+                    .chars()
+                    .any(|c| ('\u{1f300}'..='\u{1faff}').contains(&c)));
             }
         }
     }
@@ -3606,11 +3642,21 @@ mod native_wiring_contract_tests {
             paint.contains("self.mode_item.set_text(&presentation.mode_text)"),
             "every paint updates the app-mode line"
         );
-        let label = scoped_block(&source, "fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String {");
-        assert!(!label.contains(".replace("), "mode labels use Fluent arguments, not token replacement");
+        let label = scoped_block(
+            &source,
+            "fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String {",
+        );
+        assert!(
+            !label.contains(".replace("),
+            "mode labels use Fluent arguments, not token replacement"
+        );
         for locale in ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"] {
-            let ftl = std::fs::read_to_string(format!("locales/{locale}.ftl")).expect("locale exists");
-            assert!(!ftl.contains(r#"{ "{" }"#), "{locale} must not escape Fluent braces");
+            let ftl =
+                std::fs::read_to_string(format!("locales/{locale}.ftl")).expect("locale exists");
+            assert!(
+                !ftl.contains(r#"{ "{" }"#),
+                "{locale} must not escape Fluent braces"
+            );
         }
     }
 
@@ -3624,8 +3670,14 @@ mod native_wiring_contract_tests {
         let regular_policy = regular
             .find("setActivationPolicy(")
             .expect("Regular policy is set");
-        assert!(regular.contains("#[allow(deprecated)]"), "legacy activation is explicitly scoped");
-        assert!(!regular.contains(".activate()"), "bare macOS 14 activation is forbidden");
+        assert!(
+            regular.contains("#[allow(deprecated)]"),
+            "legacy activation is explicitly scoped"
+        );
+        assert!(
+            !regular.contains(".activate()"),
+            "bare macOS 14 activation is forbidden"
+        );
         let activate = regular
             .find("activateIgnoringOtherApps(true)")
             .expect("Regular app activates on macOS 12+");
@@ -3641,7 +3693,8 @@ mod native_wiring_contract_tests {
             );
             let existing = scoped_block(opener, "if let Some(win)");
             assert!(
-                existing.contains(".show();") && existing.find(".show()") < existing.find("set_focus()"),
+                existing.contains(".show();")
+                    && existing.find(".show()") < existing.find("set_focus()"),
                 "existing {name} window shows before focus"
             );
             assert!(

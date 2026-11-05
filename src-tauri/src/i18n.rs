@@ -212,7 +212,10 @@ mod tests {
         }
         let mut spanish = fluent_bundle::FluentArgs::new();
         spanish.set("mode", "Manual");
-        assert_eq!(t_with_args(&create_bundle("es"), "tray-app-mode", Some(&spanish)), "Modo: Manual");
+        assert_eq!(
+            t_with_args(&create_bundle("es"), "tray-app-mode", Some(&spanish)),
+            "Modo: Manual"
+        );
     }
 
     #[test]
