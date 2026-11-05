@@ -543,6 +543,69 @@ mod tray_refresh_contract_tests {
         }
     }
 
+    #[cfg(desktop)]
+    fn presentation(text: &str) -> TrayPresentation {
+        TrayPresentation {
+            status: runtime::TrayStatus::Active,
+            menu_text: text.to_owned(),
+            tooltip: text.to_owned(),
+            icon: runtime::TrayIcon::Active,
+        }
+    }
+
+    #[cfg(desktop)]
+    fn mailbox() -> PaintMailbox {
+        PaintMailbox {
+            pending: None,
+            last_requested: None,
+            scheduled: false,
+        }
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn paint_mailbox_keeps_only_the_latest_frame_and_allows_a_follow_up_paint() {
+        let mut mailbox = mailbox();
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, presentation("A")),
+            PaintQueueDecision::Enqueue
+        ));
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, presentation("B")),
+            PaintQueueDecision::Coalesced
+        ));
+        let (_, first) = take_pending_paint(&mut mailbox).expect("the newest queued frame exists");
+        assert_eq!(first.menu_text, "B");
+
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::LanguageChanged, presentation("C")),
+            PaintQueueDecision::Enqueue
+        ));
+        let (_, second) =
+            take_pending_paint(&mut mailbox).expect("a frame queued during paint remains pending");
+        assert_eq!(second.menu_text, "C");
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn paint_mailbox_coalesces_unchanged_ticks_but_repaints_explicit_routes() {
+        let mut mailbox = mailbox();
+        let frame = presentation("active");
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, frame.clone()),
+            PaintQueueDecision::Enqueue
+        ));
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, frame.clone()),
+            PaintQueueDecision::Coalesced
+        ));
+        take_pending_paint(&mut mailbox).expect("initial frame is pending");
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Resume, frame),
+            PaintQueueDecision::Enqueue
+        ));
+    }
+
     #[test]
     fn every_tray_route_maps_to_its_prescribed_lifecycle_event() {
         let cases = [
