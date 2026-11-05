@@ -339,6 +339,7 @@ mod tests {
     use super::*;
     use crate::runtime::OverrideState;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
 
     struct Mouse;
 
@@ -352,6 +353,28 @@ mod tests {
         }
 
         fn jiggle_zen(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct CountingMouse {
+        positions: Arc<AtomicUsize>,
+        moves: Arc<AtomicUsize>,
+    }
+
+    impl MouseDriver for CountingMouse {
+        fn move_relative(&self, _: i32, _: i32) -> Result<(), String> {
+            self.moves.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn get_position(&self) -> Result<(i32, i32), String> {
+            self.positions.fetch_add(1, Ordering::SeqCst);
+            Ok((0, 0))
+        }
+
+        fn jiggle_zen(&self) -> Result<(), String> {
+            self.moves.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -512,5 +535,83 @@ mod tests {
                 override_state: OverrideState::ForceOn { until: Some(until) },
             }
         );
+    }
+
+    #[test]
+    fn power_only_never_calls_the_mouse_driver_while_mouse_subtle_does() {
+        let power_only_positions = Arc::new(AtomicUsize::new(0));
+        let power_only_moves = Arc::new(AtomicUsize::new(0));
+        let power_config = Arc::new(Mutex::new(AppConfig {
+            jiggle_mode: JiggleMode::PowerOnly,
+            interval_secs: 1,
+            ..AppConfig::default()
+        }));
+        let (mut power_only, _, _) = engine_with_mouse(
+            Box::new(CountingMouse {
+                positions: power_only_positions.clone(),
+                moves: power_only_moves.clone(),
+            }),
+            power_config,
+        );
+        power_only.start().expect("PowerOnly engine starts");
+        wait_for_interval(Duration::from_millis(1200));
+        power_only.stop().expect("PowerOnly engine stops");
+        assert_eq!(power_only_positions.load(Ordering::SeqCst), 0);
+        assert_eq!(power_only_moves.load(Ordering::SeqCst), 0);
+
+        let mouse_positions = Arc::new(AtomicUsize::new(0));
+        let mouse_moves = Arc::new(AtomicUsize::new(0));
+        let mouse_config = Arc::new(Mutex::new(AppConfig {
+            jiggle_mode: JiggleMode::MouseSubtle,
+            interval_secs: 1,
+            ..AppConfig::default()
+        }));
+        let (mut mouse_engine, _, _) = engine_with_mouse(
+            Box::new(CountingMouse {
+                positions: mouse_positions.clone(),
+                moves: mouse_moves.clone(),
+            }),
+            mouse_config,
+        );
+        mouse_engine.start().expect("mouse engine starts");
+        wait_until(Duration::from_millis(1200), || {
+            mouse_moves.load(Ordering::SeqCst) > 0
+        });
+        mouse_engine.stop().expect("mouse engine stops");
+        assert!(mouse_positions.load(Ordering::SeqCst) > 0);
+        assert!(mouse_moves.load(Ordering::SeqCst) > 0);
+    }
+
+    fn engine_with_mouse(
+        mouse: Box<dyn MouseDriver>,
+        config: Arc<Mutex<AppConfig>>,
+    ) -> (Engine, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let inhibits = Arc::new(AtomicUsize::new(0));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let power = Power {
+            inhibits: inhibits.clone(),
+            releases: releases.clone(),
+            fail_start: false,
+        };
+        (
+            Engine::new(mouse, Box::new(power), config),
+            inhibits,
+            releases,
+        )
+    }
+
+    fn wait_until(timeout: Duration, ready: impl Fn() -> bool) {
+        let deadline = Instant::now() + timeout;
+        while !ready() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready(), "condition did not become true before its timeout");
+    }
+
+    fn wait_for_interval(timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
