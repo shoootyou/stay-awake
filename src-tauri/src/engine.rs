@@ -23,6 +23,11 @@ struct WorkerControl {
     policy: JigglePolicy,
 }
 
+struct WorkerSnapshot {
+    config: AppConfig,
+    policy: JigglePolicy,
+}
+
 #[cfg(test)]
 pub fn is_within_schedule(config: &AppConfig) -> bool {
     if !config.schedule_enabled {
@@ -218,7 +223,14 @@ fn jiggle_loop(
         if !running.load(Ordering::Acquire) {
             break;
         }
-        let eligible = match worker_eligible(&config, &clock, &worker_control) {
+        let snapshot = match worker_snapshot(&config, &worker_control) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                log::warn!("skipping jiggle: {error}");
+                continue;
+            }
+        };
+        let eligible = match worker_eligible(&snapshot, &clock) {
             Ok(eligible) => eligible,
             Err(error) => {
                 log::warn!("skipping jiggle: {error}");
@@ -235,11 +247,22 @@ fn jiggle_loop(
         if user_active {
             continue;
         }
-        let mode = match config.lock() {
-            Ok(config) => config.jiggle_mode.clone(),
-            Err(_) => break,
+        let snapshot = match worker_snapshot(&config, &worker_control) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                log::warn!("skipping jiggle: {error}");
+                continue;
+            }
         };
-        let result = match mode {
+        if !running.load(Ordering::Acquire)
+            || !worker_eligible(&snapshot, &clock).unwrap_or_else(|error| {
+                log::warn!("skipping jiggle: {error}");
+                false
+            })
+        {
+            continue;
+        }
+        let result = match snapshot.config.jiggle_mode {
             JiggleMode::MouseSubtle => mouse.move_relative(1, 0).and_then(|_| {
                 thread::sleep(Duration::from_millis(50));
                 mouse.move_relative(-1, 0)
@@ -254,11 +277,10 @@ fn jiggle_loop(
     }
 }
 
-fn worker_eligible(
+fn worker_snapshot(
     config: &Arc<Mutex<AppConfig>>,
-    clock: &Arc<dyn Clock>,
     worker_control: &Arc<Mutex<WorkerControl>>,
-) -> Result<bool, String> {
+) -> Result<WorkerSnapshot, String> {
     let control = worker_control
         .lock()
         .map_err(|_| "jiggle policy lock poisoned".to_owned())?;
@@ -266,22 +288,29 @@ fn worker_eligible(
         .lock()
         .map_err(|_| "engine config lock poisoned".to_owned())?
         .clone();
-    let schedule = Schedule::from_config(&config)?;
+    Ok(WorkerSnapshot {
+        config,
+        policy: control.policy.clone(),
+    })
+}
+
+fn worker_eligible(snapshot: &WorkerSnapshot, clock: &Arc<dyn Clock>) -> Result<bool, String> {
+    let schedule = Schedule::from_config(&snapshot.config)?;
     let window = evaluate_schedule(ScheduleInput {
         schedule: &schedule,
         at: clock.now(),
         clock: clock.as_ref(),
     })?;
     let override_state = normalize_override(NormalizeInput {
-        mode: &config.mode,
+        mode: &snapshot.config.mode,
         schedule_enabled: schedule.enabled,
         window: &window,
-        override_state: &control.policy.override_state,
+        override_state: &snapshot.policy.override_state,
         event: LifecycleEvent::Tick,
     });
     Ok(should_jiggle(JiggleInput {
-        mode: &config.mode,
-        jiggle_mode: &config.jiggle_mode,
+        mode: &snapshot.config.mode,
+        jiggle_mode: &snapshot.config.jiggle_mode,
         engine_active: true,
         schedule_enabled: schedule.enabled,
         window: &window,
