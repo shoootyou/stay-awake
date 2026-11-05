@@ -801,6 +801,21 @@ mod tests {
             .expect("ordered config command replies")
     }
 
+    fn send_owner_route(handle: &RuntimeHandle, route: TrayRoute) -> OwnerReply {
+        let (reply, receiver) = mpsc::channel();
+        handle
+            .shared
+            .sender
+            .send(OwnerCommand::Route {
+                route,
+                reply: Some(reply),
+            })
+            .expect("ordered route command sends");
+        receiver
+            .recv_timeout(REQUEST_TIMEOUT)
+            .expect("ordered route command replies")
+    }
+
     struct SharedRecordingBackend {
         calls: Arc<Mutex<Vec<&'static str>>>,
         active: Arc<Mutex<bool>>,
@@ -825,6 +840,40 @@ mod tests {
 
         fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {
             self.calls.lock().expect("backend log lock").push("policy");
+        }
+    }
+
+    struct FailingConfigPublicationBackend {
+        active: Arc<Mutex<bool>>,
+        starts: Arc<Mutex<usize>>,
+        failures_remaining: usize,
+    }
+
+    impl EngineBackend for FailingConfigPublicationBackend {
+        fn start(&mut self) -> Result<(), String> {
+            *self.starts.lock().expect("backend start lock") += 1;
+            *self.active.lock().expect("backend activity lock") = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            *self.active.lock().expect("backend activity lock") = false;
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            *self.active.lock().expect("backend activity lock")
+        }
+
+        fn set_jiggle_policy(&mut self, _: crate::runtime::JigglePolicy) {}
+
+        fn update_config(&mut self, _: AppConfig) -> Result<(), String> {
+            if self.failures_remaining == 0 {
+                Ok(())
+            } else {
+                self.failures_remaining -= 1;
+                Err("worker configuration rejected".to_owned())
+            }
         }
     }
 
@@ -1119,6 +1168,78 @@ mod tests {
                 .expect("network-list reply includes a snapshot")
                 .engine_active,
             "removing the current SSID stops WiFi activation without another observation"
+        );
+    }
+
+    #[test]
+    fn failed_config_publication_observes_cleanup_guards_ticks_and_recovers_for_quit() {
+        let active = Arc::new(Mutex::new(false));
+        let starts = Arc::new(Mutex::new(0));
+        let backend_active = active.clone();
+        let backend_starts = starts.clone();
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let initial = AppConfig {
+            mode: crate::config::AppMode::AlwaysOn,
+            ..AppConfig::default()
+        };
+        let handle = RuntimeHandle::spawn(OwnerStart {
+            config: Arc::new(Mutex::new(initial.clone())),
+            bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            clock: Arc::new(FixedClock(now)),
+            backend_factory: Box::new(move |_, _| {
+                Box::new(FailingConfigPublicationBackend {
+                    active: backend_active,
+                    starts: backend_starts,
+                    failures_remaining: 1,
+                })
+            }),
+            sink: Box::new(RecordingSink::default()),
+        })
+        .expect("owner spawn succeeds");
+        let mut candidate = initial.clone();
+        candidate.interval_secs = 60;
+
+        let failed = send_owner_config(&handle, candidate.clone());
+        assert!(
+            failed.error.is_some(),
+            "publication failure is returned to the caller"
+        );
+        assert!(
+            !failed
+                .snapshot
+                .expect("failed publication returns an observed snapshot")
+                .engine_active,
+            "the failed reply reports the actual post-cleanup inactivity"
+        );
+
+        let starts_after_cleanup = *starts.lock().expect("backend start lock");
+        let tick = send_owner_route(&handle, TrayRoute::Tick);
+        assert!(tick.error.is_none(), "the guarded tick is observable");
+        assert_eq!(
+            *starts.lock().expect("backend start lock"),
+            starts_after_cleanup,
+            "a configuration fault blocks automatic restart"
+        );
+
+        let recovered = send_owner_config(&handle, candidate);
+        assert!(
+            recovered.error.is_none(),
+            "the next publication clears the fault guard"
+        );
+        assert!(
+            recovered
+                .snapshot
+                .expect("successful publication returns a snapshot")
+                .engine_active,
+            "a successful publication restores automatic reconciliation"
+        );
+        let quit = send_owner_route(&handle, TrayRoute::Quit);
+        assert!(
+            quit.terminating,
+            "Quit remains available while fault recovery is pending"
         );
     }
 
