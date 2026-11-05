@@ -79,7 +79,7 @@ impl PendingReply {
     }
 }
 
-enum OwnerCommand {
+pub(crate) enum OwnerCommand {
     Route {
         route: TrayRoute,
         reply: Option<mpsc::Sender<OwnerReply>>,
@@ -108,7 +108,7 @@ impl Drop for OwnerAlive {
     }
 }
 
-struct Shared {
+pub(crate) struct Shared {
     sender: mpsc::Sender<OwnerCommand>,
     config: Arc<Mutex<AppConfig>>,
     bundle: Arc<Mutex<Bundle>>,
@@ -175,7 +175,14 @@ pub(crate) trait TimeSource: Send {
     fn sample(&mut self, clock: &dyn Clock) -> TimeSample;
 }
 
+/// The loop's monotonic deadline source is injectable without changing wall-clock sampling.
+pub(crate) trait MonotonicClock: Send {
+    fn now(&mut self) -> Instant;
+}
+
 struct SystemTimeSource;
+
+struct SystemMonotonicClock;
 
 impl TimeSource for SystemTimeSource {
     fn sample(&mut self, clock: &dyn Clock) -> TimeSample {
@@ -185,6 +192,12 @@ impl TimeSource for SystemTimeSource {
             wall,
             monotonic: Instant::now(),
         }
+    }
+}
+
+impl MonotonicClock for SystemMonotonicClock {
+    fn now(&mut self) -> Instant {
+        Instant::now()
     }
 }
 
@@ -522,15 +535,40 @@ fn owner_loop(
 fn owner_loop_with_time_source(
     receiver: mpsc::Receiver<OwnerCommand>,
     shared: std::sync::Weak<Shared>,
+    config: AppConfig,
+    clock: Arc<dyn Clock>,
+    backend: Box<dyn EngineBackend>,
+    sink: Box<dyn TraySink + Send>,
+    time_source: &mut dyn TimeSource,
+) -> Result<(), String> {
+    owner_loop_with_time_sources(
+        receiver,
+        shared,
+        config,
+        clock,
+        backend,
+        sink,
+        time_source,
+        &mut SystemMonotonicClock,
+    )
+}
+
+/// Runs the owner loop with explicit wall and monotonic sources for deadline tests.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn owner_loop_with_time_sources(
+    receiver: mpsc::Receiver<OwnerCommand>,
+    shared: std::sync::Weak<Shared>,
     mut config: AppConfig,
     clock: Arc<dyn Clock>,
     mut backend: Box<dyn EngineBackend>,
     mut sink: Box<dyn TraySink + Send>,
     time_source: &mut dyn TimeSource,
+    monotonic_clock: &mut dyn MonotonicClock,
 ) -> Result<(), String> {
     let _alive = OwnerAlive(shared.clone());
     let mut supervisor = Supervisor::new();
-    let mut next_tick = Instant::now() + SUPERVISOR_PERIOD;
+    let mut next_tick = monotonic_clock.now() + SUPERVISOR_PERIOD;
     let startup = route_reply(
         TrayRoute::Startup,
         &config,
@@ -545,7 +583,7 @@ fn owner_loop_with_time_source(
     let mut last_automatic_error = None;
     let mut before_wait = time_source.sample(clock.as_ref());
     loop {
-        let now = Instant::now();
+        let now = monotonic_clock.now();
         let closing = shared
             .upgrade()
             .is_none_or(|state| state.closing.load(Ordering::Acquire));
@@ -569,7 +607,7 @@ fn owner_loop_with_time_source(
                 )
             };
             report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
-            next_tick = Instant::now() + SUPERVISOR_PERIOD;
+            next_tick = monotonic_clock.now() + SUPERVISOR_PERIOD;
             before_wait = time_source.sample(clock.as_ref());
             continue;
         }
@@ -895,7 +933,7 @@ fn owner_loop_with_time_source(
                     };
                     report_automatic_error(sink.as_mut(), &mut last_automatic_error, &result);
                 }
-                next_tick = Instant::now() + SUPERVISOR_PERIOD;
+                next_tick = monotonic_clock.now() + SUPERVISOR_PERIOD;
                 before_wait = time_source.sample(clock.as_ref());
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
