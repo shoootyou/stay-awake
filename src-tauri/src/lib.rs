@@ -3549,6 +3549,12 @@ mod native_wiring_contract_tests {
             paint.contains("self.mode_item.set_text(&presentation.mode_text)"),
             "every paint updates the app-mode line"
         );
+        let label = scoped_block(&source, "fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) {");
+        assert!(!label.contains(".replace("), "mode labels use Fluent arguments, not token replacement");
+        for locale in ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"] {
+            let ftl = std::fs::read_to_string(format!("locales/{locale}.ftl")).expect("locale exists");
+            assert!(!ftl.contains(r#"{ "{" }"#), "{locale} must not escape Fluent braces");
+        }
     }
 
     #[test]

@@ -180,6 +180,7 @@ mod tests {
         let mut args = fluent_bundle::FluentArgs::new();
         args.set("when", "Mon 09 Nov 2026, 09:00");
         args.set("network", "Lab");
+        args.set("mode", "Manual");
         for (key, expected) in [
             ("tray-waiting", "Waiting for schedule"),
             ("tray-paused", "Paused for this window"),
@@ -200,7 +201,7 @@ mod tests {
                 "schedule-wifi-alert",
                 "In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.",
             ),
-            ("tray-app-mode", "Mode: { $mode }"),
+            ("tray-app-mode", "Mode: Manual"),
             ("tray-app-mode-manual", "Manual"),
             ("tray-app-mode-always-on", "Always On"),
             ("tray-app-mode-wifi", "WiFi"),
@@ -209,6 +210,9 @@ mod tests {
         ] {
             assert_eq!(t_with_args(&bundle, key, Some(&args)), expected, "{key}");
         }
+        let mut spanish = fluent_bundle::FluentArgs::new();
+        spanish.set("mode", "Manual");
+        assert_eq!(t_with_args(&create_bundle("es"), "tray-app-mode", Some(&spanish)), "Modo: Manual");
     }
 
     #[test]
