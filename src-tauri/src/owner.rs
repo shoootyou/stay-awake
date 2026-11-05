@@ -1523,75 +1523,108 @@ mod tests {
     }
 
     #[test]
-    fn failed_config_publication_observes_cleanup_guards_ticks_and_recovers_for_quit() {
-        let active = Arc::new(Mutex::new(false));
-        let starts = Arc::new(Mutex::new(0));
-        let backend_active = active.clone();
-        let backend_starts = starts.clone();
-        let now = Utc
-            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
-            .single()
-            .expect("fixed instant exists");
-        let initial = AppConfig {
-            mode: crate::config::AppMode::AlwaysOn,
-            ..AppConfig::default()
-        };
-        let handle = RuntimeHandle::spawn(OwnerStart {
-            config: Arc::new(Mutex::new(initial.clone())),
-            bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
-            clock: Arc::new(FixedClock(now)),
-            backend_factory: Box::new(move |_, _| {
-                Box::new(FailingConfigPublicationBackend {
-                    active: backend_active,
-                    starts: backend_starts,
-                    failures_remaining: 1,
-                })
-            }),
-            sink: Box::new(RecordingSink::default()),
-        })
-        .expect("owner spawn succeeds");
-        let mut candidate = initial.clone();
-        candidate.interval_secs = 60;
+    fn failed_config_publication_blocks_scheduled_automatic_routes_until_recovery() {
+        for mode in [
+            crate::config::AppMode::Manual,
+            crate::config::AppMode::AlwaysOn,
+        ] {
+            let active = Arc::new(Mutex::new(false));
+            let starts = Arc::new(Mutex::new(0));
+            let backend_active = active.clone();
+            let backend_starts = starts.clone();
+            let now = Utc
+                .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists");
+            let initial = AppConfig {
+                mode,
+                ..scheduled_active_config()
+            };
+            let handle = RuntimeHandle::spawn(OwnerStart {
+                config: Arc::new(Mutex::new(initial.clone())),
+                bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+                clock: Arc::new(FixedClock(now)),
+                backend_factory: Box::new(move |_, _| {
+                    Box::new(FailingConfigPublicationBackend {
+                        active: backend_active,
+                        starts: backend_starts,
+                        failures_remaining: 1,
+                    })
+                }),
+                sink: Box::new(RecordingSink::default()),
+            })
+            .expect("owner spawn succeeds");
+            let mut candidate = initial.clone();
+            candidate.interval_secs = 60;
 
-        let failed = send_owner_config(&handle, candidate.clone());
-        assert!(
-            failed.error.is_some(),
-            "publication failure is returned to the caller"
-        );
-        assert!(
-            !failed
-                .snapshot
-                .expect("failed publication returns an observed snapshot")
-                .engine_active,
-            "the failed reply reports the actual post-cleanup inactivity"
-        );
+            let failed = send_owner_config(&handle, candidate.clone());
+            assert!(
+                failed.error.is_some(),
+                "publication failure reaches the caller"
+            );
+            assert!(
+                !failed
+                    .snapshot
+                    .expect("failed publication returns an observed snapshot")
+                    .engine_active,
+                "cleanup makes the accepted scheduled policy inactive"
+            );
 
-        let starts_after_cleanup = *starts.lock().expect("backend start lock");
-        let tick = send_owner_route(&handle, TrayRoute::Tick);
-        assert!(tick.error.is_none(), "the guarded tick is observable");
-        assert_eq!(
-            *starts.lock().expect("backend start lock"),
-            starts_after_cleanup,
-            "a configuration fault blocks automatic restart"
-        );
+            let starts_after_cleanup = *starts.lock().expect("backend start lock");
+            for route in [TrayRoute::Tick, TrayRoute::Resume] {
+                let automatic = send_owner_route(&handle, route);
+                assert!(
+                    automatic.error.is_none(),
+                    "fault-guard observation succeeds"
+                );
+                assert_eq!(
+                    *starts.lock().expect("backend start lock"),
+                    starts_after_cleanup,
+                    "a configuration fault blocks {route:?} from restarting a scheduled policy"
+                );
+            }
+            assert!(
+                handle
+                    .query()
+                    .expect("query sends while the fault is latched")
+                    .wait(REQUEST_TIMEOUT)
+                    .expect("query still replies")
+                    .snapshot
+                    .is_some(),
+                "Query remains available under the fault guard"
+            );
 
-        let recovered = send_owner_config(&handle, candidate);
-        assert!(
-            recovered.error.is_none(),
-            "the next publication clears the fault guard"
-        );
-        assert!(
-            recovered
-                .snapshot
-                .expect("successful publication returns a snapshot")
-                .engine_active,
-            "a successful publication restores automatic reconciliation"
-        );
-        let quit = send_owner_route(&handle, TrayRoute::Quit);
-        assert!(
-            quit.terminating,
-            "Quit remains available while fault recovery is pending"
-        );
+            let user_start = send_owner_route(&handle, TrayRoute::TrayToggle);
+            assert!(
+                user_start.error.is_none(),
+                "a user toggle remains actionable"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                starts_after_cleanup + 1,
+                "the fault guard suppresses automatic starts, not an explicit user toggle"
+            );
+            let user_stop = send_owner_route(&handle, TrayRoute::TrayToggle);
+            assert!(
+                user_stop.error.is_none(),
+                "the user can stop the explicit activation"
+            );
+
+            let recovered = send_owner_config(&handle, candidate);
+            assert!(
+                recovered.error.is_none(),
+                "a successful publication clears the guard"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                starts_after_cleanup + 2,
+                "the accepted scheduled policy resumes automatic activation after recovery"
+            );
+            assert!(
+                send_owner_route(&handle, TrayRoute::Quit).terminating,
+                "Quit remains available while the fault guard is latched or recovering"
+            );
+        }
     }
 
     #[test]
