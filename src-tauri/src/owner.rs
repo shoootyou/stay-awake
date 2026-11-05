@@ -627,6 +627,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn detects_a_backward_wall_clock_jump_without_a_long_monotonic_wait() {
+        let monotonic = Instant::now();
+        let previous = TimeSample {
+            wall: Utc
+                .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists"),
+            monotonic,
+            offset_seconds: 0,
+        };
+        let current = TimeSample {
+            wall: previous.wall - chrono::Duration::seconds(5),
+            monotonic: monotonic + Duration::from_millis(250),
+            offset_seconds: 0,
+        };
+
+        assert!(detect_time_change(TimeChangeInput {
+            previous: &previous,
+            current: &current,
+        }));
+    }
+
     #[derive(Default)]
     struct RecordingSink {
         frames: Arc<Mutex<Vec<(TrayRoute, crate::TrayPresentation)>>>,
