@@ -190,8 +190,11 @@ mod tests {
             ("tray-no-next-window", "No upcoming window"),
             (
                 "schedule-enabled-hint",
-                "Automatically starts and stops in Manual and Always On. In WiFi mode, only mouse \
-                 jiggles follow the schedule.",
+                "Automatically starts and stops the engine with the schedule.",
+            ),
+            (
+                "schedule-wifi-alert",
+                "In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.",
             ),
             ("settings-mode-info-label", "About jiggle modes"),
             ("settings-wifi-remove-label", "Remove network Lab"),
