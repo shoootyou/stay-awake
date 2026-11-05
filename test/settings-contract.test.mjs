@@ -92,6 +92,21 @@ const assertSettingsOrder = (html, css) => {
 
 const localeKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].map((match) => match[1]));
 const localeValue = (source, key) => source.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, "m"))?.[1]?.trim();
+const stripCssComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, "");
+const cssBlock = (source, selector) => stripCssComments(source)
+  .match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`, "s"))?.[1] ?? "";
+const assertScheduleAlertHiddenState = (html, js, css) => {
+  const schedule = settingsGroups(uncommented(html)).find((group) => group.includes('id="schedule-section"'));
+  const alert = tagWithId(schedule ?? "", "schedule-wifi-alert");
+  assert.ok("hidden" in (alert?.attributes ?? {}), "Schedule alert must start with the hidden attribute");
+  const update = js.match(/function updateScheduleWifiAlert\([^)]*\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(update, /\.hidden\s*=\s*mode\s*!==\s*["']WiFi["']/,
+    "Schedule alert updates must use the HTML hidden state");
+  assert.match(cssBlock(css, ".schedule-alert"), /display\s*:\s*flex\s*;/,
+    "Schedule alert base layout must remain flex");
+  assert.match(cssBlock(css, ".schedule-alert[hidden]"), /display\s*:\s*none\s*!important\s*;/,
+    "Schedule alert hidden state must override its flex layout");
+};
 
 // Mutant: restore the descendant selector and let nested hints inherit group padding.
 test("keeps schedule helper padding scoped to a direct group child", () => {
@@ -132,7 +147,8 @@ const runSettings = async (config) => {
   const ids = ["jiggle-mode", "interval", "interval-value", "app-mode", "app-mode-desc", "autostart",
     "language", "hotkey", "schedule-enabled", "schedule-start", "schedule-end", "profile-select",
     "wifi-section", "accessibility-banner", "mode-info-btn", "grant-btn", "profile-save-btn",
-    "profile-delete-btn", "wifi-register-btn", "hotkey-recorder", "schedule-wifi-alert"];
+    "profile-delete-btn", "wifi-register-btn", "wifi-current-ssid", "wifi-network-list", "hotkey-recorder",
+    "schedule-wifi-alert"];
   const elements = new Map(ids.map((id) => [id, new Element(id)]));
   const alert = elements.get("schedule-wifi-alert");
   alert.hidden = true;
@@ -201,6 +217,13 @@ test("keeps the WiFi-only Schedule alert localized, hidden by default, and visua
   assert.match(alertMarkup, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.doesNotMatch(alertMarkup, /[\u{1F300}-\u{1FAFF}]/u, "Schedule alert must not use emoji");
   assert.match(settingsCss, /\.schedule-alert\s*\{[^}]*padding\s*:/s, "Schedule alert needs its own inset rule");
+});
+
+test("requires the Schedule alert hidden state to override its flex layout", () => {
+  assertScheduleAlertHiddenState(settingsHtml, settingsJs, settingsCss);
+  const withoutHiddenRule = settingsCss.replace(/\.schedule-alert\[hidden\]\s*\{[^}]*\}\s*/s, "");
+  assert.throws(() => assertScheduleAlertHiddenState(settingsHtml, settingsJs, withoutHiddenRule),
+    /hidden state must override/);
 });
 
 test("shows the Schedule alert only for WiFi on load and live mode changes", async () => {
