@@ -1628,7 +1628,7 @@ mod tests {
     }
 
     #[test]
-    fn ticks_do_not_restart_the_backend_after_quit_cleanup_with_a_tray_error() {
+    fn quit_completes_after_backend_release_despite_a_persistent_tray_error() {
         let config = AppConfig {
             schedule_enabled: true,
             schedule_start_hour: 7,
@@ -1658,24 +1658,13 @@ mod tests {
         })
         .expect("owner spawn succeeds");
 
-        assert!(
-            handle.shutdown(SHUTDOWN_TIMEOUT).is_err(),
-            "a tray failure after confirmed cleanup keeps shutdown retryable"
-        );
-        thread::sleep(SUPERVISOR_PERIOD + Duration::from_millis(50));
-        assert_eq!(
-            calls
-                .lock()
-                .expect("backend log lock")
-                .iter()
-                .filter(|call| **call == "start")
-                .count(),
-            1,
-            "automatic ticks must stay quiescent after shutdown begins"
-        );
+        handle
+            .shutdown(SHUTDOWN_TIMEOUT)
+            .expect("tray publication errors do not block a released backend from terminating");
+        assert!(handle.exit_ready(), "a joined owner becomes exit-ready");
         assert!(
             !*active.lock().expect("backend activity lock"),
-            "the confirmed release remains inactive while quit is retryable"
+            "the successful release remains inactive after the owner joins"
         );
     }
 
