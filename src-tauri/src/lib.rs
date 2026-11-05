@@ -2677,6 +2677,10 @@ mod native_wiring_contract_tests {
             "ExitRequested prevents early process exit until owner completion"
         );
         assert!(
+            run_events.contains("Some(runtime) if runtime.exit_ready() => {}"),
+            "only an exit-ready owner permits the requested process exit"
+        );
+        assert!(
             run_events.contains("tauri::RunEvent::Exit") && run_events.contains("exit_ready"),
             "final Exit checks/logs unexpected shutdown before process teardown"
         );

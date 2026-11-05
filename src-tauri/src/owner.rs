@@ -824,6 +824,11 @@ mod tests {
         );
         let calls = calls.lock().expect("backend log lock");
         assert_eq!(calls.first(), Some(&"policy"));
+        assert_eq!(
+            calls.iter().filter(|call| **call == "policy").count(),
+            2,
+            "one startup and one queued toggle each publish one jiggle policy"
+        );
         assert_eq!(calls.iter().filter(|call| **call == "start").count(), 1);
     }
 
@@ -888,6 +893,33 @@ mod tests {
         assert!(
             pending.wait(REQUEST_TIMEOUT).is_ok(),
             "owner accepts the saved snapshot"
+        );
+
+        let source = include_str!("owner.rs");
+        let update_config = &source[source
+            .find("pub(crate) fn update_config")
+            .expect("update_config remains defined")..];
+        assert!(
+            update_config
+                .find("persist_config_with(&candidate, AppConfig::save)")
+                .expect("candidate is saved")
+                < update_config
+                    .find("OwnerCommand::Config")
+                    .expect("owner receives the saved candidate"),
+            "disk persistence precedes runtime configuration delivery"
+        );
+    }
+
+    #[test]
+    fn route_reply_builds_its_bundle_from_the_accepted_language() {
+        let source = include_str!("owner.rs");
+        let route_reply = &source[source
+            .find("fn route_reply(")
+            .expect("route reply remains defined")..];
+
+        assert!(
+            route_reply.contains("bundle: &create_bundle(&config.language)"),
+            "each route renders with its accepted configuration language"
         );
     }
 

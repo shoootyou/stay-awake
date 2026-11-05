@@ -337,6 +337,7 @@ mod tests {
      *   - An inhibitor error leaves the engine idle.
      */
     use super::*;
+    use crate::runtime::OverrideState;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Mouse;
@@ -494,5 +495,22 @@ mod tests {
 
         assert_eq!(releases.load(Ordering::SeqCst), 2);
         assert!(!engine.is_active());
+    }
+
+    #[test]
+    fn jiggle_policy_retains_force_on_for_the_worker() {
+        let (mut engine, _, _) = engine(false);
+        let until = chrono::Utc::now();
+
+        engine.set_jiggle_policy(JigglePolicy {
+            override_state: OverrideState::ForceOn { until: Some(until) },
+        });
+
+        assert_eq!(
+            engine.worker_control.lock().expect("policy lock").policy,
+            JigglePolicy {
+                override_state: OverrideState::ForceOn { until: Some(until) },
+            }
+        );
     }
 }
