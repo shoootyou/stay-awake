@@ -2495,9 +2495,11 @@ mod core_helper_tests {
     /*
      * @spec-handoff
      * @interface parse_shortcut_string(), is_within_schedule()
+     * @interface format_translation(Bundle, key, network) -> String
      * @behavior
      *   - Shortcut aliases produce the same registered shortcut and invalid parts are rejected.
      *   - Disabled schedules do not permit scheduled autostart.
+     *   - Network names are passed to Fluent as arguments without JavaScript-style expansion.
      * @edge-cases
      *   - Empty or unknown shortcut parts are invalid.
      */
@@ -2531,6 +2533,26 @@ mod core_helper_tests {
             ..AppConfig::default()
         };
         assert!(!is_within_schedule(&config));
+    }
+
+    #[test]
+    fn translation_arguments_keep_network_names_literal_in_english_and_spanish() {
+        for locale in ["en", "es"] {
+            for network in ["$&", "$$", "$1", "<b>x</b>"] {
+                let rendered = format_translation(
+                    &i18n::create_bundle(locale),
+                    "settings-wifi-remove-label",
+                    Some(network),
+                );
+                assert_eq!(
+                    rendered.matches(network).count(),
+                    1,
+                    "{locale} must include {network:?} exactly once"
+                );
+                assert!(!rendered.contains("{ $network }"));
+                assert!(!rendered.contains('\u{2068}') && !rendered.contains('\u{2069}'));
+            }
+        }
     }
 }
 
