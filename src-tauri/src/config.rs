@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -189,7 +189,44 @@ fn create_config_dir(path: &Path) -> Result<(), String> {
     builder.mode(0o700);
     builder
         .create(path)
-        .map_err(|error| format!("Failed to create config directory: {error}"))
+        .map_err(|error| format!("Failed to create config directory: {error}"))?;
+    #[cfg(unix)]
+    harden_config_dir(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_config_dir(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Failed to inspect config directory: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("Refusing to use a symlinked config directory".to_owned());
+    }
+    if !metadata.is_dir() {
+        return Err("Config directory path is not a directory".to_owned());
+    }
+    let current_uid = current_uid()?;
+    if metadata.uid() != current_uid {
+        return Err("Refusing to use a config directory owned by another user".to_owned());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("Failed to secure config directory: {error}"))
+}
+
+#[cfg(unix)]
+fn current_uid() -> Result<u32, String> {
+    let output = std::process::Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()
+        .map_err(|error| format!("Failed to determine current user: {error}"))?;
+    if !output.status.success() {
+        return Err("Failed to determine current user".to_owned());
+    }
+    std::str::from_utf8(&output.stdout)
+        .map_err(|error| format!("Current user ID was not UTF-8: {error}"))?
+        .trim()
+        .parse()
+        .map_err(|error| format!("Current user ID was invalid: {error}"))
 }
 
 fn temp_config_path(path: &Path) -> PathBuf {
