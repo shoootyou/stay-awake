@@ -157,6 +157,147 @@ pub(crate) struct TrayImages {
 }
 
 #[cfg(desktop)]
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(crate) enum TrayPlatform {
+    Macos,
+    Linux,
+    Windows,
+}
+
+#[cfg(desktop)]
+pub(crate) struct TrayImageSpec {
+    bytes: &'static [u8],
+    template: bool,
+}
+
+#[cfg(desktop)]
+const MACOS_ACTIVE: [TrayImageSpec; 2] = [
+    TrayImageSpec {
+        bytes: include_bytes!("../icons/tray-active.png"),
+        template: true,
+    },
+    TrayImageSpec {
+        bytes: include_bytes!("../icons/tray-active@2x.png"),
+        template: true,
+    },
+];
+
+#[cfg(desktop)]
+const MACOS_INACTIVE: [TrayImageSpec; 2] = [
+    TrayImageSpec {
+        bytes: include_bytes!("../icons/tray-inactive.png"),
+        template: true,
+    },
+    TrayImageSpec {
+        bytes: include_bytes!("../icons/tray-inactive@2x.png"),
+        template: true,
+    },
+];
+
+#[cfg(desktop)]
+const MACOS_WAITING: [TrayImageSpec; 2] = [
+    TrayImageSpec {
+        bytes: include_bytes!("../icons/tray-waiting.png"),
+        template: true,
+    },
+    TrayImageSpec {
+        bytes: include_bytes!("../icons/tray-waiting@2x.png"),
+        template: true,
+    },
+];
+
+#[cfg(desktop)]
+const LINUX_ACTIVE: TrayImageSpec = TrayImageSpec {
+    bytes: include_bytes!("../icons/tray-linux-active.png"),
+    template: false,
+};
+
+#[cfg(desktop)]
+const LINUX_INACTIVE: TrayImageSpec = TrayImageSpec {
+    bytes: include_bytes!("../icons/tray-linux-inactive.png"),
+    template: false,
+};
+
+#[cfg(desktop)]
+const LINUX_WAITING: TrayImageSpec = TrayImageSpec {
+    bytes: include_bytes!("../icons/tray-linux-waiting.png"),
+    template: false,
+};
+
+#[cfg(desktop)]
+const WINDOWS_ACTIVE: TrayImageSpec = TrayImageSpec {
+    bytes: include_bytes!("../icons/tray-linux-active.png"),
+    template: false,
+};
+
+#[cfg(desktop)]
+const WINDOWS_INACTIVE: TrayImageSpec = TrayImageSpec {
+    bytes: include_bytes!("../icons/tray-linux-inactive.png"),
+    template: false,
+};
+
+#[cfg(desktop)]
+const WINDOWS_WAITING: TrayImageSpec = TrayImageSpec {
+    bytes: include_bytes!("../icons/tray-linux-waiting.png"),
+    template: false,
+};
+
+#[cfg(desktop)]
+pub(crate) fn tray_image_for(
+    icon: runtime::TrayIcon,
+    platform: TrayPlatform,
+) -> &'static TrayImageSpec {
+    match (platform, icon) {
+        (TrayPlatform::Macos, runtime::TrayIcon::Active) => &MACOS_ACTIVE[1],
+        (TrayPlatform::Macos, runtime::TrayIcon::Inactive) => &MACOS_INACTIVE[1],
+        (TrayPlatform::Macos, runtime::TrayIcon::Waiting) => &MACOS_WAITING[1],
+        (TrayPlatform::Linux, runtime::TrayIcon::Active) => &LINUX_ACTIVE,
+        (TrayPlatform::Linux, runtime::TrayIcon::Inactive) => &LINUX_INACTIVE,
+        (TrayPlatform::Linux, runtime::TrayIcon::Waiting) => &LINUX_WAITING,
+        (TrayPlatform::Windows, runtime::TrayIcon::Active) => &WINDOWS_ACTIVE,
+        (TrayPlatform::Windows, runtime::TrayIcon::Inactive) => &WINDOWS_INACTIVE,
+        (TrayPlatform::Windows, runtime::TrayIcon::Waiting) => &WINDOWS_WAITING,
+    }
+}
+
+#[cfg(desktop)]
+fn tray_platform() -> TrayPlatform {
+    #[cfg(target_os = "macos")]
+    {
+        TrayPlatform::Macos
+    }
+    #[cfg(target_os = "linux")]
+    {
+        TrayPlatform::Linux
+    }
+    #[cfg(target_os = "windows")]
+    {
+        TrayPlatform::Windows
+    }
+}
+
+#[cfg(desktop)]
+fn tray_image(spec: &TrayImageSpec) -> Result<tauri::image::Image<'static>, String> {
+    #[cfg(target_os = "macos")]
+    debug_assert!(spec.template);
+    #[cfg(not(target_os = "macos"))]
+    debug_assert!(!spec.template);
+    tauri::image::Image::from_bytes(spec.bytes).map_err(|error| error.to_string())
+}
+
+#[cfg(desktop)]
+impl TrayImages {
+    fn load(platform: TrayPlatform) -> Result<Self, String> {
+        Ok(Self {
+            active: tray_image(tray_image_for(runtime::TrayIcon::Active, platform))?,
+            inactive: tray_image(tray_image_for(runtime::TrayIcon::Inactive, platform))?,
+            waiting: tray_image(tray_image_for(runtime::TrayIcon::Waiting, platform))?,
+        })
+    }
+}
+
+#[cfg(desktop)]
 pub(crate) struct NativeTrayTargets {
     pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
     pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
@@ -1677,17 +1818,6 @@ fn set_macos_accessory_app() {
     }
 }
 
-/// Create a dimmed version of an RGBA icon by reducing opacity.
-fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
-    let rgba = icon.rgba().to_vec();
-    let mut dimmed = rgba.clone();
-    // Reduce alpha channel to ~40% for a "greyed out" look
-    for i in (3..dimmed.len()).step_by(4) {
-        dimmed[i] = (dimmed[i] as f32 * 0.4) as u8;
-    }
-    tauri::image::Image::new_owned(dimmed, icon.width(), icon.height())
-}
-
 #[cfg(test)]
 fn is_within_schedule(cfg: &AppConfig) -> bool {
     cfg.schedule_enabled && engine::is_within_schedule(cfg)
@@ -1869,6 +1999,18 @@ pub fn run() {
                 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
                 use tauri::tray::TrayIconBuilder;
 
+                let _ = [
+                    include_bytes!("../icons/tray-active.png") as &[u8],
+                    include_bytes!("../icons/tray-inactive.png") as &[u8],
+                    include_bytes!("../icons/tray-waiting.png") as &[u8],
+                    include_bytes!("../icons/tray-active@2x.png") as &[u8],
+                    include_bytes!("../icons/tray-inactive@2x.png") as &[u8],
+                    include_bytes!("../icons/tray-waiting@2x.png") as &[u8],
+                    include_bytes!("../icons/tray-linux-active.png") as &[u8],
+                    include_bytes!("../icons/tray-linux-inactive.png") as &[u8],
+                    include_bytes!("../icons/tray-linux-waiting.png") as &[u8],
+                ];
+
                 // Resolve tray labels from the i18n bundle.
                 let tray_bundle = i18n::create_bundle(&loaded_config.language);
                 let tr = |id: &str| i18n::t(&tray_bundle, id);
@@ -1967,14 +2109,10 @@ pub fn run() {
                 let perm_for_tray = Arc::clone(&perm_checker);
                 let accessibility_clone = accessibility_item.clone();
 
-                let tray_icon_bytes = include_bytes!("../icons/tray-icon@2x.png");
-                let tray_img = tauri::image::Image::from_bytes(tray_icon_bytes).expect("tray icon");
-                let active_icon = tauri::image::Image::new_owned(
-                    tray_img.rgba().to_vec(),
-                    tray_img.width(),
-                    tray_img.height(),
-                );
-                let inactive_icon = create_dimmed_icon(&tray_img);
+                let tray_images = TrayImages::load(tray_platform())?;
+                let active_icon = tray_images.active.clone();
+                let inactive_icon = tray_images.inactive.clone();
+                let waiting_icon = tray_images.waiting.clone();
 
                 // Under `panic = "abort"` (release profile), a missing
                 // libayatana-appindicator3 causes an unavoidable abort inside
@@ -2004,13 +2142,15 @@ pub fn run() {
                 let tray = TrayIconBuilder::with_id("main")
                     .icon(match initial_presentation.icon {
                         runtime::TrayIcon::Active => active_icon.clone(),
-                        runtime::TrayIcon::Inactive | runtime::TrayIcon::Waiting => {
-                            inactive_icon.clone()
-                        }
+                        runtime::TrayIcon::Inactive => inactive_icon.clone(),
+                        runtime::TrayIcon::Waiting => waiting_icon.clone(),
                     })
                     .tooltip(&initial_presentation.tooltip)
                     .menu(&menu)
-                    .show_menu_on_left_click(true)
+                    .show_menu_on_left_click(true);
+                #[cfg(target_os = "macos")]
+                let tray = tray.icon_as_template(true);
+                let tray = tray
                     .on_menu_event(move |app, event| {
                         use owner::ConfigOrigin;
 
@@ -2100,11 +2240,7 @@ pub fn run() {
                     NativeTrayTargets {
                         tray,
                         status_item: toggle_item.clone(),
-                        images: TrayImages {
-                            active: active_icon,
-                            inactive: inactive_icon.clone(),
-                            waiting: inactive_icon,
-                        },
+                        images: tray_images,
                     },
                 );
                 sink.apply_initial(&initial_presentation)?;
@@ -2358,10 +2494,9 @@ mod accessibility_key_selection_tests {
 mod core_helper_tests {
     /*
      * @spec-handoff
-     * @interface parse_shortcut_string(), create_dimmed_icon(), is_within_schedule()
+     * @interface parse_shortcut_string(), is_within_schedule()
      * @behavior
      *   - Shortcut aliases produce the same registered shortcut and invalid parts are rejected.
-     *   - A dimmed icon preserves RGB bytes and scales each alpha byte to 40 percent.
      *   - Disabled schedules do not permit scheduled autostart.
      * @edge-cases
      *   - Empty or unknown shortcut parts are invalid.
@@ -2387,13 +2522,6 @@ mod core_helper_tests {
         );
         assert_eq!(parse_shortcut_string("Ctrl+Hyper+J"), None);
         assert_eq!(parse_shortcut_string(""), None);
-    }
-
-    #[test]
-    fn dimmed_icon_preserves_rgb_and_scales_alpha() {
-        let icon = tauri::image::Image::new_owned(vec![1, 2, 3, 255, 4, 5, 6, 100], 2, 1);
-        let dimmed = create_dimmed_icon(&icon);
-        assert_eq!(dimmed.rgba(), &[1, 2, 3, 102, 4, 5, 6, 40]);
     }
 
     #[test]
