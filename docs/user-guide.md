@@ -38,6 +38,7 @@ open the same menu.
 The original app icon is full strength while the engine is active and dimmed
 when it is not active. The tray menu shows two status lines: an emoji-prefixed
 current state, then a greyed line with the state that the next click will produce.
+It follows with a greyed, non-clickable App Mode line: Manual, Always On, or WiFi.
 On Linux, use that menu text because tooltips and native tray titles are not
 guaranteed by every implementation.
 
@@ -57,7 +58,8 @@ guaranteed by every implementation.
 ### Status item
 
 The enabled status item shows the current engine and schedule state. A second,
-greyed line shows the state a click will produce. Click the enabled item to toggle the engine.
+greyed line shows the state a click will produce. A third, greyed line shows the
+current App Mode: Manual, Always On, or WiFi. Click the enabled item to toggle the engine.
 
 - **Active**: the engine is running. Click to stop it.
 - **Inactive**: the engine is stopped. Click to start it.
@@ -177,31 +179,41 @@ You can register multiple networks. Remove one with the **×** button next to it
 Open from the tray menu via **Settings**. Changes save automatically as you make them.
 Settings use icons instead of emoji prefixes.
 
-### General
+### Settings order
+
+Settings are ordered as follows: Launch at Login; the App Mode card (App Mode,
+Jiggle Mode, and Interval); WiFi networks; Schedule; Language and Hotkey; then Profiles.
+
+### Launch at Login and App Mode
 
 | Setting | Description |
 |---------|-------------|
-| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. First Settings control. |
-| **App Mode** | When the engine activates: Manual, Always On, or WiFi. Second Settings control. |
+| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. |
+| **App Mode** | When the engine activates: Manual, Always On, or WiFi. |
 | **Jiggle Mode** | How the engine keeps the computer awake (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 s). Default: 30 s. |
-| **Language** | UI display language (8 languages available). |
-| **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
-
-### Scheduling
-
-Enable a time window and active days for automatic keep-awake. See [Scheduling](#scheduling).
-The card says the schedule starts and stops the engine. In WiFi mode, it also shows an alert
-that the schedule only filters mouse jiggles and does not start or stop the engine.
-
-### Profiles
-
-Save and load named settings snapshots. See [Profiles](#profiles).
 
 ### WiFi networks
 
 Visible only when **App Mode** is set to **WiFi**. Lists registered SSIDs and
 shows the currently connected network. See [WiFi App Mode](#wifi-app-mode) above.
+
+### Schedule
+
+Enable a time window and active days for automatic keep-awake. See [Scheduling](#scheduling).
+The card says the schedule starts and stops the engine. In WiFi mode, it also shows an alert
+that the schedule only filters mouse jiggles and does not start or stop the engine.
+
+### Language and Hotkey
+
+| Setting | Description |
+|---------|-------------|
+| **Language** | UI display language (8 languages available). |
+| **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
+
+### Profiles
+
+Save and load named settings snapshots. See [Profiles](#profiles).
 
 ---
 

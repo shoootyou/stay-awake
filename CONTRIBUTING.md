@@ -54,7 +54,7 @@ To add or change a Settings icon:
 3. Inline it where it is used with `aria-hidden="true"` and `focusable="false"`.
 
 The tray uses the original app icon and dims it when the engine is not active. Its menu shows
-the current state, then a greyed line with the result of clicking it.
+the current state, a greyed next-click result, and a greyed App Mode line.
 Do not regenerate separate state-specific tray PNGs.
 
 ## Conventional Commits
