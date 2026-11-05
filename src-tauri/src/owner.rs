@@ -2212,6 +2212,227 @@ mod tests {
     }
 
     #[test]
+    fn owner_loop_fault_guard_blocks_deadline_reconciliation_until_config_recovery() {
+        for mode in [
+            crate::config::AppMode::Manual,
+            crate::config::AppMode::AlwaysOn,
+        ] {
+            let (sender, receiver) = mpsc::channel();
+            let shared = owner_loop_shared(sender.clone());
+            let (route_sender, routes) = mpsc::channel();
+            let active = Arc::new(Mutex::new(false));
+            let starts = Arc::new(Mutex::new(0));
+            let backend_active = active.clone();
+            let backend_starts = starts.clone();
+            let base = Instant::now();
+            let wall = Utc
+                .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists");
+            let initial = AppConfig {
+                mode: mode.clone(),
+                ..scheduled_active_config()
+            };
+            let candidate = AppConfig {
+                interval_secs: 60,
+                ..initial.clone()
+            };
+            let mut instants = VecDeque::from(vec![base, base]);
+            instants.extend(vec![base + SUPERVISOR_PERIOD; 32]);
+            let owner = thread::spawn(move || {
+                owner_loop_with_time_sources(
+                    receiver,
+                    Arc::downgrade(&shared),
+                    initial,
+                    Arc::new(FixedClock(wall)),
+                    Box::new(FailingConfigPublicationBackend {
+                        active: backend_active,
+                        starts: backend_starts,
+                        failures_remaining: 1,
+                        stop_failures_remaining: 0,
+                    }),
+                    Box::new(RouteSink {
+                        routes: route_sender,
+                        errors: Arc::new(Mutex::new(Vec::new())),
+                        tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                    }),
+                    &mut ScriptedTimeSource {
+                        samples: steady_time_samples(16),
+                    },
+                    &mut ScriptedMonotonicClock { instants },
+                )
+            });
+
+            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+            let (failed_reply, failed_receiver) = mpsc::channel();
+            sender
+                .send(OwnerCommand::Config {
+                    origin: ConfigOrigin::Settings,
+                    config: candidate.clone(),
+                    reply: failed_reply,
+                })
+                .expect("failing configuration reaches the owner loop");
+            assert!(
+                failed_receiver
+                    .recv_timeout(REQUEST_TIMEOUT)
+                    .expect("failing configuration replies")
+                    .error
+                    .is_some(),
+                "a failed publication latches the configuration fault"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                1,
+                "the failed publication stops the original automatic lease"
+            );
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("fault observation is published");
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("deadline reconciliation is published");
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                1,
+                "the deadline path must not start {mode:?} while the fault is latched"
+            );
+
+            let (recovered_reply, recovered_receiver) = mpsc::channel();
+            sender
+                .send(OwnerCommand::Config {
+                    origin: ConfigOrigin::Settings,
+                    config: candidate,
+                    reply: recovered_reply,
+                })
+                .expect("recovering configuration reaches the owner loop");
+            assert!(
+                recovered_receiver
+                    .recv_timeout(REQUEST_TIMEOUT)
+                    .expect("recovering configuration replies")
+                    .error
+                    .is_none(),
+                "a successful publication clears the fault"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                2,
+                "recovery may start {mode:?} only after publication succeeds"
+            );
+            stop_owner_loop(&sender, owner);
+        }
+    }
+
+    #[test]
+    fn owner_loop_fault_guard_blocks_timeout_reconciliation_until_config_recovery() {
+        for mode in [
+            crate::config::AppMode::Manual,
+            crate::config::AppMode::AlwaysOn,
+        ] {
+            let (sender, receiver) = mpsc::channel();
+            let shared = owner_loop_shared(sender.clone());
+            let (route_sender, routes) = mpsc::channel();
+            let active = Arc::new(Mutex::new(false));
+            let starts = Arc::new(Mutex::new(0));
+            let backend_active = active.clone();
+            let backend_starts = starts.clone();
+            let wall = Utc
+                .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists");
+            let initial = AppConfig {
+                mode: mode.clone(),
+                ..scheduled_active_config()
+            };
+            let candidate = AppConfig {
+                interval_secs: 60,
+                ..initial.clone()
+            };
+            let owner = thread::spawn(move || {
+                owner_loop_with_time_sources(
+                    receiver,
+                    Arc::downgrade(&shared),
+                    initial,
+                    Arc::new(FixedClock(wall)),
+                    Box::new(FailingConfigPublicationBackend {
+                        active: backend_active,
+                        starts: backend_starts,
+                        failures_remaining: 1,
+                        stop_failures_remaining: 0,
+                    }),
+                    Box::new(RouteSink {
+                        routes: route_sender,
+                        errors: Arc::new(Mutex::new(Vec::new())),
+                        tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                    }),
+                    &mut ScriptedTimeSource {
+                        samples: steady_time_samples(16),
+                    },
+                    &mut ScriptedMonotonicClock {
+                        instants: VecDeque::from([Instant::now(); 8]),
+                    },
+                )
+            });
+
+            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+            let (failed_reply, failed_receiver) = mpsc::channel();
+            sender
+                .send(OwnerCommand::Config {
+                    origin: ConfigOrigin::Settings,
+                    config: candidate.clone(),
+                    reply: failed_reply,
+                })
+                .expect("failing configuration reaches the owner loop");
+            assert!(
+                failed_receiver
+                    .recv_timeout(REQUEST_TIMEOUT)
+                    .expect("failing configuration replies")
+                    .error
+                    .is_some(),
+                "a failed publication latches the configuration fault"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                1,
+                "the failed publication stops the original automatic lease"
+            );
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("fault observation is published");
+            routes
+                .recv_timeout(REQUEST_TIMEOUT)
+                .expect("timeout reconciliation is published");
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                1,
+                "the timeout path must not start {mode:?} while the fault is latched"
+            );
+
+            let (recovered_reply, recovered_receiver) = mpsc::channel();
+            sender
+                .send(OwnerCommand::Config {
+                    origin: ConfigOrigin::Settings,
+                    config: candidate,
+                    reply: recovered_reply,
+                })
+                .expect("recovering configuration reaches the owner loop");
+            assert!(
+                recovered_receiver
+                    .recv_timeout(REQUEST_TIMEOUT)
+                    .expect("recovering configuration replies")
+                    .error
+                    .is_none(),
+                "a successful publication clears the fault"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                2,
+                "recovery may start {mode:?} only after publication succeeds"
+            );
+            stop_owner_loop(&sender, owner);
+        }
+    }
+
+    #[test]
     fn quit_completes_after_backend_release_despite_a_persistent_tray_error() {
         let config = AppConfig {
             schedule_enabled: true,
