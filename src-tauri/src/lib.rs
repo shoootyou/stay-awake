@@ -137,6 +137,11 @@ pub(crate) struct NativeTrayTargets {
 }
 
 #[cfg(desktop)]
+pub(crate) trait TrayPaintTargets: Send + Sync {
+    fn paint(&self, presentation: &TrayPresentation) -> Result<(), String>;
+}
+
+#[cfg(desktop)]
 struct PaintMailbox {
     pending: Option<(TrayRoute, TrayPresentation)>,
     last_requested: Option<TrayPresentation>,
@@ -195,7 +200,7 @@ impl UiExecutor for TauriUiExecutor {
 
 #[cfg(desktop)]
 pub(crate) struct NativeTraySink {
-    targets: Arc<NativeTrayTargets>,
+    targets: Arc<dyn TrayPaintTargets>,
     mailbox: Arc<Mutex<PaintMailbox>>,
     executor: Arc<dyn UiExecutor>,
 }
@@ -203,54 +208,58 @@ pub(crate) struct NativeTraySink {
 #[cfg(desktop)]
 impl NativeTraySink {
     pub(crate) fn new(app: tauri::AppHandle, targets: NativeTrayTargets) -> Self {
+        Self::new_with_ui(Arc::new(TauriUiExecutor(app)), Arc::new(targets))
+    }
+
+    /// Lets crate tests drive mailbox and paint failures without a native event loop.
+    pub(crate) fn new_with_ui(
+        executor: Arc<dyn UiExecutor>,
+        targets: Arc<dyn TrayPaintTargets>,
+    ) -> Self {
         Self {
-            targets: Arc::new(targets),
+            targets,
             mailbox: Arc::new(Mutex::new(PaintMailbox {
                 pending: None,
                 last_requested: None,
                 scheduled: false,
             })),
-            executor: Arc::new(TauriUiExecutor(app)),
+            executor,
         }
     }
 
     pub(crate) fn apply_initial(&self, presentation: &TrayPresentation) -> Result<(), String> {
-        let status_item = &self.targets.status_item;
-        let result = status_item.set_text(&presentation.menu_text);
-        result.map_err(|error| error.to_string())?;
-        apply_native_paint(&self.targets, presentation)
+        self.targets.paint(presentation)
     }
 }
 
 #[cfg(desktop)]
-fn apply_native_paint(
-    targets: &NativeTrayTargets,
-    presentation: &TrayPresentation,
-) -> Result<(), String> {
-    let image = match presentation.icon {
-        runtime::TrayIcon::Active => targets.images.active.clone(),
-        runtime::TrayIcon::Inactive => targets.images.inactive.clone(),
-        runtime::TrayIcon::Waiting => targets.images.waiting.clone(),
-    };
-    let mut errors = Vec::new();
-    if let Err(error) = targets.status_item.set_text(&presentation.menu_text) {
-        errors.push(error.to_string());
-    }
-    if let Err(error) = targets.tray.set_tooltip(Some(&presentation.tooltip)) {
-        errors.push(error.to_string());
-    }
-    #[cfg(target_os = "macos")]
-    if let Err(error) = targets.tray.set_icon_with_as_template(Some(image), true) {
-        errors.push(error.to_string());
-    }
-    #[cfg(not(target_os = "macos"))]
-    if let Err(error) = targets.tray.set_icon(Some(image)) {
-        errors.push(error.to_string());
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
+impl TrayPaintTargets for NativeTrayTargets {
+    fn paint(&self, presentation: &TrayPresentation) -> Result<(), String> {
+        let image = match presentation.icon {
+            runtime::TrayIcon::Active => self.images.active.clone(),
+            runtime::TrayIcon::Inactive => self.images.inactive.clone(),
+            runtime::TrayIcon::Waiting => self.images.waiting.clone(),
+        };
+        let mut errors = Vec::new();
+        if let Err(error) = self.status_item.set_text(&presentation.menu_text) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.tray.set_tooltip(Some(&presentation.tooltip)) {
+            errors.push(error.to_string());
+        }
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self.tray.set_icon_with_as_template(Some(image), true) {
+            errors.push(error.to_string());
+        }
+        #[cfg(not(target_os = "macos"))]
+        if let Err(error) = self.tray.set_icon(Some(image)) {
+            errors.push(error.to_string());
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 }
 
@@ -279,7 +288,7 @@ impl TraySink for NativeTraySink {
                 }
             };
             if let Some((_route, presentation)) = frame {
-                if let Err(error) = apply_native_paint(&targets, &presentation) {
+                if let Err(error) = targets.paint(&presentation) {
                     log::error!("tray paint failed: {error}");
                 }
             }
