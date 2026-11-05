@@ -123,7 +123,7 @@ pub(crate) trait TraySink {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) struct TrayImages {
     pub(crate) active: tauri::image::Image<'static>,
     pub(crate) inactive: tauri::image::Image<'static>,
@@ -131,7 +131,7 @@ pub(crate) struct TrayImages {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) struct NativeTrayTargets {
     pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
     pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
@@ -139,7 +139,6 @@ pub(crate) struct NativeTrayTargets {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
 struct PaintMailbox {
     pending: Option<(TrayRoute, TrayPresentation)>,
     last_requested: Option<TrayPresentation>,
@@ -147,62 +146,193 @@ struct PaintMailbox {
 }
 
 #[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
-pub(crate) struct NativeTraySink {
-    app: tauri::AppHandle,
-    targets: Arc<NativeTrayTargets>,
-    mailbox: Arc<Mutex<PaintMailbox>>,
+pub(crate) enum PaintQueueDecision {
+    Coalesced,
+    Enqueue,
 }
 
 #[cfg(desktop)]
+pub(crate) fn queue_paint(
+    mailbox: &mut PaintMailbox,
+    route: TrayRoute,
+    presentation: TrayPresentation,
+) -> PaintQueueDecision {
+    if route == TrayRoute::Tick && mailbox.last_requested.as_ref() == Some(&presentation) {
+        return PaintQueueDecision::Coalesced;
+    }
+    mailbox.last_requested = Some(presentation.clone());
+    mailbox.pending = Some((route, presentation));
+    if mailbox.scheduled {
+        PaintQueueDecision::Coalesced
+    } else {
+        mailbox.scheduled = true;
+        PaintQueueDecision::Enqueue
+    }
+}
+
+#[cfg(desktop)]
+pub(crate) fn take_pending_paint(
+    mailbox: &mut PaintMailbox,
+) -> Option<(TrayRoute, TrayPresentation)> {
+    mailbox.scheduled = false;
+    mailbox.pending.take()
+}
+
+#[cfg(desktop)]
+pub(crate) trait UiExecutor: Send + Sync {
+    fn run_on_main_thread(&self, task: Box<dyn FnOnce() + Send>) -> Result<(), String>;
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // wired in boundary 4b-4d
+struct TauriUiExecutor(tauri::AppHandle);
+
+#[cfg(desktop)]
+impl UiExecutor for TauriUiExecutor {
+    fn run_on_main_thread(&self, task: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+        self.0
+            .run_on_main_thread(task)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // wired in boundary 4b-4d
+pub(crate) struct NativeTraySink {
+    targets: Arc<NativeTrayTargets>,
+    mailbox: Arc<Mutex<PaintMailbox>>,
+    executor: Arc<dyn UiExecutor>,
+}
+
+#[cfg(desktop)]
+#[allow(dead_code)] // wired in boundary 4b-4d
 impl NativeTraySink {
-    #[allow(dead_code)] // skeleton: wired in boundary 3/4
     pub(crate) fn new(app: tauri::AppHandle, targets: NativeTrayTargets) -> Self {
         Self {
-            app,
             targets: Arc::new(targets),
             mailbox: Arc::new(Mutex::new(PaintMailbox {
                 pending: None,
                 last_requested: None,
                 scheduled: false,
             })),
+            executor: Arc::new(TauriUiExecutor(app)),
         }
     }
 
-    #[allow(dead_code)] // skeleton: wired in boundary 3/4
-    pub(crate) fn apply_initial(&self, _presentation: &TrayPresentation) -> Result<(), String> {
-        Err("initial native paint skeleton".to_owned())
+    pub(crate) fn apply_initial(&self, presentation: &TrayPresentation) -> Result<(), String> {
+        let status_item = &self.targets.status_item;
+        let result = status_item.set_text(&presentation.menu_text);
+        result.map_err(|error| error.to_string())?;
+        apply_native_paint(&self.targets, presentation)
+    }
+}
+
+#[cfg(desktop)]
+fn apply_native_paint(
+    targets: &NativeTrayTargets,
+    presentation: &TrayPresentation,
+) -> Result<(), String> {
+    let image = match presentation.icon {
+        runtime::TrayIcon::Active => targets.images.active.clone(),
+        runtime::TrayIcon::Inactive | runtime::TrayIcon::Waiting => targets.images.inactive.clone(),
+    };
+    let mut errors = Vec::new();
+    if let Err(error) = targets.status_item.set_text(&presentation.menu_text) {
+        errors.push(error.to_string());
+    }
+    if let Err(error) = targets.tray.set_tooltip(Some(&presentation.tooltip)) {
+        errors.push(error.to_string());
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = targets.tray.set_icon_with_as_template(Some(image), true) {
+        errors.push(error.to_string());
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Err(error) = targets.tray.set_icon(Some(image)) {
+        errors.push(error.to_string());
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
 }
 
 #[cfg(desktop)]
 impl TraySink for NativeTraySink {
-    fn publish(
-        &mut self,
-        _route: TrayRoute,
-        _presentation: &TrayPresentation,
-    ) -> Result<(), String> {
-        Err("native tray publication skeleton".to_owned())
+    fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String> {
+        let decision = {
+            let mut mailbox = self
+                .mailbox
+                .lock()
+                .map_err(|_| "paint mailbox lock poisoned".to_owned())?;
+            let _last_requested = &mailbox.last_requested;
+            queue_paint(&mut mailbox, route, presentation.clone())
+        };
+        if matches!(decision, PaintQueueDecision::Coalesced) {
+            return Ok(());
+        }
+        let mailbox = Arc::clone(&self.mailbox);
+        let targets = Arc::clone(&self.targets);
+        if let Err(error) = self.executor.run_on_main_thread(Box::new(move || {
+            let frame = match mailbox.lock() {
+                Ok(mut mailbox) => take_pending_paint(&mut mailbox),
+                Err(_) => {
+                    log::error!("paint mailbox lock poisoned");
+                    None
+                }
+            };
+            if let Some((_route, presentation)) = frame {
+                if let Err(error) = apply_native_paint(&targets, &presentation) {
+                    log::error!("tray paint failed: {error}");
+                }
+            }
+        })) {
+            if let Ok(mut mailbox) = self.mailbox.lock() {
+                mailbox.scheduled = false;
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[allow(dead_code)]
 pub(crate) struct InitialSnapshotInput<'a> {
     pub(crate) config: &'a config::AppConfig,
     pub(crate) clock: &'a dyn schedule::Clock,
 }
 
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
+#[allow(dead_code)] // wired in boundary 4b-4d
 pub(crate) fn initial_runtime_snapshot(
-    _input: InitialSnapshotInput<'_>,
+    input: InitialSnapshotInput<'_>,
 ) -> Result<runtime::RuntimeSnapshot, String> {
-    Err("initial snapshot skeleton".to_owned())
-}
-
-#[cfg(desktop)]
-#[allow(dead_code)] // skeleton: wired in boundary 3/4
-pub(crate) fn request_app_exit(_app: &tauri::AppHandle, _code: i32) -> Result<(), String> {
-    Err("app exit coordinator skeleton".to_owned())
+    let schedule = schedule::Schedule::from_config(input.config)?;
+    let window = schedule::evaluate_schedule(schedule::ScheduleInput {
+        schedule: &schedule,
+        at: input.clock.now(),
+        clock: input.clock,
+    })?;
+    let override_state = runtime::normalize_override(runtime::NormalizeInput {
+        mode: &input.config.mode,
+        schedule_enabled: schedule.enabled,
+        window: &window,
+        override_state: &runtime::OverrideState::None,
+        event: runtime::LifecycleEvent::Tick,
+    });
+    let status = runtime::derive_tray_status(runtime::TrayInput {
+        mode: &input.config.mode,
+        engine_active: false,
+        schedule_enabled: schedule.enabled,
+        window: &window,
+        override_state: &override_state,
+    });
+    Ok(runtime::RuntimeSnapshot {
+        engine_active: false,
+        override_state,
+        window,
+        status,
+    })
 }
 
 // wired in E3b-2
