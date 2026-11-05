@@ -66,8 +66,8 @@ impl TrayRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrayPresentation {
     pub(crate) status: runtime::TrayStatus,
-    // The menu label carries the lifecycle-computed click target; tooltip stays state-only.
     pub(crate) menu_text: String,
+    pub(crate) hint_text: String,
     pub(crate) tooltip: String,
     pub(crate) icon: runtime::TrayIcon,
 }
@@ -117,9 +117,11 @@ fn build_tray_presentation_with_target(
         tooltip.push_str(&suffix);
         tooltip.push(')');
     }
+    let menu_lines = status_menu_lines(status, after_click, input.bundle);
     TrayPresentation {
         status,
-        menu_text: status_menu_label(status, after_click, input.bundle),
+        menu_text: menu_lines.primary,
+        hint_text: menu_lines.hint,
         tooltip,
         icon: status.icon(),
     }
@@ -465,11 +467,17 @@ const TRAY_INACTIVE_EMOJI: &str = "⚪";
 const TRAY_WAITING_EMOJI: &str = "📅";
 const TRAY_PAUSED_EMOJI: &str = "⏸️";
 
-fn status_menu_label(
+#[derive(Debug, PartialEq, Eq)]
+struct StatusMenuLines {
+    primary: String,
+    hint: String,
+}
+
+fn status_menu_lines(
     current: runtime::TrayStatus,
     after_click: runtime::TrayStatus,
     bundle: &i18n::Bundle,
-) -> String {
+) -> StatusMenuLines {
     let emoji = match current {
         runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride => TRAY_ACTIVE_EMOJI,
         runtime::TrayStatus::Inactive => TRAY_INACTIVE_EMOJI,
@@ -480,11 +488,19 @@ fn status_menu_label(
         runtime::TrayStatus::Inactive => "tray-inactive",
         _ => status.menu_key(),
     };
-    format!(
-        "{emoji} {} → {}",
-        i18n::t(bundle, key(current)),
-        i18n::t(bundle, key(after_click))
-    )
+    StatusMenuLines {
+        primary: format!("{emoji} {}", i18n::t(bundle, key(current))),
+        hint: format!("→ {}", i18n::t(bundle, key(after_click))),
+    }
+}
+
+#[cfg(test)]
+fn status_menu_label(
+    current: runtime::TrayStatus,
+    _after_click: runtime::TrayStatus,
+    bundle: &i18n::Bundle,
+) -> String {
+    status_menu_lines(current, current, bundle).primary
 }
 
 fn tray_toggle_presentation(
@@ -585,6 +601,7 @@ impl TrayImages {
 pub(crate) struct NativeTrayTargets {
     pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
     pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) hint_item: tauri::menu::MenuItem<tauri::Wry>,
     pub(crate) images: TrayImages,
 }
 
@@ -704,6 +721,9 @@ impl TrayPaintTargets for NativeTrayTargets {
         };
         let mut errors = Vec::new();
         if let Err(error) = self.status_item.set_text(&presentation.menu_text) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.hint_item.set_text(&presentation.hint_text) {
             errors.push(error.to_string());
         }
         if let Err(error) = self.tray.set_tooltip(Some(&presentation.tooltip)) {
@@ -2402,6 +2422,8 @@ pub fn run() {
                         true,
                         None::<&str>,
                     )?;
+                #[rustfmt::skip]
+                let toggle_hint = MenuItem::with_id(app, "toggle_hint", &initial_presentation.hint_text, false, None::<&str>)?;
 
                 let mode_power = MenuItem::with_id(
                     app,
@@ -2471,6 +2493,7 @@ pub fn run() {
                     app,
                     &[
                         &toggle_item,
+                        &toggle_hint,
                         &sep1,
                         &mode_submenu,
                         &sep2,
@@ -2613,6 +2636,7 @@ pub fn run() {
                     NativeTrayTargets {
                         tray,
                         status_item: toggle_item.clone(),
+                        hint_item: toggle_hint.clone(),
                         images: tray_images,
                     },
                 );
