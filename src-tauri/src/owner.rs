@@ -737,6 +737,14 @@ mod tests {
         }
     }
 
+    struct FailingSink;
+
+    impl TraySink for FailingSink {
+        fn publish(&mut self, _: TrayRoute, _: &crate::TrayPresentation) -> Result<(), String> {
+            Err("tray enqueue failed".to_owned())
+        }
+    }
+
     fn owner_start(calls: Arc<Mutex<Vec<&'static str>>>) -> OwnerStart {
         owner_start_with_config(AppConfig::default(), calls)
     }
@@ -975,6 +983,58 @@ mod tests {
                 .count(),
             1,
             "the unrelated update must not restart the backend"
+        );
+    }
+
+    #[test]
+    fn ticks_do_not_restart_the_backend_after_quit_cleanup_with_a_tray_error() {
+        let config = AppConfig {
+            schedule_enabled: true,
+            schedule_start_hour: 7,
+            schedule_end_hour: 9,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend_calls = calls.clone();
+        let active = Arc::new(Mutex::new(false));
+        let backend_active = active.clone();
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+        let handle = RuntimeHandle::spawn(OwnerStart {
+            config: Arc::new(Mutex::new(config)),
+            bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
+            clock: Arc::new(FixedClock(now)),
+            backend_factory: Box::new(move |_, _| {
+                Box::new(SharedRecordingBackend {
+                    calls: backend_calls,
+                    active: backend_active,
+                })
+            }),
+            sink: Box::new(FailingSink),
+        })
+        .expect("owner spawn succeeds");
+
+        assert!(
+            handle.shutdown(SHUTDOWN_TIMEOUT).is_err(),
+            "a tray failure after confirmed cleanup keeps shutdown retryable"
+        );
+        thread::sleep(SUPERVISOR_PERIOD + Duration::from_millis(50));
+        assert_eq!(
+            calls
+                .lock()
+                .expect("backend log lock")
+                .iter()
+                .filter(|call| **call == "start")
+                .count(),
+            1,
+            "automatic ticks must stay quiescent after shutdown begins"
+        );
+        assert!(
+            !*active.lock().expect("backend activity lock"),
+            "the confirmed release remains inactive while quit is retryable"
         );
     }
 
