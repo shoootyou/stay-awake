@@ -1045,6 +1045,39 @@ impl Engine {
             EngineState::Active => "active",
         }
     }
+
+    // skeleton: wired in E3
+    #[allow(dead_code)]
+    pub(crate) fn set_jiggle_policy(&mut self, _policy: crate::runtime::JigglePolicy) {}
+
+    // skeleton: wired in E3
+    #[allow(dead_code)]
+    pub(crate) fn new_with_clock(
+        mouse_driver: Box<dyn crate::platform::MouseDriver>,
+        power_inhibitor: Box<dyn crate::platform::PowerInhibitor>,
+        config: std::sync::Arc<std::sync::Mutex<crate::config::AppConfig>>,
+        _clock: std::sync::Arc<dyn crate::schedule::Clock>,
+    ) -> Self {
+        Self::new(mouse_driver, power_inhibitor, config)
+    }
+}
+
+impl crate::runtime::EngineBackend for Engine {
+    fn start(&mut self) -> Result<(), String> {
+        Engine::start(self)
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        Engine::stop(self)
+    }
+
+    fn is_active(&self) -> bool {
+        Engine::is_active(self)
+    }
+
+    fn set_jiggle_policy(&mut self, policy: crate::runtime::JigglePolicy) {
+        Engine::set_jiggle_policy(self, policy)
+    }
 }
 
 impl Drop for Engine {

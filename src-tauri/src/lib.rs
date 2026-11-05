@@ -9,6 +9,8 @@ mod config;
 mod engine;
 mod i18n;
 mod platform;
+mod runtime;
+mod schedule;
 mod wifi;
 
 use config::{AppConfig, AppMode, JiggleMode, Profile};
@@ -17,6 +19,103 @@ use i18n::Bundle as I18nBundle;
 use platform::PermissionChecker;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrayRoute {
+    Startup,
+    TrayToggle,
+    Hotkey,
+    IpcToggle,
+    Tick,
+    WifiChanged { active: bool },
+    ConfigChanged { policy_changed: bool },
+    ProfileLoaded { policy_changed: bool },
+    LanguageChanged,
+    Resume,
+    Quit,
+}
+
+impl TrayRoute {
+    // skeleton: wired in E3
+    #[allow(dead_code)]
+    pub(crate) fn lifecycle_event(self) -> Option<runtime::LifecycleEvent> {
+        None
+    }
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrayPresentation {
+    pub(crate) status: runtime::TrayStatus,
+    pub(crate) menu_text: String,
+    pub(crate) tooltip: String,
+    pub(crate) icon: runtime::TrayIcon,
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) struct PresentationInput<'a> {
+    pub(crate) snapshot: &'a runtime::RuntimeSnapshot,
+    pub(crate) bundle: &'a i18n::Bundle,
+    pub(crate) locale: &'a str,
+    pub(crate) clock: &'a dyn schedule::Clock,
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) fn build_tray_presentation(_input: PresentationInput<'_>) -> TrayPresentation {
+    TrayPresentation {
+        status: runtime::TrayStatus::Inactive,
+        menu_text: String::new(),
+        tooltip: String::new(),
+        icon: runtime::TrayIcon::Inactive,
+    }
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) trait TraySink {
+    fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) struct TrayRefreshInput<'a> {
+    pub(crate) route: TrayRoute,
+    pub(crate) presentation: &'a TrayPresentation,
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) fn refresh_tray_status(
+    _input: TrayRefreshInput<'_>,
+    _sink: &mut dyn TraySink,
+) -> Result<(), String> {
+    Ok(())
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) struct RuntimeRouteInput<'a> {
+    pub(crate) route: TrayRoute,
+    pub(crate) config: &'a config::AppConfig,
+    pub(crate) clock: &'a dyn schedule::Clock,
+    pub(crate) bundle: &'a i18n::Bundle,
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) fn handle_runtime_route(
+    _input: RuntimeRouteInput<'_>,
+    _supervisor: &mut runtime::Supervisor,
+    _backend: &mut dyn runtime::EngineBackend,
+    _sink: &mut dyn TraySink,
+) -> Result<runtime::RuntimeSnapshot, String> {
+    Err("runtime route skeleton".to_owned())
+}
 
 /// Return the current configuration to the frontend.
 #[tauri::command]

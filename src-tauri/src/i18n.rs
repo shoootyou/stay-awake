@@ -72,6 +72,29 @@ pub fn t(bundle: &Bundle, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) fn t_with_args(
+    _bundle: &Bundle,
+    id: &str,
+    _args: Option<&fluent_bundle::FluentArgs<'_>>,
+) -> String {
+    id.to_owned()
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) struct NextWindowInput<'a> {
+    pub(crate) when: chrono::DateTime<chrono::FixedOffset>,
+    pub(crate) locale: &'a str,
+}
+
+// skeleton: wired in E3
+#[allow(dead_code)]
+pub(crate) fn format_next_window(_input: NextWindowInput<'_>) -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     /*
