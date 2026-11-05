@@ -2406,6 +2406,304 @@ mod core_helper_tests {
     }
 }
 
+/**
+ * @spec-handoff
+ * @interface tray_image_for(icon: TrayIcon, platform: TrayPlatform) -> &'static TrayImageSpec
+ * @behavior
+ *   - Active and ActiveOverride use active; Inactive and Paused use inactive; Waiting uses waiting.
+ *   - macOS uses template images; Linux and Windows use non-template state images.
+ *   - Native painting preserves Linux menu text and updates the matching state image.
+ * @edge-cases
+ *   - Waiting never falls back to the inactive image.
+ *   - Template treatment is enabled both when the macOS tray is created and when it is repainted.
+ * @see ../icons/tray-active.png
+ */
+#[cfg(test)]
+mod tray_asset_contract_tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    const MASK_DIFFERENCE_THRESHOLD: usize = 16;
+
+    struct AssetSpec {
+        name: &'static str,
+        width: u32,
+        height: u32,
+        template: bool,
+    }
+
+    const ASSETS: [AssetSpec; 9] = [
+        AssetSpec {
+            name: "tray-active.png",
+            width: 22,
+            height: 22,
+            template: true,
+        },
+        AssetSpec {
+            name: "tray-inactive.png",
+            width: 22,
+            height: 22,
+            template: true,
+        },
+        AssetSpec {
+            name: "tray-waiting.png",
+            width: 22,
+            height: 22,
+            template: true,
+        },
+        AssetSpec {
+            name: "tray-active@2x.png",
+            width: 44,
+            height: 44,
+            template: true,
+        },
+        AssetSpec {
+            name: "tray-inactive@2x.png",
+            width: 44,
+            height: 44,
+            template: true,
+        },
+        AssetSpec {
+            name: "tray-waiting@2x.png",
+            width: 44,
+            height: 44,
+            template: true,
+        },
+        AssetSpec {
+            name: "tray-linux-active.png",
+            width: 32,
+            height: 32,
+            template: false,
+        },
+        AssetSpec {
+            name: "tray-linux-inactive.png",
+            width: 32,
+            height: 32,
+            template: false,
+        },
+        AssetSpec {
+            name: "tray-linux-waiting.png",
+            width: 32,
+            height: 32,
+            template: false,
+        },
+    ];
+
+    fn icons_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("icons")
+    }
+
+    fn png_header(bytes: &[u8]) -> (u32, u32, u8, u8) {
+        assert!(bytes.starts_with(&PNG_SIGNATURE), "asset is not a PNG");
+        assert_eq!(&bytes[12..16], b"IHDR", "PNG must start with IHDR");
+        (
+            u32::from_be_bytes(bytes[16..20].try_into().expect("PNG width exists")),
+            u32::from_be_bytes(bytes[20..24].try_into().expect("PNG height exists")),
+            bytes[24],
+            bytes[25],
+        )
+    }
+
+    fn source() -> String {
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
+            .expect("lib.rs is readable")
+    }
+
+    fn implementation_source() -> String {
+        let module_start = format!(
+            "{}#[cfg(test)]{}mod tray_asset_contract_tests",
+            char::from(10),
+            char::from(10)
+        );
+        source()
+            .split(&module_start)
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    fn tray_setup_source() -> String {
+        let source = source();
+        strip_comments(source_scope(
+            &source,
+            "pub fn run()",
+            "mod core_helper_tests",
+        ))
+    }
+
+    fn strip_comments(source: &str) -> String {
+        let mut output = String::with_capacity(source.len());
+        let mut chars = source.chars().peekable();
+        while let Some(character) = chars.next() {
+            if character == '/' && chars.peek() == Some(&'/') {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next as u32 == 10 {
+                        output.push(char::from(10));
+                        break;
+                    }
+                }
+            } else if character == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        break;
+                    }
+                }
+            } else {
+                output.push(character);
+            }
+        }
+        output
+    }
+
+    fn source_scope<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let start = source.find(start).expect("production scope start exists");
+        let remainder = &source[start..];
+        let end = remainder.find(end).expect("production scope end exists");
+        &remainder[..end]
+    }
+
+    fn rgba(name: &str) -> Vec<u8> {
+        let bytes = fs::read(icons_dir().join(name)).expect("required tray asset exists");
+        tauri::image::Image::from_bytes(&bytes)
+            .expect("required tray asset decodes")
+            .rgba()
+            .to_vec()
+    }
+
+    // Mutant: remove, resize, recolor, or replace a state silhouette with an opacity-only variant.
+    #[test]
+    fn native_tray_assets_are_rgba_budgeted_and_shape_distinct() {
+        let total_bytes: u64 = ASSETS
+            .iter()
+            .map(|asset| {
+                fs::metadata(icons_dir().join(asset.name))
+                    .expect("required tray asset exists")
+                    .len()
+            })
+            .sum();
+        assert!(
+            total_bytes <= 32_768,
+            "tray PNG assets use {total_bytes} bytes; maximum is 32768"
+        );
+
+        let mut masks = Vec::new();
+        for asset in ASSETS {
+            let bytes = fs::read(icons_dir().join(asset.name)).expect("required tray asset exists");
+            let (width, height, bit_depth, color_type) = png_header(&bytes);
+            assert_eq!(
+                (width, height),
+                (asset.width, asset.height),
+                "{} dimensions",
+                asset.name
+            );
+            assert_eq!(bit_depth, 8, "{} must use 8-bit channels", asset.name);
+            assert_eq!(color_type, 6, "{} must use RGBA colour type", asset.name);
+            let rgba = rgba(asset.name);
+            assert!(
+                rgba.chunks_exact(4).any(|pixel| pixel[3] == 0),
+                "{} needs transparent background",
+                asset.name
+            );
+            assert!(
+                rgba.chunks_exact(4).any(|pixel| pixel[3] == 255),
+                "{} needs opaque artwork",
+                asset.name
+            );
+            if asset.template {
+                assert!(
+                    rgba.chunks_exact(4).all(|pixel| pixel[..3] == [0, 0, 0]),
+                    "{} must be black template artwork",
+                    asset.name
+                );
+                if !asset.name.contains("@2x") {
+                    masks.push((
+                        asset.name,
+                        rgba.chunks_exact(4)
+                            .map(|pixel| pixel[3])
+                            .collect::<Vec<_>>(),
+                    ));
+                }
+            }
+        }
+
+        for left in 0..masks.len() {
+            for right in (left + 1)..masks.len() {
+                let different = masks[left]
+                    .1
+                    .iter()
+                    .zip(&masks[right].1)
+                    .filter(|(left, right)| left != right)
+                    .count();
+                assert!(
+                    different >= MASK_DIFFERENCE_THRESHOLD,
+                    "{} and {} differ in only {different} alpha pixels",
+                    masks[left].0,
+                    masks[right].0
+                );
+            }
+        }
+    }
+
+    // Mutant: omit an include_bytes reference or restore a superseded tray asset name.
+    #[test]
+    fn rust_sources_reference_each_state_asset_and_not_the_superseded_tray_assets() {
+        let source = tray_setup_source();
+        for asset in ASSETS {
+            assert!(
+                source.contains(asset.name),
+                "Rust must reference {}",
+                asset.name
+            );
+        }
+        for retired in ["tray-icon.png", "tray-icon@2x.png", "tray-icon-dark.png"] {
+            assert!(
+                !source.contains(retired),
+                "Rust must not reference retired {retired}"
+            );
+        }
+    }
+
+    // Mutant: map Waiting to inactive, omit template handling, or hide state from Linux menu text.
+    #[test]
+    fn native_tray_painting_uses_platform_state_assets_and_template_rules() {
+        let source = source();
+        let paint = strip_comments(source_scope(
+            &source,
+            "impl TrayPaintTargets for NativeTrayTargets",
+            "impl TraySink for NativeTraySink",
+        ));
+        assert!(paint.contains("runtime::TrayIcon::Waiting => self.images.waiting.clone()"));
+        assert!(paint.contains("self.status_item.set_text(&presentation.menu_text)"));
+        assert!(paint.contains("set_icon_with_as_template(Some(image), true)"));
+        assert!(paint.contains("self.tray.set_icon(Some(image))"));
+        let builder = source_scope(
+            &source,
+            "let tray = TrayIconBuilder::with_id",
+            ".build(app)?",
+        );
+        assert!(
+            builder.contains("icon_as_template(true)"),
+            "macOS construction must enable template treatment"
+        );
+        assert!(
+            builder.contains("runtime::TrayIcon::Waiting => waiting_icon.clone()"),
+            "Waiting must select its own initial image"
+        );
+    }
+
+    // Mutant: restore runtime alpha dimming or its obsolete unit test.
+    #[test]
+    fn runtime_alpha_dimming_helper_and_its_test_are_removed() {
+        let source = implementation_source();
+        assert!(!source.contains("fn create_dimmed_icon("));
+        assert!(!source.contains("fn dimmed_icon_preserves_rgb_and_scales_alpha("));
+    }
+}
+
 /*
  * @spec-handoff
  * @interface NativeTraySink::{apply_initial,publish}; request_app_exit
