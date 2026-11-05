@@ -2541,9 +2541,11 @@ mod core_helper_tests {
  *   - Active and ActiveOverride use active; Inactive and Paused use inactive; Waiting uses waiting.
  *   - macOS uses template images; Linux and Windows use non-template state images.
  *   - Native painting preserves Linux menu text and updates the matching state image.
+ *
  * @edge-cases
  *   - Waiting never falls back to the inactive image.
  *   - Template treatment is enabled both when the macOS tray is created and when it is repainted.
+ *
  * @see ../icons/tray-active.png
  */
 #[cfg(test)]
@@ -2666,7 +2668,7 @@ mod tray_asset_contract_tests {
         while let Some(character) = chars.next() {
             if character == '/' && chars.peek() == Some(&'/') {
                 chars.next();
-                while let Some(next) = chars.next() {
+                for next in chars.by_ref() {
                     if next as u32 == 10 {
                         output.push(char::from(10));
                         break;
@@ -2731,28 +2733,27 @@ mod tray_asset_contract_tests {
             assert_eq!(bit_depth, 8, "{} must use 8-bit channels", asset.name);
             assert_eq!(color_type, 6, "{} must use RGBA colour type", asset.name);
             let rgba = rgba(asset.name);
+            let pixels = rgba.as_chunks::<4>().0;
             assert!(
-                rgba.chunks_exact(4).any(|pixel| pixel[3] == 0),
+                pixels.iter().any(|pixel| pixel[3] == 0),
                 "{} needs transparent background",
                 asset.name
             );
             assert!(
-                rgba.chunks_exact(4).any(|pixel| pixel[3] == 255),
+                pixels.iter().any(|pixel| pixel[3] == 255),
                 "{} needs opaque artwork",
                 asset.name
             );
             if asset.template {
                 assert!(
-                    rgba.chunks_exact(4).all(|pixel| pixel[..3] == [0, 0, 0]),
+                    pixels.iter().all(|pixel| pixel[..3] == [0, 0, 0]),
                     "{} must be black template artwork",
                     asset.name
                 );
                 if !asset.name.contains("@2x") {
                     masks.push((
                         asset.name,
-                        rgba.chunks_exact(4)
-                            .map(|pixel| pixel[3])
-                            .collect::<Vec<_>>(),
+                        pixels.iter().map(|pixel| pixel[3]).collect::<Vec<_>>(),
                     ));
                 }
             }
