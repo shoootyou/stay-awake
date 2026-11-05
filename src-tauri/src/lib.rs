@@ -1901,6 +1901,41 @@ pub fn run() {
                     .on_menu_event(move |app, event| {
                         use owner::ConfigOrigin;
 
+                        let jiggle_mode = match event.id().as_ref() {
+                            "mode_power" => {
+                                Some(JiggleMode::PowerOnly)
+                            }
+                            "mode_subtle" => {
+                                Some(JiggleMode::MouseSubtle)
+                            }
+                            "mode_zen" => {
+                                Some(JiggleMode::MouseZen)
+                            }
+                            "mode_circle" => {
+                                Some(JiggleMode::MouseCircle)
+                            }
+                            _ => None,
+                        };
+                        if let Some(jiggle_mode) = jiggle_mode {
+                            if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                let runtime = runtime.inner().clone();
+                                std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                                    let pending = runtime.update_config(ConfigOrigin::Other,
+                                        |config| {
+                                            config.jiggle_mode = jiggle_mode;
+                                            Ok(())
+                                        }, |_, _| {});
+                                    let result = pending
+                                        .and_then(|pending| pending.wait(owner::REQUEST_TIMEOUT))
+                                        .and_then(|reply| reply.error.map_or(Ok(()), Err));
+                                    if let Err(error) = result {
+                                        log::error!("Jiggle mode update failed: {error}");
+                                    }
+                                }));
+                            }
+                            return;
+                        }
+
                         match event.id().as_ref() {
                             "toggle_active" => {
                                 if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
@@ -1909,86 +1944,6 @@ pub fn run() {
                                             "Engine toggle could not reach runtime: {error}"
                                         );
                                     }
-                                }
-                            }
-                            "mode_power" => {
-                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
-                                    let runtime = runtime.inner().clone();
-                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
-                                        let pending = runtime.update_config(ConfigOrigin::Other,
-                                            |config| {
-                                                config.jiggle_mode = JiggleMode::PowerOnly;
-                                                Ok(())
-                                            }, |_, _| {});
-                                        let result = pending
-                                            .and_then(|pending| {
-                                                pending.wait(owner::REQUEST_TIMEOUT)
-                                            })
-                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
-                                        if let Err(error) = result {
-                                            log::error!("Jiggle mode update failed: {error}");
-                                        }
-                                    }));
-                                }
-                            }
-                            "mode_subtle" => {
-                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
-                                    let runtime = runtime.inner().clone();
-                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
-                                        let pending = runtime.update_config(ConfigOrigin::Other,
-                                            |config| {
-                                                config.jiggle_mode = JiggleMode::MouseSubtle;
-                                                Ok(())
-                                            }, |_, _| {});
-                                        let result = pending
-                                            .and_then(|pending| {
-                                                pending.wait(owner::REQUEST_TIMEOUT)
-                                            })
-                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
-                                        if let Err(error) = result {
-                                            log::error!("Jiggle mode update failed: {error}");
-                                        }
-                                    }));
-                                }
-                            }
-                            "mode_zen" => {
-                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
-                                    let runtime = runtime.inner().clone();
-                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
-                                        let pending = runtime.update_config(ConfigOrigin::Other,
-                                            |config| {
-                                                config.jiggle_mode = JiggleMode::MouseZen;
-                                                Ok(())
-                                            }, |_, _| {});
-                                        let result = pending
-                                            .and_then(|pending| {
-                                                pending.wait(owner::REQUEST_TIMEOUT)
-                                            })
-                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
-                                        if let Err(error) = result {
-                                            log::error!("Jiggle mode update failed: {error}");
-                                        }
-                                    }));
-                                }
-                            }
-                            "mode_circle" => {
-                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
-                                    let runtime = runtime.inner().clone();
-                                    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
-                                        let pending = runtime.update_config(ConfigOrigin::Other,
-                                            |config| {
-                                                config.jiggle_mode = JiggleMode::MouseCircle;
-                                                Ok(())
-                                            }, |_, _| {});
-                                        let result = pending
-                                            .and_then(|pending| {
-                                                pending.wait(owner::REQUEST_TIMEOUT)
-                                            })
-                                            .and_then(|reply| reply.error.map_or(Ok(()), Err));
-                                        if let Err(error) = result {
-                                            log::error!("Jiggle mode update failed: {error}");
-                                        }
-                                    }));
                                 }
                             }
                             "grant_accessibility" => {
