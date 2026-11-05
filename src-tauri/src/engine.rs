@@ -163,6 +163,24 @@ mod phase_one_contract {
         sink.push(route);
     }
 
+    #[derive(Default)]
+    struct FakeBackend {
+        acquires: usize,
+        releases: usize,
+        mouse_calls: usize,
+        active: bool,
+    }
+
+    fn reconcile_supervisor(
+        _: &mut FakeBackend,
+        _: ScheduleResult,
+        _: Override,
+        _: u64,
+        _: bool,
+    ) -> Result<Presentation, &'static str> {
+        Ok(Presentation::Inactive)
+    }
+
     const MON: &[u8] = &[1];
     const NONE: &[u8] = &[];
 
@@ -422,6 +440,47 @@ mod phase_one_contract {
                 Event::Resume
             ]
         );
+    }
+
+    #[test]
+    fn supervisor_reconciles_idle_windows_independently_of_jiggle_interval() {
+        let mut backend = FakeBackend::default();
+        let inside = ScheduleResult {
+            in_window: true,
+            next_start: None,
+        };
+        assert_eq!(
+            reconcile_supervisor(&mut backend, inside, Override::None, 300, false),
+            Ok(Presentation::Active)
+        );
+        assert_eq!(backend.acquires, 1, "opening a window acquires once");
+        assert!(backend.active);
+        assert_eq!(
+            reconcile_supervisor(&mut backend, inside, Override::None, 300, false),
+            Ok(Presentation::Active)
+        );
+        assert_eq!(backend.acquires, 1, "repeated reconciliation is a no-op");
+    }
+
+    #[test]
+    fn supervisor_releases_on_close_and_power_only_never_calls_mouse() {
+        let mut backend = FakeBackend {
+            active: true,
+            ..FakeBackend::default()
+        };
+        let outside = ScheduleResult {
+            in_window: false,
+            next_start: Some(9 * 60),
+        };
+        assert_eq!(
+            reconcile_supervisor(&mut backend, outside, Override::None, 300, true),
+            Ok(Presentation::Waiting)
+        );
+        assert_eq!(
+            backend.releases, 1,
+            "window close releases even after worker cleanup error"
+        );
+        assert_eq!(backend.mouse_calls, 0, "PowerOnly has no mouse action");
     }
 }
 
