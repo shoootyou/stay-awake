@@ -31,17 +31,10 @@ pub(crate) enum TrayRoute {
     Hotkey,
     IpcToggle,
     Tick,
-    WifiChanged {
-        active: bool,
-    },
-    ConfigChanged {
-        policy_changed: bool,
-    },
-    ProfileLoaded {
-        policy_changed: bool,
-    },
+    WifiChanged { active: bool },
+    ConfigChanged { policy_changed: bool },
+    ProfileLoaded { policy_changed: bool },
     LanguageChanged,
-    #[allow(dead_code)]
     Resume,
     Quit,
 }

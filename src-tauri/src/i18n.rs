@@ -73,8 +73,6 @@ pub fn t(bundle: &Bundle, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) fn t_with_args(
     bundle: &Bundle,
     id: &str,
@@ -92,15 +90,11 @@ pub(crate) fn t_with_args(
     }
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) struct NextWindowInput<'a> {
     pub(crate) when: chrono::DateTime<chrono::FixedOffset>,
     pub(crate) locale: &'a str,
 }
 
-// wired in E3b-2
-#[allow(dead_code)]
 pub(crate) fn format_next_window(input: NextWindowInput<'_>) -> String {
     let date = match input.locale {
         "es" | "fr" | "pt-BR" => input.when.format("%d/%m/%Y"),

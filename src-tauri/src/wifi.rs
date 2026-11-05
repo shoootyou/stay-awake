@@ -419,8 +419,7 @@ fn is_disconnected_ap_path(path: &str) -> bool {
 /// without a live D-Bus connection — mirrors the macOS `try_event_driven_loop`'s inline
 /// `current != last_ssid` check (line ~831), just named and seamed for Linux's periodic
 /// safety-net re-check.
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
+#[cfg(all(test, target_os = "linux"))]
 fn ssid_changed(current: &Option<String>, last: &Option<String>) -> bool {
     current != last
 }
