@@ -2124,3 +2124,285 @@ mod core_helper_tests {
         assert!(!is_within_schedule(&config));
     }
 }
+
+/*
+ * @spec-handoff
+ * @interface NativeTraySink::{apply_initial,publish}; request_app_exit
+ * @interface async fn {toggle_engine,get_engine_state,save_config,load_profile,set_language}
+ * @behavior
+ *   - Native publication keeps only the latest pending frame and schedules UI work once.
+ *   - Tauri callbacks submit owner work without directly controlling Engine or waiting on UI.
+ *   - Setup paints actual pre-start state, installs Wi-Fi forwarding before monitoring, and
+ *     allows process exit only after owner shutdown confirms completion.
+ * @edge-cases
+ *   - Unchanged ticks coalesce; explicit frames retry; enqueue failure clears scheduling state.
+ *   - code=None remains close-to-tray and tray clicks do not toggle activity.
+ */
+#[cfg(test)]
+mod native_wiring_contract_tests {
+    fn without_comments(source: &str) -> String {
+        let bytes = source.as_bytes();
+        let mut output = String::with_capacity(source.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index..].starts_with(b"//") {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            } else if bytes[index..].starts_with(b"/*") {
+                index += 2;
+                while index + 1 < bytes.len() && !bytes[index..].starts_with(b"*/") {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            } else {
+                output.push(bytes[index] as char);
+                index += 1;
+            }
+        }
+        output
+    }
+
+    fn scoped_block<'a>(source: &'a str, anchor: &str) -> &'a str {
+        let start = source
+            .find(anchor)
+            .unwrap_or_else(|| panic!("missing scope anchor: {anchor}"));
+        let open = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("missing opening brace for: {anchor}"));
+        let mut depth = 0usize;
+        for (offset, byte) in source[open..].bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &source[start..=open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unclosed scope: {anchor}");
+    }
+
+    fn handler_table(source: &str) -> &str {
+        let start = source
+            .find("tauri::generate_handler![")
+            .expect("generate_handler macro exists");
+        let open = source[start..]
+            .find('[')
+            .map(|offset| start + offset)
+            .expect("generate_handler opens its entries");
+        let close = source[open..]
+            .find("])")
+            .map(|offset| open + offset)
+            .expect("generate_handler closes its entries");
+        &source[open..=close]
+    }
+
+    fn source() -> String {
+        without_comments(include_str!("lib.rs"))
+    }
+
+    fn production_source() -> String {
+        let source = source();
+        let test_module = source
+            .find("#[cfg(test)]\nmod native_wiring_contract_tests")
+            .expect("native wiring tests remain separate from production source");
+        source[..test_module].to_owned()
+    }
+
+    #[test]
+    fn native_sink_publishes_latest_frames_on_the_main_thread_without_waiting() {
+        let source = source();
+        let native_impl = scoped_block(&source, "impl NativeTraySink {");
+        let publish_impl = scoped_block(&source, "impl TraySink for NativeTraySink {");
+
+        assert!(
+            native_impl.contains("fn apply_initial(&self, presentation: &TrayPresentation)"),
+            "initial paint accepts the production presentation"
+        );
+        assert!(
+            native_impl.contains("status_item.set_text"),
+            "initial paint updates the status item from its presentation"
+        );
+        assert!(
+            publish_impl.contains("last_requested"),
+            "unchanged Tick frames are coalesced against the requested frame"
+        );
+        assert!(
+            publish_impl.contains("run_on_main_thread"),
+            "publication schedules native setters on the UI thread"
+        );
+        assert!(
+            publish_impl.contains("scheduled = false"),
+            "an enqueue failure makes a later publication schedulable"
+        );
+        assert!(
+            publish_impl.contains("log::error!"),
+            "setter failures are logged after the owner has accepted the frame"
+        );
+        assert!(
+            !publish_impl.contains("recv_timeout") && !publish_impl.contains(".wait("),
+            "owner publication never waits for native UI completion"
+        );
+    }
+
+    #[test]
+    fn setup_uses_actual_initial_presentation_and_installs_wifi_listener_before_monitor_start() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let initial = scoped_block(&source, "pub(crate) fn initial_runtime_snapshot(");
+
+        assert!(
+            initial.contains("engine_active: false"),
+            "first presentation derives from confirmed pre-start inactivity"
+        );
+        assert!(
+            setup.contains("initial_runtime_snapshot"),
+            "setup builds a presentation from actual initial inputs"
+        );
+        assert!(
+            !setup.contains(".icon(active_icon)") && !setup.contains(".tooltip(&tip_active)"),
+            "tray creation does not hard-code an active presentation"
+        );
+        let listener = setup
+            .find("app.listen(\"wifi-state-changed\"")
+            .expect("Wi-Fi listener exists");
+        let monitor_start = setup
+            .find("monitor.start()")
+            .expect("Wi-Fi monitor startup exists");
+        assert!(
+            listener < monitor_start,
+            "the Wi-Fi listener is installed before the monitor can emit"
+        );
+    }
+
+    #[test]
+    fn ipc_commands_are_desktop_async_owner_requests_with_bounded_blocking_waits() {
+        let source = source();
+        let handlers = handler_table(&source);
+
+        for command in [
+            "toggle_engine",
+            "get_engine_state",
+            "save_config",
+            "load_profile",
+            "set_language",
+        ] {
+            assert!(
+                handlers.contains(&format!("#[cfg(desktop)]\n            {command},")),
+                "generate_handler registers {command} rather than its legacy handler"
+            );
+        }
+        for legacy in [
+            "legacy_toggle_engine",
+            "legacy_get_engine_state",
+            "legacy_save_config",
+            "legacy_load_profile",
+            "legacy_set_language",
+        ] {
+            assert!(
+                !handlers.contains(&format!("            {legacy},")),
+                "generate_handler no longer exposes {legacy}"
+            );
+        }
+        let toggle = scoped_block(&source, "async fn toggle_engine(");
+        let query = scoped_block(&source, "async fn get_engine_state(");
+        let save = scoped_block(&source, "async fn save_config(");
+        let profile = scoped_block(&source, "async fn load_profile(");
+        let language = scoped_block(&source, "async fn set_language(");
+        for body in [toggle, query, save, profile, language] {
+            assert!(
+                body.contains("spawn_blocking"),
+                "owner IPC waits run on Tauri's blocking-task helper"
+            );
+            assert!(
+                body.contains("REQUEST_TIMEOUT"),
+                "owner IPC waits use the documented timeout"
+            );
+            assert!(
+                !body.contains("Engine") && !body.contains(".start(") && !body.contains(".stop("),
+                "IPC handlers do not directly control the engine"
+            );
+        }
+        assert!(toggle.contains("runtime.request(TrayRoute::IpcToggle)"));
+        assert!(query.contains("runtime.query()"));
+        assert!(save.contains("runtime.update_config(ConfigOrigin::Settings"));
+        assert!(profile.contains("runtime.update_config(ConfigOrigin::Profile"));
+        assert!(language.contains("runtime.update_config(ConfigOrigin::Language"));
+    }
+
+    #[test]
+    fn callbacks_forward_to_the_owner_without_direct_engine_control_or_extra_click_toggle() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+        let shortcut = scoped_block(&source, ".with_handler(move |app, _shortcut, event| {");
+        let wifi = scoped_block(&source, "app.listen(\"wifi-state-changed\"");
+        let production = production_source();
+
+        assert!(
+            menu.contains("runtime.post(TrayRoute::TrayToggle)"),
+            "tray menu toggle submits its named owner route"
+        );
+        assert!(
+            shortcut.contains("runtime.post(TrayRoute::Hotkey)"),
+            "pressed hotkey submits its named owner route"
+        );
+        assert!(
+            wifi.contains("runtime.post_wifi(owner::WifiObservation { ssid: payload.ssid })"),
+            "Wi-Fi listener forwards SSID rather than a stale active flag"
+        );
+        for body in [menu, shortcut, wifi] {
+            assert!(
+                !body.contains(".start(") && !body.contains(".stop(") && !body.contains(".toggle("),
+                "callbacks do not bypass the runtime owner"
+            );
+        }
+        assert!(
+            !setup.contains("on_tray_icon_event"),
+            "left click opens the menu without an additional activity toggle"
+        );
+        assert!(
+            !production.contains("eng.start(")
+                && !production.contains("eng.stop(")
+                && !production.contains("eng.toggle("),
+            "lib.rs leaves engine lifecycle operations to the owner path"
+        );
+    }
+
+    #[test]
+    fn exit_is_coordinated_after_owner_completion_and_window_close_stays_in_tray() {
+        let source = source();
+        let request_exit = scoped_block(&source, "pub(crate) fn request_app_exit(");
+        let run_events = scoped_block(&source, ".run(");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+
+        assert!(
+            menu.contains("request_app_exit(app, 0)"),
+            "Quit delegates shutdown to the exit coordinator"
+        );
+        assert!(
+            request_exit.contains("claim_exit_coordinator")
+                && request_exit.contains("runtime.shutdown(SHUTDOWN_TIMEOUT)")
+                && request_exit.contains("app.exit(code)"),
+            "only a claimed coordinator shuts down the owner before app exit"
+        );
+        assert!(
+            run_events.contains("if code.is_none()") && run_events.contains("api.prevent_exit()"),
+            "window close remains a close-to-tray event"
+        );
+        assert!(
+            run_events.contains("runtime.exit_ready()") && run_events.contains("request_app_exit"),
+            "ExitRequested prevents early process exit until owner completion"
+        );
+        assert!(
+            run_events.contains("tauri::RunEvent::Exit") && run_events.contains("exit_ready"),
+            "final Exit checks/logs unexpected shutdown before process teardown"
+        );
+    }
+}
