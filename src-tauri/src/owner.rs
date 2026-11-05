@@ -1497,6 +1497,12 @@ mod tests {
             );
             assert_eq!(frames[0].1.menu_text, lines.primary);
             assert_eq!(frames[0].1.hint_text, lines.hint);
+            let mode_text = match mode {
+                AppMode::WiFi => "Mode: WiFi",
+                AppMode::Manual | AppMode::Scheduled => "Mode: Manual",
+                AppMode::AlwaysOn => "Mode: Always On",
+            };
+            assert_eq!(frames[0].1.mode_text, mode_text);
         }
     }
 
