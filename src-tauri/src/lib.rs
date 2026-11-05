@@ -1,5 +1,3 @@
-#![cfg_attr(test, allow(clippy::doc_lazy_continuation))]
-
 /**
  * @spec-handoff
  * @interface handle_runtime_route(RuntimeRouteInput, Supervisor, EngineBackend, TraySink)
@@ -124,11 +122,11 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
  * @spec-handoff
  * @interface status_menu_label(current: TrayStatus, after_click: TrayStatus, Bundle) -> String
  * @behavior
- *   - Renders the current localized state, its fixed emoji, and the true click-result state.
- *   - Uses one U+2192 arrow with a single space on each side.
+ *     - Renders the current localized state, its fixed emoji, and the true click-result state.
+ *     - Uses one U+2192 arrow with a single space on each side.
  * @edge-cases
- *   - A scheduled Active click targets Paused, while an unscheduled Active click targets Inactive.
- *   - The target is supplied by lifecycle logic rather than guessed from the current label.
+ *     - A scheduled Active click targets Paused, while an unscheduled Active click targets Inactive.
+ *     - The target is supplied by lifecycle logic rather than guessed from the current label.
  * @see ./runtime.rs
  */
 #[cfg(test)]
@@ -211,6 +209,113 @@ mod tray_status_menu_contract_tests {
             lifecycle_result(true, true, true, false),
             runtime::TrayStatus::Paused
         );
+    }
+
+    #[test]
+    fn advertised_click_result_matches_lifecycle_for_every_reachable_tray_state() {
+        let at = Utc
+            .with_ymd_and_hms(2026, 11, 5, 9, 30, 0)
+            .single()
+            .expect("fixed instant exists");
+        for mode in [
+            config::AppMode::Manual,
+            config::AppMode::AlwaysOn,
+            config::AppMode::WiFi,
+            config::AppMode::Scheduled,
+        ] {
+            for schedule_enabled in [false, true] {
+                for inside in [false, true] {
+                    if !schedule_enabled && inside {
+                        continue;
+                    }
+                    let schedule_owned = schedule_enabled
+                        && matches!(
+                            runtime::effective_mode(&mode),
+                            config::AppMode::Manual | config::AppMode::AlwaysOn
+                        );
+                    let current = inside.then(|| schedule::Occurrence {
+                        start_day: at.date_naive(),
+                        start: at - Duration::minutes(30),
+                        end: at + Duration::minutes(30),
+                    });
+                    let next = schedule::Occurrence {
+                        start_day: at.date_naive(),
+                        start: at + Duration::hours(1),
+                        end: at + Duration::hours(2),
+                    };
+                    let states = if schedule_owned {
+                        if inside {
+                            vec![
+                                (true, runtime::OverrideState::None),
+                                (
+                                    false,
+                                    runtime::OverrideState::SkipWindow(
+                                        current.clone().expect("inside has an occurrence"),
+                                    ),
+                                ),
+                            ]
+                        } else {
+                            vec![
+                                (false, runtime::OverrideState::None),
+                                (true, runtime::OverrideState::ForceOn { until: None }),
+                            ]
+                        }
+                    } else {
+                        vec![
+                            (false, runtime::OverrideState::None),
+                            (true, runtime::OverrideState::None),
+                        ]
+                    };
+                    for (engine_active, override_state) in states {
+                        let window = schedule::ScheduleEvaluation {
+                            at,
+                            current: current.clone(),
+                            next: Some(next.clone()),
+                        };
+                        let normalized = runtime::normalize_override(runtime::NormalizeInput {
+                            mode: &mode,
+                            schedule_enabled,
+                            window: &window,
+                            override_state: &override_state,
+                            event: runtime::LifecycleEvent::Tick,
+                        });
+                        let status = runtime::derive_tray_status(runtime::TrayInput {
+                            mode: &mode,
+                            engine_active,
+                            schedule_enabled,
+                            window: &window,
+                            override_state: &normalized,
+                        });
+                        let snapshot = runtime::RuntimeSnapshot {
+                            engine_active,
+                            override_state: normalized.clone(),
+                            window,
+                            status,
+                        };
+                        let oracle = runtime::decide_lifecycle(runtime::LifecycleInput {
+                            mode: &mode,
+                            schedule_enabled,
+                            window: &snapshot.window,
+                            engine_active,
+                            override_state: &normalized,
+                            event: runtime::LifecycleEvent::TrayToggle,
+                            previous_policy: None,
+                            wifi_active: false,
+                        });
+                        let advertised = tray_toggle_presentation(&snapshot);
+                        assert_eq!(
+                            advertised, oracle.presentation,
+                            "{mode:?}, enabled={schedule_enabled}, inside={inside}, {status:?}"
+                        );
+                        let bundle = i18n::create_bundle("en");
+                        assert_eq!(
+                            status_menu_label(status, advertised, &bundle),
+                            status_menu_label(status, oracle.presentation, &bundle)
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -2690,8 +2795,10 @@ mod core_helper_tests {
  * @behavior
  *   - Active is full-strength and inactive or waiting tray states are alpha-dimmed.
  *   - The original tray PNGs are loaded without template rendering.
+ *
  * @edge-cases
  *   - The dimmer preserves RGB and image dimensions while multiplying alpha by 0.4.
+ *
  * @see ../icons/tray-icon@2x.png
  */
 #[cfg(test)]
@@ -2727,7 +2834,7 @@ mod tray_icon_contract_tests {
     }
 
     #[test]
-    fn restores_the_exact_original_tray_png_assets_and_removes_silhouettes() {
+    fn requires_original_tray_png_assets_and_removes_silhouettes() {
         for name in ["tray-icon.png", "tray-icon@2x.png", "tray-icon-dark.png"] {
             assert!(
                 icons_dir().join(name).is_file(),
