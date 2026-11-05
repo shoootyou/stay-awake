@@ -1219,6 +1219,18 @@ mod tests {
         }
     }
 
+    struct ScriptedMonotonicClock {
+        instants: VecDeque<Instant>,
+    }
+
+    impl MonotonicClock for ScriptedMonotonicClock {
+        fn now(&mut self) -> Instant {
+            self.instants
+                .pop_front()
+                .expect("owner loop must not read beyond the monotonic clock script")
+        }
+    }
+
     struct RouteSink {
         routes: mpsc::Sender<TrayRoute>,
         errors: Arc<Mutex<Vec<String>>>,
@@ -2745,6 +2757,123 @@ mod tests {
         });
         samples.extend(steady_time_samples(8));
         assert_resume_retries_a_latched_start(samples);
+    }
+
+    #[test]
+    fn deadline_due_retries_a_latched_start_only_for_time_discontinuities() {
+        let base = Instant::now();
+        let wall = Utc
+            .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+            .single()
+            .expect("fixed instant exists");
+
+        for (label, current, expected_route, expected_starts) in [
+            (
+                "forward wall jump",
+                TimeSample {
+                    wall: wall + chrono::Duration::seconds(3),
+                    monotonic: base + SUPERVISOR_PERIOD,
+                    offset_seconds: 0,
+                },
+                TrayRoute::Resume,
+                2,
+            ),
+            (
+                "backward wall jump",
+                TimeSample {
+                    wall: wall - chrono::Duration::seconds(3),
+                    monotonic: base + SUPERVISOR_PERIOD,
+                    offset_seconds: 0,
+                },
+                TrayRoute::Resume,
+                2,
+            ),
+            (
+                "offset change",
+                TimeSample {
+                    wall: wall + chrono::Duration::milliseconds(250),
+                    monotonic: base + SUPERVISOR_PERIOD,
+                    offset_seconds: 3600,
+                },
+                TrayRoute::Resume,
+                2,
+            ),
+            (
+                "steady deadline",
+                TimeSample {
+                    wall: wall + chrono::Duration::milliseconds(250),
+                    monotonic: base + SUPERVISOR_PERIOD,
+                    offset_seconds: 0,
+                },
+                TrayRoute::Tick,
+                1,
+            ),
+        ] {
+            let (sender, receiver) = mpsc::channel();
+            let shared = owner_loop_shared(sender.clone());
+            let (route_sender, routes) = mpsc::channel();
+            let starts = Arc::new(Mutex::new(0));
+            let backend_starts = starts.clone();
+            let before_wait = TimeSample {
+                wall,
+                monotonic: base,
+                offset_seconds: 0,
+            };
+            let mut time_source = ScriptedTimeSource {
+                samples: VecDeque::from([
+                    before_wait,
+                    current.clone(),
+                    current.clone(),
+                    current.clone(),
+                    current,
+                ]),
+            };
+            let mut monotonic_clock = ScriptedMonotonicClock {
+                instants: VecDeque::from([
+                    base,
+                    base + SUPERVISOR_PERIOD,
+                    base + SUPERVISOR_PERIOD,
+                    base + SUPERVISOR_PERIOD,
+                ]),
+            };
+            let owner = thread::spawn(move || {
+                owner_loop_with_time_sources(
+                    receiver,
+                    Arc::downgrade(&shared),
+                    scheduled_active_config(),
+                    Arc::new(FixedClock(wall)),
+                    Box::new(FailingStartBackend {
+                        active: Arc::new(Mutex::new(false)),
+                        starts: backend_starts,
+                        failures_remaining: 1,
+                    }),
+                    Box::new(RouteSink {
+                        routes: route_sender,
+                        errors: Arc::new(Mutex::new(Vec::new())),
+                        tick_results: Arc::new(Mutex::new(VecDeque::new())),
+                    }),
+                    &mut time_source,
+                    &mut monotonic_clock,
+                )
+            });
+
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(TrayRoute::Startup),
+                "{label} begins with one startup"
+            );
+            assert_eq!(
+                routes.recv_timeout(REQUEST_TIMEOUT),
+                Ok(expected_route),
+                "{label} selects the deadline route"
+            );
+            assert_eq!(
+                *starts.lock().expect("backend start lock"),
+                expected_starts,
+                "{label} has the expected failed-start retry count"
+            );
+            stop_owner_loop(&sender, owner);
+        }
     }
 
     #[test]
