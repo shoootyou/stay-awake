@@ -121,6 +121,38 @@ struct Shared {
     exit_coordinator_running: AtomicBool,
 }
 
+/// Configuration transaction pieces can be supplied independently for failure tests.
+pub(crate) struct OwnerShared {
+    pub(crate) config: Arc<Mutex<AppConfig>>,
+    pub(crate) bundle: Arc<Mutex<Bundle>>,
+    pub(crate) mutations: Mutex<()>,
+}
+
+impl OwnerShared {
+    pub(crate) fn new(
+        config: Arc<Mutex<AppConfig>>,
+        bundle: Arc<Mutex<Bundle>>,
+        mutations: Mutex<()>,
+    ) -> Self {
+        Self {
+            config,
+            bundle,
+            mutations,
+        }
+    }
+}
+
+/// A test can drop this receiver after persistence to simulate owner disconnection.
+#[allow(dead_code)]
+pub(crate) struct ConfigTransactionReceiver(mpsc::Receiver<OwnerCommand>);
+
+#[allow(dead_code)]
+impl ConfigTransactionReceiver {
+    pub(crate) fn disconnect(self) {
+        drop(self.0);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RuntimeHandle {
     shared: Arc<Shared>,
@@ -193,11 +225,12 @@ impl RuntimeHandle {
             .map_err(|_| "config lock poisoned".to_owned())?
             .clone();
         let (sender, receiver) = mpsc::channel();
+        let transaction = OwnerShared::new(input.config, input.bundle, Mutex::new(()));
         let shared = Arc::new(Shared {
             sender,
-            config: input.config,
-            bundle: input.bundle,
-            mutations: Mutex::new(()),
+            config: transaction.config,
+            bundle: transaction.bundle,
+            mutations: transaction.mutations,
             owner: Mutex::new(None),
             shutdown: Mutex::new(()),
             closing: AtomicBool::new(false),
@@ -220,6 +253,32 @@ impl RuntimeHandle {
             .map_err(|_| "owner lock poisoned".to_owned())?
             .replace(owner);
         Ok(Self { shared })
+    }
+
+    /// Builds a transaction-only handle without starting an owner thread.
+    #[allow(dead_code)]
+    pub(crate) fn for_config_transaction(
+        transaction: OwnerShared,
+    ) -> (Self, ConfigTransactionReceiver) {
+        let (sender, receiver) = mpsc::channel();
+        let shared = Shared {
+            sender,
+            config: transaction.config,
+            bundle: transaction.bundle,
+            mutations: transaction.mutations,
+            owner: Mutex::new(None),
+            shutdown: Mutex::new(()),
+            closing: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            exit_ready: AtomicBool::new(false),
+            exit_coordinator_running: AtomicBool::new(false),
+        };
+        (
+            Self {
+                shared: Arc::new(shared),
+            },
+            ConfigTransactionReceiver(receiver),
+        )
     }
 
     fn send(&self, command: OwnerCommand) -> Result<(), String> {
@@ -277,6 +336,24 @@ impl RuntimeHandle {
         F: FnOnce(&mut AppConfig) -> Result<(), String>,
         E: FnOnce(&AppConfig, &AppConfig),
     {
+        self.update_config_with(origin, edit, effects, |candidate| {
+            persist_config_with(&candidate, AppConfig::save)
+        })
+    }
+
+    /// Uses an injected durable write so transaction failure ordering is testable.
+    pub(crate) fn update_config_with<F, E, P>(
+        &self,
+        origin: ConfigOrigin,
+        edit: F,
+        effects: E,
+        persist: P,
+    ) -> Result<PendingReply, String>
+    where
+        F: FnOnce(&mut AppConfig) -> Result<(), String>,
+        E: FnOnce(&AppConfig, &AppConfig),
+        P: FnOnce(AppConfig) -> Result<(), String>,
+    {
         let _mutations = self
             .shared
             .mutations
@@ -297,7 +374,7 @@ impl RuntimeHandle {
             return Err("interval must be at least one second".to_owned());
         }
         crate::schedule::Schedule::from_config(&candidate)?;
-        persist_config_with(&candidate, AppConfig::save)?;
+        persist(candidate.clone())?;
         if candidate.language != previous.language {
             let replacement = create_bundle(&candidate.language);
             *self
