@@ -738,12 +738,19 @@ mod tests {
     }
 
     fn owner_start(calls: Arc<Mutex<Vec<&'static str>>>) -> OwnerStart {
+        owner_start_with_config(AppConfig::default(), calls)
+    }
+
+    fn owner_start_with_config(
+        captured_config: AppConfig,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    ) -> OwnerStart {
         let now = Utc
             .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
             .single()
             .expect("fixed instant exists");
         OwnerStart {
-            config: Arc::new(Mutex::new(AppConfig::default())),
+            config: Arc::new(Mutex::new(captured_config)),
             bundle: Arc::new(Mutex::new(crate::i18n::create_bundle("en"))),
             clock: Arc::new(FixedClock(now)),
             backend_factory: Box::new(move |_, _| {
@@ -912,6 +919,62 @@ mod tests {
                     .find("OwnerCommand::Config")
                     .expect("owner receives the saved candidate"),
             "disk persistence precedes runtime configuration delivery"
+        );
+    }
+
+    #[test]
+    fn unrelated_config_change_keeps_the_current_skip_window() {
+        let config = AppConfig {
+            schedule_enabled: true,
+            schedule_start_hour: 7,
+            schedule_end_hour: 9,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let handle = RuntimeHandle::spawn(owner_start_with_config(config, calls.clone()))
+            .expect("owner spawn succeeds");
+
+        let paused = handle
+            .request(TrayRoute::IpcToggle)
+            .expect("toggle request sends")
+            .wait(REQUEST_TIMEOUT)
+            .expect("toggle reply arrives");
+        assert_eq!(
+            paused.snapshot.expect("toggle returns a snapshot").status,
+            crate::runtime::TrayStatus::Paused,
+            "the real owner records SkipWindow after stopping inside the current window"
+        );
+
+        let unchanged_policy = handle
+            .update_config(
+                ConfigOrigin::Other,
+                |config| {
+                    config.interval_secs = 60;
+                    Ok(())
+                },
+                |_, _| {},
+            )
+            .expect("interval save queues its exact config snapshot")
+            .wait(REQUEST_TIMEOUT)
+            .expect("unrelated config change receives a reply");
+        assert_eq!(
+            unchanged_policy
+                .snapshot
+                .expect("config reply returns a snapshot")
+                .status,
+            crate::runtime::TrayStatus::Paused,
+            "an interval-only update must not clear SkipWindow"
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .expect("backend log lock")
+                .iter()
+                .filter(|call| **call == "start")
+                .count(),
+            1,
+            "the unrelated update must not restart the backend"
         );
     }
 
