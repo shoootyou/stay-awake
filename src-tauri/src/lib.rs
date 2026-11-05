@@ -2423,6 +2423,129 @@ mod core_helper_tests {
  */
 #[cfg(test)]
 mod native_wiring_contract_tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct FakeUiExecutor {
+        tasks: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+        fail_next_enqueue: AtomicBool,
+    }
+
+    impl FakeUiExecutor {
+        fn run_next(&self) {
+            self.tasks
+                .lock()
+                .expect("fake UI task lock")
+                .pop_front()
+                .expect("a UI task is queued")();
+        }
+
+        fn queued(&self) -> usize {
+            self.tasks.lock().expect("fake UI task lock").len()
+        }
+    }
+
+    impl UiExecutor for FakeUiExecutor {
+        fn run_on_main_thread(&self, task: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+            if self.fail_next_enqueue.swap(false, Ordering::AcqRel) {
+                return Err("enqueue failed".to_owned());
+            }
+            self.tasks
+                .lock()
+                .expect("fake UI task lock")
+                .push_back(task);
+            Ok(())
+        }
+    }
+
+    struct FakePaintTargets {
+        frames: Mutex<Vec<TrayPresentation>>,
+        fail_next_paint: AtomicBool,
+    }
+
+    impl TrayPaintTargets for FakePaintTargets {
+        fn paint(&self, presentation: &TrayPresentation) -> Result<(), String> {
+            self.frames
+                .lock()
+                .expect("fake paint lock")
+                .push(presentation.clone());
+            if self.fail_next_paint.swap(false, Ordering::AcqRel) {
+                Err("paint failed".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn fake_presentation(text: &str) -> TrayPresentation {
+        TrayPresentation {
+            status: runtime::TrayStatus::Inactive,
+            menu_text: text.to_owned(),
+            tooltip: text.to_owned(),
+            icon: runtime::TrayIcon::Inactive,
+        }
+    }
+
+    #[test]
+    fn native_sink_recovers_from_enqueue_failure_and_coalesces_deferred_paints() {
+        let executor = Arc::new(FakeUiExecutor {
+            tasks: Mutex::new(VecDeque::new()),
+            fail_next_enqueue: AtomicBool::new(true),
+        });
+        let targets = Arc::new(FakePaintTargets {
+            frames: Mutex::new(Vec::new()),
+            fail_next_paint: AtomicBool::new(true),
+        });
+        let mut sink = NativeTraySink::new_with_ui(executor.clone(), targets.clone());
+        let a = fake_presentation("A");
+        let b = fake_presentation("B");
+        let c = fake_presentation("C");
+
+        assert_eq!(
+            sink.publish(TrayRoute::Tick, &a),
+            Err("enqueue failed".to_owned())
+        );
+        assert_eq!(
+            executor.queued(),
+            0,
+            "a failed enqueue leaves no stale callback"
+        );
+        sink.publish(TrayRoute::Tick, &a)
+            .expect("a later frame reschedules after enqueue failure");
+        sink.publish(TrayRoute::Tick, &a)
+            .expect("an unchanged tick is coalesced");
+        sink.publish(TrayRoute::TrayToggle, &b)
+            .expect("an explicit frame supersedes the pending tick");
+        assert_eq!(
+            executor.queued(),
+            1,
+            "publish returns without waiting for UI completion"
+        );
+
+        executor.run_next();
+        assert_eq!(
+            targets.frames.lock().expect("fake paint lock").as_slice(),
+            std::slice::from_ref(&b),
+            "only the latest queued frame is painted; setter failures do not reject it"
+        );
+
+        sink.publish(TrayRoute::Tick, &c)
+            .expect("a publication after painting queues another callback");
+        assert_eq!(
+            executor.queued(),
+            1,
+            "a frame published after paint is not lost"
+        );
+        executor.run_next();
+        assert_eq!(
+            targets.frames.lock().expect("fake paint lock").as_slice(),
+            &[b, c],
+            "the later frame is painted after the earlier callback"
+        );
+    }
+
     fn without_comments(source: &str) -> String {
         let bytes = source.as_bytes();
         let mut output = String::with_capacity(source.len());
