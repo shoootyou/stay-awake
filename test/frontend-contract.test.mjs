@@ -36,9 +36,9 @@ const expectedSelectorIds = [
   "accessibility-banner", "app-mode", "app-mode-desc", "autostart", "grant-btn", "hotkey",
   "hotkey-recorder", "interval", "interval-value", "jiggle-mode", "language", "mode-info-btn",
   "mode-info-panel", "profile-delete-btn", "profile-save-btn", "profile-select", "recheck-btn",
-  "schedule-enabled", "schedule-end", "schedule-start", "wifi-current-ssid", "wifi-details",
+  "schedule-enabled", "schedule-end", "schedule-start", "schedule-wifi-alert", "wifi-current-ssid", "wifi-details",
   "wifi-grant-location", "wifi-location-banner", "wifi-network-list", "wifi-nm-banner",
-  "schedule-wifi-alert", "wifi-register-btn", "wifi-section",
+  "wifi-register-btn", "wifi-section",
 ];
 const expectedTranslationKeys = [
   "mode-desc-circle", "mode-desc-power", "mode-desc-subtle", "mode-desc-zen", "profile-default",
