@@ -13,6 +13,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -62,6 +63,27 @@ const emojiEscape = new RegExp([
   String.raw`\\u\{(?:1F[3-9A-Fa-f][0-9A-Fa-f]{2}|260[0-9A-Fa-f]|27[0-9A-Fa-f]{2}|FE0F|2764|2665)\}`,
   String.raw`\\u(?:D83[C-F]|D8[0-9A-Fa-f]{2}|D[CE][0-9A-Fa-f]{2}|260[0-9A-Fa-f]|27[0-9A-Fa-f]{2}|FE0F|2764|2665)`,
 ].join("|"), "u");
+
+// Mutant: replace an original asset, retain a silhouette, or restore template rendering.
+test("restores the original dimmable tray assets and removes silhouette assets", () => {
+  const iconDirectory = join(root, "src-tauri/icons");
+  for (const name of ["tray-icon.png", "tray-icon@2x.png", "tray-icon-dark.png"]) {
+    const original = execFileSync("/usr/bin/git", [
+      "show", `155afa6a:src-tauri/icons/${name}`,
+    ]);
+    assert.deepEqual(readFileSync(join(iconDirectory, name)), original, `${name} must be original`);
+  }
+  for (const name of [
+    "tray-active.png", "tray-active@2x.png", "tray-inactive.png", "tray-inactive@2x.png",
+    "tray-waiting.png", "tray-waiting@2x.png", "tray-linux-active.png",
+    "tray-linux-inactive.png", "tray-linux-waiting.png",
+  ]) {
+    assert.equal(existsSync(join(iconDirectory, name)), false, `${name} must be removed`);
+  }
+  const rust = read("src-tauri/src/lib.rs");
+  assert.doesNotMatch(rust, /icon_as_template|set_icon_with_as_template/);
+  assert.match(rust, /self\.tray\.set_icon\(Some\(image\)\)/);
+});
 
 // Mutant: delete one asset, add an executable SVG element, or hard-code a fill color.
 test("ships safe canonical regular SVG assets with attribution inside the byte budget", () => {
