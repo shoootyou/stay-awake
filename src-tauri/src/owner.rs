@@ -650,6 +650,74 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn detects_forward_offset_and_long_wait_discontinuities_but_not_a_short_steady_wait() {
+        let monotonic = Instant::now();
+        let previous = TimeSample {
+            wall: Utc
+                .with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed instant exists"),
+            monotonic,
+            offset_seconds: 0,
+        };
+        let sample = |wall, elapsed, offset_seconds| TimeSample {
+            wall,
+            monotonic: monotonic + elapsed,
+            offset_seconds,
+        };
+
+        let forward = sample(
+            previous.wall + chrono::Duration::seconds(5),
+            Duration::from_millis(250),
+            0,
+        );
+        assert!(detect_time_change(TimeChangeInput {
+            previous: &previous,
+            current: &forward,
+        }));
+        let offset = sample(
+            previous.wall + chrono::Duration::milliseconds(250),
+            Duration::from_millis(250),
+            3600,
+        );
+        assert!(detect_time_change(TimeChangeInput {
+            previous: &previous,
+            current: &offset,
+        }));
+        let long_wait = sample(
+            previous.wall + chrono::Duration::seconds(2),
+            Duration::from_secs(2),
+            0,
+        );
+        assert!(detect_time_change(TimeChangeInput {
+            previous: &previous,
+            current: &long_wait,
+        }));
+        let steady = sample(
+            previous.wall + chrono::Duration::milliseconds(250),
+            Duration::from_millis(250),
+            0,
+        );
+        assert!(!detect_time_change(TimeChangeInput {
+            previous: &previous,
+            current: &steady,
+        }));
+    }
+
+    #[test]
+    fn deadline_due_is_inclusive_and_persistence_failure_is_returned() {
+        let now = Instant::now();
+        assert!(!deadline_due(now, now + Duration::from_millis(1)));
+        assert!(deadline_due(now, now));
+        assert!(deadline_due(now + Duration::from_millis(1), now));
+
+        assert_eq!(
+            persist_config_with(&AppConfig::default(), |_| Err("save failed".to_owned())),
+            Err("save failed".to_owned())
+        );
+    }
+
     #[derive(Default)]
     struct RecordingSink {
         frames: Arc<Mutex<Vec<(TrayRoute, crate::TrayPresentation)>>>,
