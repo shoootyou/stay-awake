@@ -80,12 +80,12 @@ async function loadConfig() {
     document.getElementById("hotkey").textContent = formatHotkeyDisplay(cfg.global_hotkey);
 
     // Schedule fields
-    document.getElementById("schedule-enabled").checked = cfg.schedule_enabled || false;
-    const startH = String(cfg.schedule_start_hour || 9).padStart(2, "0");
-    const startM = String(cfg.schedule_start_minute || 0).padStart(2, "0");
+    document.getElementById("schedule-enabled").checked = cfg.schedule_enabled ?? false;
+    const startH = String(cfg.schedule_start_hour ?? 9).padStart(2, "0");
+    const startM = String(cfg.schedule_start_minute ?? 0).padStart(2, "0");
     document.getElementById("schedule-start").value = startH + ":" + startM;
-    const endH = String(cfg.schedule_end_hour || 17).padStart(2, "0");
-    const endM = String(cfg.schedule_end_minute || 0).padStart(2, "0");
+    const endH = String(cfg.schedule_end_hour ?? 17).padStart(2, "0");
+    const endM = String(cfg.schedule_end_minute ?? 0).padStart(2, "0");
     document.getElementById("schedule-end").value = endH + ":" + endM;
 
     const days = cfg.schedule_days || ["mon", "tue", "wed", "thu", "fri"];
@@ -149,8 +149,8 @@ async function checkAccessibility() {
 }
 
 const MODE_DESCRIPTIONS = {
-  Manual:   "Engine starts and stops manually via the tray toggle or global hotkey.",
-  AlwaysOn: "Engine runs continuously while Stay Awake is open.",
+  Manual:   "Use the tray or hotkey to start and stop. An enabled schedule also controls automatic starts and stops.",
+  AlwaysOn: "Starts automatically. An enabled schedule limits operation to its windows.",
 };
 
 // Location Services is only required on macOS (CoreWLAN SSID detection). On Linux, WiFi
@@ -191,10 +191,10 @@ async function autoSave() {
     language: document.getElementById("language").value,
     global_hotkey: originalConfig.global_hotkey,
     schedule_enabled: document.getElementById("schedule-enabled").checked,
-    schedule_start_hour: parseInt(startParts[0], 10) || 0,
-    schedule_start_minute: parseInt(startParts[1], 10) || 0,
-    schedule_end_hour: parseInt(endParts[0], 10) || 0,
-    schedule_end_minute: parseInt(endParts[1], 10) || 0,
+    schedule_start_hour: parseInt(startParts[0], 10) ?? 0,
+    schedule_start_minute: parseInt(startParts[1], 10) ?? 0,
+    schedule_end_hour: parseInt(endParts[0], 10) ?? 0,
+    schedule_end_minute: parseInt(endParts[1], 10) ?? 0,
     schedule_days: scheduleDays,
     profiles: originalConfig.profiles || [],
     active_profile: document.getElementById("profile-select").value || "Default",

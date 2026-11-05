@@ -16,6 +16,16 @@
       </header>
 
       <section class="group">
+        <label class="field">
+          <span class="label"><i class="ph ph-app-window"></i> <span data-i18n="settings-app-mode-label">App Mode</span></span>
+          <select id="app-mode">
+            <option value="Manual">Manual</option>
+            <option value="AlwaysOn">Always On</option>
+            <option value="WiFi">WiFi Mode</option>
+          </select>
+          <p id="app-mode-desc" class="field-hint"></p>
+        </label>
+
         <div class="field">
           <div class="label-row">
             <span class="label"><i class="ph ph-cursor-click"></i> <span data-i18n="settings-mode-label">Jiggle Mode</span></span>
@@ -48,16 +58,6 @@
       </section>
 
       <section class="group">
-        <label class="field">
-          <span class="label"><i class="ph ph-app-window"></i> <span data-i18n="settings-app-mode-label">App Mode</span></span>
-          <select id="app-mode">
-            <option value="Manual">Manual</option>
-            <option value="AlwaysOn">Always On</option>
-            <option value="WiFi">WiFi Mode</option>
-          </select>
-          <p id="app-mode-desc" class="field-hint"></p>
-        </label>
-
         <label class="field row">
           <input type="checkbox" id="autostart" />
           <span class="label"><i class="ph ph-power"></i> <span data-i18n="settings-autostart-label">Launch at Login</span></span>
@@ -116,9 +116,12 @@
       <section class="group" id="schedule-section">
         <div class="group-header"><i class="ph ph-calendar-blank"></i> <span data-i18n="schedule-label">Schedule</span></div>
         <label class="field row">
-          <input type="checkbox" id="schedule-enabled" />
+          <input type="checkbox" id="schedule-enabled" aria-describedby="schedule-enabled-hint" />
           <span class="label" data-i18n="schedule-enabled">Enable schedule</span>
         </label>
+        <p id="schedule-enabled-hint" class="field-hint" data-i18n="schedule-enabled-hint">
+          Automatically starts and stops in Manual and Always On. In WiFi mode, only mouse jiggles follow the schedule.
+        </p>
         <div class="field schedule-times">
           <label class="time-field">
             <span class="label-sm" data-i18n="schedule-start">Start time</span>
