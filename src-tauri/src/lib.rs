@@ -2050,6 +2050,14 @@ pub fn run() {
                     sink: Box::new(sink),
                 })?;
                 app.manage(runtime.clone());
+                let shutdown_after_setup_error = |error: String| {
+                    match runtime.shutdown(owner::SHUTDOWN_TIMEOUT) {
+                        Ok(()) => error,
+                        Err(cleanup_error) => {
+                            format!("{error}; owner shutdown failed: {cleanup_error}")
+                        }
+                    }
+                };
 
                 {
                     use tauri_plugin_global_shortcut::{
@@ -2071,21 +2079,46 @@ pub fn run() {
                             Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
                         });
 
-                    app.handle().plugin(
-                        tauri_plugin_global_shortcut::Builder::new()
-                            .with_handler(move |app, _shortcut, event| {
-                                if matches!(event.state(), ShortcutState::Pressed) {
-                                    if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
-                                        if let Err(error) = runtime.post(TrayRoute::Hotkey) {
-                                            log::error!("Hotkey could not reach runtime: {error}");
+                    app.handle()
+                        .plugin(
+                            tauri_plugin_global_shortcut::Builder::new()
+                                .with_handler(move |app, _shortcut, event| {
+                                    if matches!(event.state(), ShortcutState::Pressed) {
+                                        if let Some(runtime) =
+                                            app.try_state::<owner::RuntimeHandle>()
+                                        {
+                                            if let Err(error) = runtime.post(TrayRoute::Hotkey) {
+                                                log::error!(
+                                                    "Hotkey could not reach runtime: {error}"
+                                                );
+                                            }
                                         }
                                     }
-                                }
-                            })
-                            .build(),
-                    )?;
+                                })
+                                .build(),
+                        )
+                        .map_err(|error| {
+                            shutdown_after_setup_error(format!(
+                                "failed to install global shortcut plugin: {error}"
+                            ))
+                        })?;
 
-                    app.global_shortcut().register(shortcut)?;
+                    app.global_shortcut().register(shortcut).map_err(|error| {
+                        shutdown_after_setup_error(format!(
+                            "failed to register global shortcut: {error}"
+                        ))
+                    })?;
+
+                    app.handle()
+                        .plugin(tauri_plugin_autostart::init(
+                            tauri_plugin_autostart::MacosLauncher::AppleScript,
+                            None,
+                        ))
+                        .map_err(|error| {
+                            shutdown_after_setup_error(format!(
+                                "failed to install autostart plugin: {error}"
+                            ))
+                        })?;
                 }
             }
 
@@ -2102,14 +2135,6 @@ pub fn run() {
                         log::warn!("WiFi monitor startup failed: {error}");
                     }
                 }
-            }
-
-            #[cfg(desktop)]
-            {
-                app.handle().plugin(tauri_plugin_autostart::init(
-                    tauri_plugin_autostart::MacosLauncher::AppleScript,
-                    None,
-                ))?;
             }
 
             log::info!("Stay Awake initialised");
