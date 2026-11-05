@@ -13,6 +13,7 @@ tray-settings = 설정…
 tray-quit = 종료
 tray-tooltip-active = Stay Awake — 활성
 tray-tooltip-inactive = Stay Awake — 비활성
+tray-inactive = 비활성
 tray-waiting = 예약 시간 대기 중
 tray-paused = 이번 시간대 일시 중지
 tray-active-override = 실행 중(수동 활성화)

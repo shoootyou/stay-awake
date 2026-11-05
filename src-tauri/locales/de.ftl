@@ -13,6 +13,7 @@ tray-settings = Einstellungen…
 tray-quit = Beenden
 tray-tooltip-active = Stay Awake — Aktiv
 tray-tooltip-inactive = Stay Awake — Inaktiv
+tray-inactive = Inaktiv
 tray-waiting = Wartet auf das Zeitfenster
 tray-paused = Für dieses Zeitfenster pausiert
 tray-active-override = Aktiv (manuell eingeschaltet)

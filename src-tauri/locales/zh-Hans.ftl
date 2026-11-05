@@ -13,6 +13,7 @@ tray-settings = 设置…
 tray-quit = 退出
 tray-tooltip-active = Stay Awake — 已激活
 tray-tooltip-inactive = Stay Awake — 未激活
+tray-inactive = 未激活
 tray-waiting = 等待计划时段
 tray-paused = 此时段已暂停
 tray-active-override = 运行中（手动启用）

@@ -108,7 +108,11 @@ pub(crate) fn build_tray_presentation(input: PresentationInput<'_>) -> TrayPrese
     }
     TrayPresentation {
         status,
-        menu_text: i18n::t(input.bundle, status.menu_key()),
+        menu_text: status_menu_label(
+            status,
+            tray_toggle_presentation(input.snapshot),
+            input.bundle,
+        ),
         tooltip,
         icon: status.icon(),
     }
@@ -271,6 +275,43 @@ mod tray_status_menu_contract_tests {
             .expect("production source precedes this contract");
         assert!(production.contains("menu_text: status_menu_label("));
         assert_eq!(production.matches("status_menu_label(").count(), 2);
+    }
+}
+
+const TRAY_ACTIVE_EMOJI: &str = "🟢";
+const TRAY_INACTIVE_EMOJI: &str = "⚪";
+const TRAY_WAITING_EMOJI: &str = "📅";
+const TRAY_PAUSED_EMOJI: &str = "⏸️";
+
+fn status_menu_label(
+    current: runtime::TrayStatus,
+    after_click: runtime::TrayStatus,
+    bundle: &i18n::Bundle,
+) -> String {
+    let emoji = match current {
+        runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride => TRAY_ACTIVE_EMOJI,
+        runtime::TrayStatus::Inactive => TRAY_INACTIVE_EMOJI,
+        runtime::TrayStatus::Waiting => TRAY_WAITING_EMOJI,
+        runtime::TrayStatus::Paused => TRAY_PAUSED_EMOJI,
+    };
+    let key = |status| match status {
+        runtime::TrayStatus::Inactive => "tray-inactive",
+        _ => status.menu_key(),
+    };
+    format!(
+        "{emoji} {} → {}",
+        i18n::t(bundle, key(current)),
+        i18n::t(bundle, key(after_click))
+    )
+}
+
+fn tray_toggle_presentation(snapshot: &runtime::RuntimeSnapshot) -> runtime::TrayStatus {
+    match snapshot.status {
+        runtime::TrayStatus::Active if snapshot.window.in_window() => runtime::TrayStatus::Paused,
+        runtime::TrayStatus::Active => runtime::TrayStatus::Inactive,
+        runtime::TrayStatus::Inactive | runtime::TrayStatus::Paused => runtime::TrayStatus::Active,
+        runtime::TrayStatus::Waiting => runtime::TrayStatus::ActiveOverride,
+        runtime::TrayStatus::ActiveOverride => runtime::TrayStatus::Waiting,
     }
 }
 
