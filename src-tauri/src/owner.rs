@@ -1090,6 +1090,7 @@ fn report_automatic_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AppMode;
     use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -1471,7 +1472,7 @@ mod tests {
             ),
         ] {
             let config = AppConfig {
-                mode,
+                mode: mode.clone(),
                 schedule_enabled: true,
                 schedule_start_hour: 7,
                 schedule_end_hour: 9,
