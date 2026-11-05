@@ -90,7 +90,8 @@ test("restores the original dimmable tray assets and removes silhouette assets",
   ]) {
     assert.equal(existsSync(join(iconDirectory, name)), false, `${name} must be removed`);
   }
-  const rust = read("src-tauri/src/lib.rs");
+  const rust = read("src-tauri/src/lib.rs")
+    .split("\n#[cfg(test)]\nmod tray_icon_contract_tests")[0];
   assert.doesNotMatch(rust, /icon_as_template|set_icon_with_as_template/);
   assert.match(rust, /self\.tray\.set_icon\(Some\(image\)\)/);
 });
