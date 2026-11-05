@@ -85,7 +85,9 @@ fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String {
         AppMode::AlwaysOn => "tray-app-mode-always-on",
         AppMode::WiFi => "tray-app-mode-wifi",
     };
-    i18n::t(bundle, "tray-app-mode").replace("{ $mode }", &i18n::t(bundle, mode_key))
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("mode", i18n::t(bundle, mode_key));
+    i18n::t_with_args(bundle, "tray-app-mode", Some(&args))
 }
 
 pub(crate) fn build_tray_presentation_with_schedule(
