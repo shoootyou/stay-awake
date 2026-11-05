@@ -2272,7 +2272,8 @@ fn set_macos_regular_app() {
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-        app.activate();
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
 
         // Set the app icon programmatically (works even in dev mode without a bundle).
         let icon_bytes = include_bytes!("../icons/icon.png");
