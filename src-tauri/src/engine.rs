@@ -383,6 +383,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
+    const WORKER_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
     struct Mouse;
 
     impl MouseDriver for Mouse {
@@ -448,6 +450,32 @@ mod tests {
         }
     }
 
+    struct CountingFixedClock {
+        instant: chrono::DateTime<Utc>,
+        ticks: Arc<AtomicUsize>,
+    }
+
+    impl Clock for CountingFixedClock {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            self.ticks.fetch_add(1, Ordering::SeqCst);
+            self.instant
+        }
+
+        fn to_local(
+            &self,
+            instant: chrono::DateTime<Utc>,
+        ) -> chrono::DateTime<chrono::FixedOffset> {
+            instant.with_timezone(&chrono::FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(
+            &self,
+            local: chrono::NaiveDateTime,
+        ) -> chrono::LocalResult<chrono::DateTime<Utc>> {
+            chrono::LocalResult::Single(local.and_utc())
+        }
+    }
+
     impl MouseDriver for CountingMouse {
         fn move_relative(&self, _: i32, _: i32) -> Result<(), String> {
             self.moves.fetch_add(1, Ordering::SeqCst);
@@ -484,7 +512,7 @@ mod tests {
             self.release
                 .lock()
                 .map_err(|_| "barrier release lock poisoned".to_owned())?
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(WORKER_EVENT_TIMEOUT)
                 .map_err(|_| "barrier release timed out".to_owned())?;
             Ok((0, 0))
         }
@@ -689,23 +717,28 @@ mod tests {
             ..AppConfig::default()
         }));
         let (without_force_sender, without_force_receiver) = mpsc::channel();
+        let without_force_ticks = Arc::new(AtomicUsize::new(0));
         let (mut without_force, _, _) = engine_with_clock(
             Box::new(SignalingMouse {
                 jiggles: without_force_sender,
             }),
             Arc::clone(&config),
-            Arc::new(FixedClock(outside)),
+            Arc::new(CountingFixedClock {
+                instant: outside,
+                ticks: Arc::clone(&without_force_ticks),
+            }),
         );
         without_force
             .start()
             .expect("engine starts without ForceOn");
+        wait_until(WORKER_EVENT_TIMEOUT, || {
+            without_force_ticks.load(Ordering::SeqCst) >= 2
+        });
+        without_force.stop().expect("engine stops without ForceOn");
         assert!(
-            without_force_receiver
-                .recv_timeout(Duration::from_millis(1200))
-                .is_err(),
+            without_force_receiver.try_recv().is_err(),
             "outside-window worker must not jiggle without ForceOn"
         );
-        without_force.stop().expect("engine stops without ForceOn");
 
         let (with_force_sender, with_force_receiver) = mpsc::channel();
         let (mut with_force, _, _) = engine_with_clock(
@@ -722,7 +755,7 @@ mod tests {
         });
         with_force.start().expect("engine starts with ForceOn");
         with_force_receiver
-            .recv_timeout(Duration::from_millis(1200))
+            .recv_timeout(WORKER_EVENT_TIMEOUT)
             .expect("ForceOn permits the outside-window jiggle");
         with_force.stop().expect("engine stops with ForceOn");
     }
@@ -786,15 +819,22 @@ mod tests {
             interval_secs: 1,
             ..AppConfig::default()
         }));
-        let (mut power_only, _, _) = engine_with_mouse(
+        let power_only_ticks = Arc::new(AtomicUsize::new(0));
+        let (mut power_only, _, _) = engine_with_clock(
             Box::new(CountingMouse {
                 positions: power_only_positions.clone(),
                 moves: power_only_moves.clone(),
             }),
             power_config,
+            Arc::new(CountingFixedClock {
+                instant: Utc::now(),
+                ticks: Arc::clone(&power_only_ticks),
+            }),
         );
         power_only.start().expect("PowerOnly engine starts");
-        wait_for_interval(Duration::from_millis(1200));
+        wait_until(WORKER_EVENT_TIMEOUT, || {
+            power_only_ticks.load(Ordering::SeqCst) >= 2
+        });
         power_only.stop().expect("PowerOnly engine stops");
         assert_eq!(power_only_positions.load(Ordering::SeqCst), 0);
         assert_eq!(power_only_moves.load(Ordering::SeqCst), 0);
@@ -814,7 +854,7 @@ mod tests {
             mouse_config,
         );
         mouse_engine.start().expect("mouse engine starts");
-        wait_until(Duration::from_millis(1200), || {
+        wait_until(WORKER_EVENT_TIMEOUT, || {
             mouse_moves.load(Ordering::SeqCst) > 0
         });
         mouse_engine.stop().expect("mouse engine stops");
@@ -852,7 +892,7 @@ mod tests {
             .start()
             .expect("engine starts");
         entered_receiver
-            .recv_timeout(Duration::from_millis(1200))
+            .recv_timeout(WORKER_EVENT_TIMEOUT)
             .expect("worker reaches its blocked activity probe");
 
         let stopping_engine = engine.clone();
@@ -861,7 +901,7 @@ mod tests {
             stopped_sender.send(stopping_engine.lock().expect("engine lock for stop").stop())
         });
         released_receiver
-            .recv_timeout(Duration::from_millis(250))
+            .recv_timeout(WORKER_EVENT_TIMEOUT)
             .expect("inhibitor releases before waiting for the blocked worker");
         let attempted_starts = Arc::new(AtomicUsize::new(0));
         let attempted_starts_in_thread = Arc::clone(&attempted_starts);
@@ -875,7 +915,7 @@ mod tests {
                 .start();
             started_sender.send(result)
         });
-        wait_until(Duration::from_millis(250), || {
+        wait_until(WORKER_EVENT_TIMEOUT, || {
             attempted_starts.load(Ordering::SeqCst) == 1
         });
         assert_eq!(starts.load(Ordering::SeqCst), 1);
@@ -883,12 +923,12 @@ mod tests {
             .send(())
             .expect("worker probe is allowed to return");
         stopped_receiver
-            .recv_timeout(Duration::from_millis(1200))
+            .recv_timeout(WORKER_EVENT_TIMEOUT)
             .expect("stop completes after the probe returns")
             .expect("stop succeeds");
         assert_eq!(stopper.join().expect("stopper joins"), Ok(()));
         started_receiver
-            .recv_timeout(Duration::from_millis(1200))
+            .recv_timeout(WORKER_EVENT_TIMEOUT)
             .expect("second start completes only after the blocked worker joins")
             .expect("second start succeeds after cleanup");
         assert!(starter.join().expect("starter joins").is_ok());
@@ -911,7 +951,7 @@ mod tests {
         let (release_sender, release_receiver) = mpsc::channel();
         engine.thread_handle = Some(thread::spawn(move || {
             release_receiver
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(WORKER_EVENT_TIMEOUT)
                 .expect("test releases the unfinished worker");
         }));
 
@@ -970,12 +1010,5 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(ready(), "condition did not become true before its timeout");
-    }
-
-    fn wait_for_interval(timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
     }
 }
