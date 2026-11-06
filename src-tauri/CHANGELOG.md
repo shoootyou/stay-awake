@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0](https://github.com/shoootyou/stay-awake/compare/v1.1.0...v1.2.0) (2026-11-06)
+
+
+### Features
+
+* **icons:** replace the icon font with local phosphor svg icons ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+* **macos:** activate settings and about windows in front ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+* **schedule:** automate engine lifecycle for scheduled windows in manual and always on modes ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+* **settings:** reorder settings and clarify the schedule behavior in wifi mode ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+* **tray:** show five lifecycle states with dimmed icons and click guidance ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+
+
+### Bug Fixes
+
+* **codeql:** safely strip html comments in source checks ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+* **config:** restrict configuration directory and file permissions ([d0e2ef2](https://github.com/shoootyou/stay-awake/commit/d0e2ef2160efe671dfe7957d7d7f2325c9bbb2c8))
+
 ## [1.1.0](https://github.com/shoootyou/stay-awake/compare/v1.0.1...v1.1.0) (2026-11-03)
 
 

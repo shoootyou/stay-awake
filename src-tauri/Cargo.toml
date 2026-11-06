@@ -1,6 +1,6 @@
 [package]
 name = "stay-awake"
-version = "1.1.0"
+version = "1.2.0"
 description = "Stay Awake is a tray utility that prevents your computer from sleeping on macOS and Linux."
 authors = ["Rodolfo Castelo <shoootyou>"]
 edition = "2021"
