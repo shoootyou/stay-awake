@@ -2,12 +2,10 @@
  * @spec-handoff
  * @interface frontendContracts(): void
  * @behavior
- *   - Pins the frontend's hooks, translations, IPC commands, pages, resources, fonts, and icons.
+ *   - Pins the frontend's hooks, translations, IPC commands, pages, and resources.
  *   - Keeps the local CSP suitable for shipped scripts, styles, fonts, and images.
- *   - Allows Phosphor to be trimmed to the base rule, font face, and used icon rules.
  * @edge-cases
  *   - Every shipped locale has the English key set.
- *   - Icon names must be literal and cannot be assembled dynamically.
  * @see ../src-tauri/src/lib.rs
  */
 
@@ -16,6 +14,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { stripHtmlComments } from "./helpers/strip-html-comments.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -31,26 +31,26 @@ const js = Object.fromEntries(jsPaths.map((path) => [path, read(path)]));
 const css = Object.fromEntries(cssPaths.map((path) => [path, read(path)]));
 const settingsHtml = html["src/settings.html"];
 const settingsJs = js["src/settings.js"];
-const phosphorCss = css["src/fonts/phosphor.css"];
 
 const expectedSelectorIds = [
   "accessibility-banner", "app-mode", "app-mode-desc", "autostart", "grant-btn", "hotkey",
   "hotkey-recorder", "interval", "interval-value", "jiggle-mode", "language", "mode-info-btn",
   "mode-info-panel", "profile-delete-btn", "profile-save-btn", "profile-select", "recheck-btn",
-  "schedule-enabled", "schedule-end", "schedule-start", "wifi-current-ssid", "wifi-details",
+  "schedule-enabled", "schedule-end", "schedule-start", "schedule-wifi-alert", "wifi-current-ssid", "wifi-details",
   "wifi-grant-location", "wifi-location-banner", "wifi-network-list", "wifi-nm-banner",
   "wifi-register-btn", "wifi-section",
 ];
 const expectedTranslationKeys = [
   "mode-desc-circle", "mode-desc-power", "mode-desc-subtle", "mode-desc-zen", "profile-default",
-  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled",
+  "profile-delete", "profile-label", "profile-save-as", "schedule-days", "schedule-enabled", "schedule-enabled-hint",
   "schedule-end", "schedule-fri", "schedule-label", "schedule-mon", "schedule-sat", "schedule-start",
-  "schedule-sun", "schedule-thu", "schedule-tue", "schedule-wed", "settings-accessibility-banner",
+  "schedule-sun", "schedule-thu", "schedule-tue", "schedule-wed", "schedule-wifi-alert", "settings-accessibility-banner",
   "settings-app-mode-label", "settings-autostart-label", "settings-grant-btn", "settings-hotkey-hint",
   "settings-hotkey-label", "settings-hotkey-recording", "settings-interval-label", "settings-language-label",
-  "settings-mode-label", "settings-title", "settings-wifi-current", "settings-wifi-disconnected",
+  "settings-mode-info-label", "settings-mode-label", "settings-title", "settings-wifi-current", "settings-wifi-disconnected",
   "settings-wifi-hint", "settings-wifi-nm-required", "settings-wifi-none", "settings-wifi-register",
-  "settings-wifi-registered", "settings-wifi-title", "settings-xdotool-banner", "settings-xdotool-install-btn",
+  "settings-wifi-registered", "settings-wifi-remove-label", "settings-wifi-title", "settings-xdotool-banner",
+  "settings-xdotool-install-btn",
   "tray-mode-circle", "tray-mode-power", "tray-mode-subtle", "tray-mode-zen",
 ];
 const expectedCommands = [
@@ -59,11 +59,7 @@ const expectedCommands = [
   "load_profile", "request_accessibility", "request_location_permission", "save_config", "save_profile",
   "set_language", "update_global_hotkey",
 ];
-const expectedResources = ["about.css", "app-icon.png", "fonts/phosphor.css", "settings.css"];
-const expectedIcons = [
-  "ph-app-window", "ph-calendar-blank", "ph-cursor-click", "ph-gear", "ph-info", "ph-keyboard",
-  "ph-power", "ph-timer", "ph-translate", "ph-user-circle", "ph-wifi-high", "ph-x",
-];
+const expectedResources = ["about.css", "app-icon.png", "settings.css"];
 const expectedCsp = "default-src 'self'; style-src 'self'; font-src 'self'; script-src 'self'; "
   + "img-src 'self' asset: https://asset.localhost; connect-src ipc: http://ipc.localhost "
   + "https://github.com https://api.github.com";
@@ -76,11 +72,23 @@ const ids = (source) => new Set(attributeValues(source, "id"));
 const fluentKeys = (source) => new Set([...source.matchAll(/^([\w-]+)\s*=/gm)].map((match) => match[1]));
 const commandNames = (source) => new Set([...source.matchAll(/invoke\(\s*["']([\w-]+)["']/g)]
   .map((match) => match[1]));
-const registeredCommands = (source) => {
-  const handler = stripComments(source, "rust").match(/generate_handler!\s*\[([\s\S]*?)\]/)?.[1] ?? "";
-  return new Set([...handler.matchAll(/^\s*([a-z][a-z0-9_]*)\s*,/gm)].map((match) => match[1]));
+const handlerEntries = (source) => {
+  const uncommented = stripComments(source, "rust");
+  const match = uncommented.match(/generate_handler!\s*\[/);
+  if (!match || match.index === undefined) return "";
+  const open = match.index + match[0].length - 1;
+  let depth = 0;
+  for (let index = open; index < uncommented.length; index += 1) {
+    if (uncommented[index] === "[") depth += 1;
+    if (uncommented[index] === "]" && --depth === 0) return uncommented.slice(open + 1, index);
+  }
+  return "";
 };
-const iconClasses = (source) => new Set([...source.matchAll(/\b(ph-[\w-]+)\b/g)].map((match) => match[1]));
+const registeredCommands = (source) => {
+  const handler = handlerEntries(source);
+  const entries = handler.replace(/#\[[^\]]*\]\s*/g, "");
+  return new Set([...entries.matchAll(/^\s*([a-z][a-z0-9_]*)\s*,/gm)].map((match) => match[1]));
+};
 const dynamicIds = (source) => new Set([...source.matchAll(/(?:\.id\s*=|setAttribute\(\s*["']id["']\s*,)\s*["']([\w-]+)/g)]
   .map((match) => match[1]));
 const markupIds = (source) => new Set([...source.matchAll(/id=["']([\w-]+)/g)].map((match) => match[1]));
@@ -203,31 +211,8 @@ const stripComments = (source, language = "js") => {
   return output;
 };
 
-const stripHtmlComments = (source) => source.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "));
 const stripCssComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "));
 const stripFtlComments = (source) => source.replace(/^\s*#.*$/gm, (comment) => " ".repeat(comment.length));
-const incompleteIconFragments = (source, allowedIcons) => {
-  const fragments = new Set([...source.matchAll(/\bph-[a-z0-9-]*/g)]
-    .map((match) => match[0])
-    .filter((icon) => !allowedIcons.has(icon)));
-  if (/["']ph["']\s*\+\s*["']-["']/.test(source)) fragments.add("ph + -");
-  if (/\[\s*["']ph["']\s*,[\s\S]*?\]\s*\.join\(\s*["']-["']\s*\)/.test(source)) {
-    fragments.add("ph.join(-)");
-  }
-  return fragments;
-};
-
-const iconRule = (source, icon) => source.match(
-  new RegExp(`\\.ph\\.${icon}:before\\s*\\{[^}]*\\}`, "m")
-)?.[0];
-const validateIconCss = (source, usedIcons) => {
-  assert.match(source, /\.ph\s*\{[^}]*font-family:\s*["']Phosphor["']/s,
-    "phosphor.css must retain the base .ph rule");
-  assert.match(source, /@font-face\s*\{[^}]*font-family:\s*["']Phosphor["'][^}]*\}/s,
-    "phosphor.css must retain the Phosphor font face");
-  for (const icon of usedIcons) assert.ok(iconRule(source, icon), `used icon ${icon} is absent from phosphor.css`);
-};
-
 const fontFaces = (source) => [...source.matchAll(/@font-face\s*\{([\s\S]*?)\}/g)].flatMap((match) => {
   const family = match[1].match(/font-family:\s*["']([^"']+)["']/)?.[1];
   const url = match[1].match(/src:\s*url\(["']?([^"')]+)["']?\)/)?.[1];
@@ -261,8 +246,13 @@ test("keeps JavaScript DOM hooks and CSS-toggled classes backed by settings mark
 
 test("keeps frontend translation keys defined in English and every shipped locale", () => {
   const keys = new Set();
-  for (const source of Object.values(html)) for (const key of attributeValues(stripHtmlComments(source), "data-i18n")) keys.add(key);
-  for (const source of Object.values(js)) for (const key of stripComments(source).matchAll(/(?:data-i18n["']?\s*,?\s*["']|key:\s*["'])([\w-]+)/g)) keys.add(key[1]);
+  for (const source of Object.values(html)) {
+    for (const key of attributeValues(stripHtmlComments(source), "data-i18n")) keys.add(key);
+    for (const key of attributeValues(stripHtmlComments(source), "data-i18n-aria-label")) keys.add(key);
+  }
+  for (const source of Object.values(js)) for (const key of stripComments(source).matchAll(
+    /(?:data-i18n(?:-aria-label)?["']?\s*,?\s*["']|key:\s*["'])([\w-]+)/g
+  )) keys.add(key[1]);
   assert.deepEqual(sorted(keys), expectedTranslationKeys);
 
   const localeDir = join(root, "src-tauri/locales");
@@ -284,6 +274,14 @@ test("does not treat commented Rust handler entries as registrations", () => {
   const source = "generate_handler![\n  // update_global_hotkey,\n  /// update_global_hotkey\n  //! update_global_hotkey\n  /* update_global_hotkey */\n]";
 
   assert.equal(registeredCommands(source).has("update_global_hotkey"), false);
+});
+
+test("ignores handler entry attributes without registering absent commands", () => {
+  const source = "generate_handler![\n  #[cfg(desktop)]\n  get_config,\n]";
+  const commands = registeredCommands(source);
+
+  assert.equal(commands.has("get_config"), true);
+  assert.equal(commands.has("save_config"), false);
 });
 
 test("ignores nested Rust block comments when extracting handler registrations", () => {
@@ -326,7 +324,6 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
   const faces = Object.entries(css).flatMap(([path, source]) => fontFaces(stripCssComments(source)).map((face) => ({ ...face, path })));
   const consumers = new Set(Object.values(css).flatMap((source) => [...usedFontFamilies(stripCssComments(source))]));
   assert.ok(consumers.has("Geist"), "Geist must remain used by shipped CSS");
-  assert.ok(consumers.has("Phosphor"), "Phosphor must remain used by shipped CSS");
   for (const face of faces.filter((face) => face.family !== "Inter")) {
     const target = join(root, dirname(face.path), face.url);
     assert.ok(existsSync(target), `${face.path} references missing ${face.url}`);
@@ -338,27 +335,6 @@ test("keeps bundled pages, local resources, CSP, and used icons available", () =
     assert.ok(!existsSync(join(root, dirname(inter.path), inter.url)), "Inter's unused file must stay absent");
   }
 
-  const usedIcons = new Set([...Object.values(html), ...Object.values(js)].flatMap((source) => [...iconClasses(source)]));
-  assert.deepEqual(sorted(usedIcons), expectedIcons);
-  validateIconCss(phosphorCss, usedIcons);
-  const trimmedCss = [
-    phosphorCss.match(/@font-face\s*\{[^}]*\}/s)?.[0],
-    phosphorCss.match(/\.ph\s*\{[^}]*\}/s)?.[0],
-    ...expectedIcons.map((icon) => iconRule(phosphorCss, icon)),
-  ].join("\n");
-  validateIconCss(trimmedCss, usedIcons);
-  assert.throws(() => validateIconCss(trimmedCss.replace(iconRule(trimmedCss, "ph-x"), ""), usedIcons),
-    /ph-x/, "the trimming validator must reject a missing used icon");
-  assert.throws(() => validateIconCss(trimmedCss.replace(/\.ph\s*\{[^}]*\}/s, ""), usedIcons),
-    /base .ph/, "the trimming validator must reject a missing base rule");
-  assert.throws(() => validateIconCss(trimmedCss.replace(/@font-face\s*\{[^}]*\}/s, ""), usedIcons),
-    /font face/, "the trimming validator must reject a missing font face");
-
-  for (const [path, source] of Object.entries(js)) {
-    const uncommented = stripComments(source);
-    assert.deepEqual([...incompleteIconFragments(uncommented, new Set(expectedIcons))], [],
-      `${path} dynamically assembles an icon class`);
-  }
 });
 
 test("strips JavaScript comments without losing later frontend contracts", () => {
@@ -388,8 +364,10 @@ test("strips JavaScript comments without losing later frontend contracts", () =>
   assert.equal(strippedCodeUnits, fullLineCommentTextCodeUnits,
     "strips exactly the non-whitespace full-line comment text after indentation");
   const uncommentedSettingsJs = stripComments(settingsJs);
-  for (const line of [489, 586]) assert.equal(uncommentedSettingsJs.split("\n")[line - 1].trim(), "", `settings.js line ${line} is stripped`);
-  for (const anchor of ["substring(0, 64)", "ph-x", "invoke("]) {
+  assert.match(settingsJs, /^\s*\/\//m, "settings.js has a full-line comment to strip");
+  assert.doesNotMatch(uncommentedSettingsJs, /^\s*\/\//m,
+    "settings.js retains no full-line comments");
+  for (const anchor of ["substring(0, 64)", "removeBtn", "invoke("]) {
     assert.ok(uncommentedSettingsJs.includes(anchor), `settings.js loses ${anchor} after comment stripping`);
   }
   const cases = [
@@ -406,25 +384,5 @@ test("strips JavaScript comments without losing later frontend contracts", () =>
     const stripped = stripComments(source);
     assert.ok(stripped.includes(retained), source);
     if (removed) assert.ok(!stripped.includes(removed), source);
-  }
-});
-
-test("rejects dynamic icon assembly while accepting the shipped literal icons", () => {
-  const allowedIcons = new Set(expectedIcons);
-  const mutants = [
-    '`<i class="ph ph-${name}"></i>`',
-    "'<i class=\"ph ph-' + name + '\"></i>'",
-    '"ph"+"-"+name',
-    '["ph", name].join("-")',
-    '`ph-${name}`',
-    '"ph-" + name',
-  ];
-  for (const mutant of mutants) assert.ok(incompleteIconFragments(mutant, allowedIcons).size > 0, mutant);
-  for (const literal of ["'ph-x'", '<i class="ph ph-gear">']) {
-    assert.equal(incompleteIconFragments(literal, allowedIcons).size, 0, literal);
-  }
-  // HTML classes are static and pinned by expectedIcons; only JavaScript can assemble one dynamically.
-  for (const [path, source] of Object.entries(js)) {
-    assert.deepEqual([...incompleteIconFragments(stripComments(source), allowedIcons)], [], path);
   }
 });

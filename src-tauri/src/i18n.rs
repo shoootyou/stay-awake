@@ -40,6 +40,7 @@ pub fn create_bundle(locale: &str) -> Bundle {
         .unwrap_or_else(|_| "en".parse().expect("en is valid"));
 
     let mut bundle = FluentBundle::new_concurrent(vec![langid]);
+    bundle.set_use_isolating(false);
 
     // Load the requested locale first (if it exists and is not English).
     if locale != "en" {
@@ -72,20 +73,210 @@ pub fn t(bundle: &Bundle, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
+pub(crate) fn t_with_args(
+    bundle: &Bundle,
+    id: &str,
+    args: Option<&fluent_bundle::FluentArgs<'_>>,
+) -> String {
+    let Some(pattern) = bundle.get_message(id).and_then(|message| message.value()) else {
+        return id.to_owned();
+    };
+    let mut errors = Vec::new();
+    let formatted = bundle.format_pattern(pattern, args, &mut errors);
+    if errors.is_empty() {
+        formatted.into_owned()
+    } else {
+        id.to_owned()
+    }
+}
+
+pub(crate) struct NextWindowInput<'a> {
+    pub(crate) when: chrono::DateTime<chrono::FixedOffset>,
+    pub(crate) locale: &'a str,
+}
+
+pub(crate) fn format_next_window(input: NextWindowInput<'_>) -> String {
+    let date = match input.locale {
+        "es" | "fr" | "pt-BR" => input.when.format("%d/%m/%Y"),
+        "de" => input.when.format("%d.%m.%Y"),
+        "ja" | "zh-Hans" | "ko" => input.when.format("%Y/%m/%d"),
+        _ => input.when.format("%m/%d/%Y"),
+    };
+    format!("{date} {}", input.when.format("%H:%M %:z"))
+}
+
 #[cfg(test)]
 mod tests {
     /*
      * @spec-handoff
-     * @interface create_bundle(locale: &str) -> Bundle; t(bundle, id) -> String
+     * @interface t_with_args(Bundle, id, FluentArgs); format_next_window(NextWindowInput) -> String
      * @behavior
-     *   - Every English message key resolves for every shipped locale.
-     *   - An unsupported locale and missing message return the current English/key fallbacks.
+     *   - Eight valid locale bundles define every schedule status and accessibility message.
+     *   - Fluent arguments render into tray and network-removal templates without placeholders.
+     *   - Next-window timestamps use the documented locale-specific numeric format.
      * @edge-cases
-     *   - Fluent text is returned without format arguments.
+     *   - No upcoming window uses its localized message.
      */
     use super::*;
+    use chrono::TimeZone;
 
     const LOCALES: [&str; 8] = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"];
+    const NEW_KEYS: [&str; 17] = [
+        "tray-inactive",
+        "tray-waiting",
+        "tray-paused",
+        "tray-active-override",
+        "tray-tooltip-waiting",
+        "tray-tooltip-paused",
+        "tray-tooltip-override",
+        "tray-next-window",
+        "tray-no-next-window",
+        "schedule-enabled-hint",
+        "schedule-wifi-alert",
+        "tray-app-mode",
+        "tray-app-mode-manual",
+        "tray-app-mode-always-on",
+        "tray-app-mode-wifi",
+        "settings-mode-info-label",
+        "settings-wifi-remove-label",
+    ];
+
+    #[test]
+    fn eight_parseable_locale_files_define_every_schedule_status_key() {
+        let locale_sources = [
+            ("en", LOCALE_EN),
+            ("es", LOCALE_ES),
+            ("fr", LOCALE_FR),
+            ("de", LOCALE_DE),
+            ("pt-BR", LOCALE_PT_BR),
+            ("ja", LOCALE_JA),
+            ("zh-Hans", LOCALE_ZH_HANS),
+            ("ko", LOCALE_KO),
+        ];
+        assert_eq!(locale_sources.len(), 8);
+        for (locale, source) in locale_sources {
+            let resource = FluentResource::try_new(source.to_owned())
+                .unwrap_or_else(|(_, errors)| panic!("{locale} must parse: {errors:?}"));
+            let language = locale.parse().expect("locale fixture is valid");
+            let mut bundle = FluentBundle::new_concurrent(vec![language]);
+            assert!(
+                bundle.add_resource(resource).is_ok(),
+                "{locale} must load into a Fluent bundle"
+            );
+            for key in NEW_KEYS {
+                assert!(
+                    source
+                        .lines()
+                        .any(|line| line.starts_with(&format!("{key} ="))),
+                    "{locale} must define {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn english_schedule_status_messages_match_the_contract() {
+        let bundle = create_bundle("en");
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("when", "Mon 09 Nov 2026, 09:00");
+        args.set("network", "Lab");
+        args.set("mode", "Manual");
+        for (key, expected) in [
+            ("tray-waiting", "Waiting for schedule"),
+            ("tray-paused", "Paused for this window"),
+            ("tray-active-override", "Active (manual override)"),
+            ("tray-tooltip-waiting", "Stay Awake: waiting for schedule"),
+            ("tray-tooltip-paused", "Stay Awake: paused for this window"),
+            (
+                "tray-tooltip-override",
+                "Stay Awake: active by manual override",
+            ),
+            ("tray-next-window", "Next window: Mon 09 Nov 2026, 09:00"),
+            ("tray-no-next-window", "No upcoming window"),
+            (
+                "schedule-enabled-hint",
+                "Automatically starts and stops the engine with the schedule.",
+            ),
+            (
+                "schedule-wifi-alert",
+                "In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.",
+            ),
+            ("tray-app-mode", "Mode: Manual"),
+            ("tray-app-mode-manual", "Manual"),
+            ("tray-app-mode-always-on", "Always On"),
+            ("tray-app-mode-wifi", "WiFi"),
+            ("settings-mode-info-label", "About jiggle modes"),
+            ("settings-wifi-remove-label", "Remove network Lab"),
+        ] {
+            assert_eq!(t_with_args(&bundle, key, Some(&args)), expected, "{key}");
+        }
+        let mut spanish = fluent_bundle::FluentArgs::new();
+        spanish.set("mode", "Manual");
+        assert_eq!(
+            t_with_args(&create_bundle("es"), "tray-app-mode", Some(&spanish)),
+            "Modo: Manual"
+        );
+    }
+
+    #[test]
+    fn fluent_arguments_render_without_unresolved_placeholders_in_every_locale() {
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("when", "Tidepool-42");
+        args.set("network", "Lantern-7");
+        for locale in LOCALES {
+            for (key, value) in [
+                ("tray-next-window", "Tidepool-42"),
+                ("settings-wifi-remove-label", "Lantern-7"),
+            ] {
+                let rendered = t_with_args(&create_bundle(locale), key, Some(&args));
+                assert!(rendered.contains(value), "{locale} must render {key}");
+                assert!(!rendered.contains("{ $"), "{locale} must resolve {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn formats_next_window_and_no_upcoming_window_in_english() {
+        let when = chrono::FixedOffset::east_opt(0)
+            .expect("UTC offset exists")
+            .with_ymd_and_hms(2026, 11, 9, 9, 0, 0)
+            .single()
+            .expect("fixed timestamp exists");
+        assert_eq!(
+            format_next_window(NextWindowInput { when, locale: "en" }),
+            "11/09/2026 09:00 +00:00"
+        );
+        assert_eq!(
+            t_with_args(&create_bundle("en"), "tray-no-next-window", None),
+            "No upcoming window"
+        );
+    }
+
+    #[test]
+    fn formats_next_window_with_each_locale_numeric_convention() {
+        let when = chrono::FixedOffset::east_opt(0)
+            .expect("UTC offset exists")
+            .with_ymd_and_hms(2026, 11, 9, 9, 0, 0)
+            .single()
+            .expect("fixed timestamp exists");
+
+        for (locale, expected) in [
+            ("en", "11/09/2026 09:00 +00:00"),
+            ("es", "09/11/2026 09:00 +00:00"),
+            ("fr", "09/11/2026 09:00 +00:00"),
+            ("de", "09.11.2026 09:00 +00:00"),
+            ("pt-BR", "09/11/2026 09:00 +00:00"),
+            ("ja", "2026/11/09 09:00 +00:00"),
+            ("zh-Hans", "2026/11/09 09:00 +00:00"),
+            ("ko", "2026/11/09 09:00 +00:00"),
+        ] {
+            assert_eq!(
+                format_next_window(NextWindowInput { when, locale }),
+                expected,
+                "{locale} uses its contract numeric date order and separator"
+            );
+        }
+    }
 
     fn english_message_ids() -> Vec<String> {
         LOCALE_EN

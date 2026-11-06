@@ -13,6 +13,19 @@ tray-settings = Ajustes…
 tray-quit = Salir
 tray-tooltip-active = Stay Awake — Activo
 tray-tooltip-inactive = Stay Awake — Inactivo
+tray-inactive = Inactivo
+tray-waiting = En espera del horario
+tray-paused = En pausa durante este periodo
+tray-active-override = Activo (activación manual)
+tray-tooltip-waiting = Stay Awake: en espera del horario
+tray-tooltip-paused = Stay Awake: en pausa durante este periodo
+tray-tooltip-override = Stay Awake: activo por activación manual
+tray-next-window = Próximo periodo: { $when }
+tray-no-next-window = No hay próximos periodos
+tray-app-mode = Modo: { $mode }
+tray-app-mode-manual = Manual
+tray-app-mode-always-on = Siempre activo
+tray-app-mode-wifi = WiFi
 
 # Ventana de ajustes
 settings-title = Ajustes de Stay Awake
@@ -28,10 +41,13 @@ settings-save = Guardar
 settings-cancel = Cancelar
 settings-accessibility-banner = Los modos de raton requieren permiso de accesibilidad.
 settings-grant-btn = Conceder acceso
+settings-mode-info-label = Acerca de los modos de movimiento
 
 # Programacion
 schedule-label = Programacion
 schedule-enabled = Activar programacion
+schedule-enabled-hint = Inicia y detiene automáticamente el motor según el horario.
+schedule-wifi-alert = En el modo WiFi, el horario solo filtra los movimientos del mouse; no inicia ni detiene el motor.
 schedule-start = Hora de inicio
 schedule-end = Hora de fin
 schedule-days = Dias activos
@@ -66,6 +82,7 @@ settings-wifi-none = Sin redes registradas
 settings-wifi-disconnected = No conectado
 settings-wifi-hint = Cuando está habilitado, Stay Awake se activa solo en redes registradas.
 settings-wifi-nm-required = NetworkManager es necesario para el modo WiFi en Linux.
+settings-wifi-remove-label = Eliminar red { $network }
 
 # xdotool en Linux
 tray-xdotool-missing = xdotool no encontrado — instala xdotool para el modo de movimiento del mouse

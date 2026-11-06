@@ -11,6 +11,8 @@ This guide is written around macOS. See [Linux](#linux) for the Linux-specific n
 - The tray icon requires the `libayatana-appindicator3-1` library. The `.deb` installs it;
   source builds need `libayatana-appindicator3-dev`.
 - WiFi app mode uses NetworkManager.
+- Read the current state from the tray menu text. Tooltips are not guaranteed by every
+  Linux tray implementation.
 
 ---
 
@@ -33,6 +35,15 @@ prompt — open **System Settings → Privacy & Security** and click **Open Anyw
 Click the menu bar icon to open the tray menu. Left-click and right-click both
 open the same menu.
 
+The original app icon is full strength while the engine is active and dimmed
+when it is not active. The tray menu shows two status lines: an emoji-prefixed
+current state, then a greyed line with the state that the next click will produce.
+A separator follows the status lines, then a greyed, non-clickable App Mode line:
+Manual, Always On, or WiFi. Another separator follows the App Mode line before the
+Mode submenu.
+On Linux, use that menu text because tooltips and native tray titles are not
+guaranteed by every implementation.
+
 ### Permissions overview
 
 | Feature | Permission needed |
@@ -46,12 +57,22 @@ open the same menu.
 
 ## Tray Menu
 
-### Toggle Active
+### Status item
 
-Turns the anti-inactivity engine on or off. A checkmark means the engine is running.
+The enabled status item shows the current engine and schedule state. A second,
+greyed line shows the state a click will produce. A separator follows the status lines.
+A third, greyed line shows the current App Mode: Manual, Always On, or WiFi. Another
+separator follows the App Mode line before the Mode submenu. Click the enabled item to
+toggle the engine.
 
-- **Checked** — the engine is active; your computer will not sleep or dim.
-- **Unchecked** — normal system idle behavior resumes.
+- **Active**: the engine is running. Click to stop it.
+- **Inactive**: the engine is stopped. Click to start it.
+- **Waiting for schedule**: a checked schedule is outside its window. Click to start it
+  until the next window opens.
+- **Paused for this window**: you stopped the engine during the current window. Click
+  to start it again.
+- **Active (manual override)**: you started the engine outside a scheduled window.
+  Click to stop it.
 
 You can also toggle the engine with the [global hotkey](#global-hotkey) (default: `⌘+Shift+J`).
 
@@ -160,30 +181,43 @@ You can register multiple networks. Remove one with the **×** button next to it
 ## Settings Window
 
 Open from the tray menu via **Settings**. Changes save automatically as you make them.
+Settings use icons instead of emoji prefixes.
 
-### General
+### Settings order
+
+Settings are ordered as follows: Launch at Login; the App Mode card (App Mode,
+Jiggle Mode, and Interval); WiFi networks; Schedule; Language and Hotkey; then Profiles.
+
+### Launch at Login and App Mode
 
 | Setting | Description |
 |---------|-------------|
+| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. |
+| **App Mode** | When the engine activates: Manual, Always On, or WiFi. |
 | **Jiggle Mode** | How the engine keeps the computer awake (see [Modes](#modes)). |
 | **Interval** | How often the engine acts (10–300 s). Default: 30 s. |
-| **App Mode** | When the engine activates: Manual, Always On, or WiFi. |
-| **Launch at Login** | On macOS, start Stay Awake automatically at login as a Login Item. |
-| **Language** | UI display language (8 languages available). |
-| **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
-
-### Scheduling
-
-Enable a time window and active days for automatic keep-awake. See [Scheduling](#scheduling).
-
-### Profiles
-
-Save and load named settings snapshots. See [Profiles](#profiles).
 
 ### WiFi networks
 
 Visible only when **App Mode** is set to **WiFi**. Lists registered SSIDs and
 shows the currently connected network. See [WiFi App Mode](#wifi-app-mode) above.
+
+### Schedule
+
+Enable a time window and active days for automatic keep-awake. See [Scheduling](#scheduling).
+The card says the schedule starts and stops the engine. In WiFi mode, it also shows an alert
+that the schedule only filters mouse jiggles and does not start or stop the engine.
+
+### Language and Hotkey
+
+| Setting | Description |
+|---------|-------------|
+| **Language** | UI display language (8 languages available). |
+| **Hotkey** | Displays the current global shortcut. Click **Record** to change it. |
+
+### Profiles
+
+Save and load named settings snapshots. See [Profiles](#profiles).
 
 ---
 
@@ -217,10 +251,14 @@ are not saved per profile.
 
 ## Scheduling
 
-Scheduling restricts when the engine performs keep-awake actions, regardless of
-App Mode. When a schedule is active, jiggle ticks that fall outside the configured
-window are silently skipped — the engine stays running but does nothing until the
-window opens again.
+When **Enable schedule** is checked, Manual and Always On start the engine when a
+scheduled window opens and stop it when the window closes. Stopping releases the
+sleep inhibitor. Outside a window, the engine waits for the next one.
+
+WiFi keeps its registered-network policy. With a checked schedule, WiFi can keep the
+engine and sleep inhibitor active on a registered network, but it only sends mouse
+jiggles during a scheduled window. Power Only follows the Manual and Always On
+lifecycle without sending mouse input.
 
 ### Configuring a schedule
 
@@ -231,7 +269,34 @@ window opens again.
 ### Overnight spans
 
 If the end time is earlier than the start time (e.g. `22:00`–`06:00`), the schedule
-wraps midnight correctly.
+wraps midnight. An overnight window belongs to the day on which it starts. For
+example, a Monday `22:00`–`06:00` window includes early Tuesday, even when Tuesday
+is not selected.
+
+Windows include their start time and exclude their end time. No days selected, or
+matching start and end times, means there are no automatic windows.
+
+### Manual changes during a schedule
+
+If you stop the engine during a scheduled window, Stay Awake pauses that window. It
+starts normally at the next window. If you start the engine outside a scheduled
+window, it runs until the next window starts. These manual overrides are not saved
+and are cleared when you quit or change the schedule policy.
+
+### Sleep, time changes, and daylight saving time
+
+Stay Awake evaluates the schedule against current local time. After the computer
+resumes, or local time or its timezone changes, it applies the current window rather
+than replaying missed transitions. It cannot wake the computer for a scheduled
+window.
+
+### Upgrade note
+
+When **Enable schedule** is checked in Manual or Always On, Stay Awake now starts
+automatically when a scheduled window opens and stops when it closes, releasing its
+sleep inhibitor. Previously, the checkbox only filtered mouse jiggles. WiFi mode
+keeps that previous filtering behavior. Existing Manual users with the checkbox
+already enabled will get automatic starts and stops after upgrading.
 
 ---
 
@@ -291,6 +356,8 @@ shows **Grant Accessibility**, follow the steps in the tray or Settings banner.
 - Verify the correct days and the start/end times are set.
 - Overnight schedules (e.g. `22:00`–`06:00`) are supported — the end time must be
   intentionally earlier than the start time.
+- In Manual or Always On, the engine stops outside a checked schedule. The tray shows
+  **Waiting for schedule** until the next window.
 
 ### WiFi mode not activating
 
@@ -328,5 +395,5 @@ turning off during normal inactivity.
 
 **Can I use a schedule and WiFi mode together?**
 Yes. When App Mode is WiFi, the engine activates on registered networks and then
-respects the schedule within that active window — jiggle ticks outside the scheduled
-hours are skipped even while on a registered network.
+uses the schedule only to filter mouse jiggles. The engine and its sleep inhibitor
+remain controlled by the registered-network policy.

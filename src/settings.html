@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stay Awake — Settings</title>
-    <link rel="stylesheet" href="fonts/phosphor.css" />
     <link rel="stylesheet" href="settings.css" />
     <script type="module" src="/settings.js" defer></script>
   </head>
@@ -12,14 +11,31 @@
     <div class="settings">
       <header>
         <img src="app-icon.png" alt="" class="header-icon" width="48" height="48" />
-        <h1><i class="ph ph-gear"></i> <span data-i18n="settings-title">Settings</span></h1>
+        <h1><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M128,80a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Zm88-29.84q.06-2.16,0-4.32l14.92-18.64a8,8,0,0,0,1.48-7.06,107.21,107.21,0,0,0-10.88-26.25,8,8,0,0,0-6-3.93l-23.72-2.64q-1.48-1.56-3-3L186,40.54a8,8,0,0,0-3.94-6,107.71,107.71,0,0,0-26.25-10.87,8,8,0,0,0-7.06,1.49L130.16,40Q128,40,125.84,40L107.2,25.11a8,8,0,0,0-7.06-1.48A107.6,107.6,0,0,0,73.89,34.51a8,8,0,0,0-3.93,6L67.32,64.27q-1.56,1.49-3,3L40.54,70a8,8,0,0,0-6,3.94,107.71,107.71,0,0,0-10.87,26.25,8,8,0,0,0,1.49,7.06L40,125.84Q40,128,40,130.16L25.11,148.8a8,8,0,0,0-1.48,7.06,107.21,107.21,0,0,0,10.88,26.25,8,8,0,0,0,6,3.93l23.72,2.64q1.49,1.56,3,3L70,215.46a8,8,0,0,0,3.94,6,107.71,107.71,0,0,0,26.25,10.87,8,8,0,0,0,7.06-1.49L125.84,216q2.16.06,4.32,0l18.64,14.92a8,8,0,0,0,7.06,1.48,107.21,107.21,0,0,0,26.25-10.88,8,8,0,0,0,3.93-6l2.64-23.72q1.56-1.48,3-3L215.46,186a8,8,0,0,0,6-3.94,107.71,107.71,0,0,0,10.87-26.25,8,8,0,0,0-1.49-7.06Zm-16.1-6.5a73.93,73.93,0,0,1,0,8.68,8,8,0,0,0,1.74,5.48l14.19,17.73a91.57,91.57,0,0,1-6.23,15L187,173.11a8,8,0,0,0-5.1,2.64,74.11,74.11,0,0,1-6.14,6.14,8,8,0,0,0-2.64,5.1l-2.51,22.58a91.32,91.32,0,0,1-15,6.23l-17.74-14.19a8,8,0,0,0-5-1.75h-.48a73.93,73.93,0,0,1-8.68,0,8,8,0,0,0-5.48,1.74L100.45,215.8a91.57,91.57,0,0,1-15-6.23L82.89,187a8,8,0,0,0-2.64-5.1,74.11,74.11,0,0,1-6.14-6.14,8,8,0,0,0-5.1-2.64L46.43,170.6a91.32,91.32,0,0,1-6.23-15l14.19-17.74a8,8,0,0,0,1.74-5.48,73.93,73.93,0,0,1,0-8.68,8,8,0,0,0-1.74-5.48L40.2,100.45a91.57,91.57,0,0,1,6.23-15L69,82.89a8,8,0,0,0,5.1-2.64,74.11,74.11,0,0,1,6.14-6.14A8,8,0,0,0,82.89,69L85.4,46.43a91.32,91.32,0,0,1,15-6.23l17.74,14.19a8,8,0,0,0,5.48,1.74,73.93,73.93,0,0,1,8.68,0,8,8,0,0,0,5.48-1.74L155.55,40.2a91.57,91.57,0,0,1,15,6.23L173.11,69a8,8,0,0,0,2.64,5.1,74.11,74.11,0,0,1,6.14,6.14,8,8,0,0,0,5.1,2.64l22.58,2.51a91.32,91.32,0,0,1,6.23,15l-14.19,17.74A8,8,0,0,0,199.87,123.66Z"/></svg> <span data-i18n="settings-title">Settings</span></h1>
       </header>
 
       <section class="group">
+        <label class="field row">
+          <input type="checkbox" id="autostart" />
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M120,128V48a8,8,0,0,1,16,0v80a8,8,0,0,1-16,0Zm60.37-78.7a8,8,0,0,0-8.74,13.4C194.74,77.77,208,101.57,208,128a80,80,0,0,1-160,0c0-26.43,13.26-50.23,36.37-65.3a8,8,0,0,0-8.74-13.4C47.9,67.38,32,96.06,32,128a96,96,0,0,0,192,0C224,96.06,208.1,67.38,180.37,49.3Z"/></svg> <span data-i18n="settings-autostart-label">Launch at Login</span></span>
+        </label>
+      </section>
+
+      <section class="group">
+        <label class="field">
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H40V56H216V200ZM80,84A12,12,0,1,1,68,72,12,12,0,0,1,80,84Zm40,0a12,12,0,1,1-12-12A12,12,0,0,1,120,84Z"/></svg> <span data-i18n="settings-app-mode-label">App Mode</span></span>
+          <select id="app-mode">
+            <option value="Manual">Manual</option>
+            <option value="AlwaysOn">Always On</option>
+            <option value="WiFi">WiFi Mode</option>
+          </select>
+          <p id="app-mode-desc" class="field-hint"></p>
+        </label>
+
         <div class="field">
           <div class="label-row">
-            <span class="label"><i class="ph ph-cursor-click"></i> <span data-i18n="settings-mode-label">Jiggle Mode</span></span>
-            <button id="mode-info-btn" class="icon-btn" title="Info"><i class="ph ph-info"></i></button>
+            <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M88,24V16a8,8,0,0,1,16,0v8a8,8,0,0,1-16,0ZM16,104h8a8,8,0,0,0,0-16H16a8,8,0,0,0,0,16ZM124.42,39.16a8,8,0,0,0,10.74-3.58l8-16a8,8,0,0,0-14.31-7.16l-8,16A8,8,0,0,0,124.42,39.16Zm-96,81.69-16,8a8,8,0,0,0,7.16,14.31l16-8a8,8,0,1,0-7.16-14.31ZM219.31,184a16,16,0,0,1,0,22.63l-12.68,12.68a16,16,0,0,1-22.63,0L132.7,168,115,214.09c0,.1-.08.21-.13.32a15.83,15.83,0,0,1-14.6,9.59l-.79,0a15.83,15.83,0,0,1-14.41-11L32.8,52.92A16,16,0,0,1,52.92,32.8L213,85.07a16,16,0,0,1,1.41,29.8l-.32.13L168,132.69ZM208,195.31,156.69,144h0a16,16,0,0,1,4.93-26l.32-.14,45.95-17.64L48,48l52.2,159.86,17.65-46c0-.11.08-.22.13-.33a16,16,0,0,1,11.69-9.34,16.72,16.72,0,0,1,3-.28,16,16,0,0,1,11.3,4.69L195.31,208Z"/></svg> <span data-i18n="settings-mode-label">Jiggle Mode</span></span>
+            <button id="mode-info-btn" class="icon-btn" title="Info" data-i18n-aria-label="settings-mode-info-label" aria-controls="mode-info-panel" aria-expanded="false"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm16-40a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176ZM112,84a12,12,0,1,1,12,12A12,12,0,0,1,112,84Z"/></svg></button>
           </div>
           <select id="jiggle-mode">
             <option value="PowerOnly" data-i18n="tray-mode-power">Power Only</option>
@@ -38,7 +54,7 @@
         </div>
 
         <label class="field">
-          <span class="label"><i class="ph ph-timer"></i> <span data-i18n="settings-interval-label">Interval</span> <span class="badge" id="interval-value">30s</span></span>
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M128,40a96,96,0,1,0,96,96A96.11,96.11,0,0,0,128,40Zm0,176a80,80,0,1,1,80-80A80.09,80.09,0,0,1,128,216ZM173.66,90.34a8,8,0,0,1,0,11.32l-40,40a8,8,0,0,1-11.32-11.32l40-40A8,8,0,0,1,173.66,90.34ZM96,16a8,8,0,0,1,8-8h48a8,8,0,0,1,0,16H104A8,8,0,0,1,96,16Z"/></svg> <span data-i18n="settings-interval-label">Interval</span> <span class="badge" id="interval-value">30s</span></span>
           <input type="range" id="interval" min="10" max="300" step="5" value="30" />
           <span class="range-labels">
             <span>10s</span>
@@ -47,25 +63,8 @@
         </label>
       </section>
 
-      <section class="group">
-        <label class="field">
-          <span class="label"><i class="ph ph-app-window"></i> <span data-i18n="settings-app-mode-label">App Mode</span></span>
-          <select id="app-mode">
-            <option value="Manual">Manual</option>
-            <option value="AlwaysOn">Always On</option>
-            <option value="WiFi">WiFi Mode</option>
-          </select>
-          <p id="app-mode-desc" class="field-hint"></p>
-        </label>
-
-        <label class="field row">
-          <input type="checkbox" id="autostart" />
-          <span class="label"><i class="ph ph-power"></i> <span data-i18n="settings-autostart-label">Launch at Login</span></span>
-        </label>
-      </section>
-
       <section class="group" id="wifi-section" style="display:none">
-        <div class="group-header"><i class="ph ph-wifi-high"></i> <span data-i18n="settings-wifi-title">WiFi Auto-Activation</span></div>
+        <div class="group-header"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M140,204a12,12,0,1,1-12-12A12,12,0,0,1,140,204ZM237.08,87A172,172,0,0,0,18.92,87,8,8,0,0,0,29.08,99.37a156,156,0,0,1,197.84,0A8,8,0,0,0,237.08,87ZM205,122.77a124,124,0,0,0-153.94,0A8,8,0,0,0,61,135.31a108,108,0,0,1,134.06,0,8,8,0,0,0,11.24-1.3A8,8,0,0,0,205,122.77Zm-32.26,35.76a76.05,76.05,0,0,0-89.42,0,8,8,0,0,0,9.42,12.94,60,60,0,0,1,70.58,0,8,8,0,1,0,9.42-12.94Z"/></svg> <span data-i18n="settings-wifi-title">WiFi Auto-Activation</span></div>
         <div class="field" id="wifi-details">
           <div class="wifi-current-row">
             <span class="label-sm" data-i18n="settings-wifi-current">Current network</span>
@@ -81,6 +80,7 @@
             </div>
           </div>
           <div class="wifi-hint">
+            <svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm16-40a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176ZM112,84a12,12,0,1,1,12,12A12,12,0,0,1,112,84Z"/></svg>
             <span data-i18n="settings-wifi-hint">
               Stay Awake activates automatically when connected to a registered network.
               Requires Location Services.
@@ -89,36 +89,19 @@
         </div>
       </section>
 
-      <section class="group">
-        <label class="field">
-          <span class="label"><i class="ph ph-translate"></i> <span data-i18n="settings-language-label">Language</span></span>
-          <select id="language">
-            <option value="en">English</option>
-            <option value="es">Espanol</option>
-            <option value="fr">Francais</option>
-            <option value="de">Deutsch</option>
-            <option value="pt-BR">Portugues (BR)</option>
-            <option value="ja">Japanese</option>
-            <option value="zh-Hans">Chinese (Simplified)</option>
-            <option value="ko">Korean</option>
-          </select>
-        </label>
-
-        <div class="field">
-          <span class="label"><i class="ph ph-keyboard"></i> <span data-i18n="settings-hotkey-label">Global Hotkey</span></span>
-          <button id="hotkey-recorder" class="hotkey-btn">
-            <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
-            <span class="hotkey-hint" data-i18n="settings-hotkey-hint">Click to record</span>
-          </button>
-        </div>
-      </section>
-
       <section class="group" id="schedule-section">
-        <div class="group-header"><i class="ph ph-calendar-blank"></i> <span data-i18n="schedule-label">Schedule</span></div>
+        <div class="group-header"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M208,32H184V24a8,8,0,0,0-16,0v8H88V24a8,8,0,0,0-16,0v8H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM72,48v8a8,8,0,0,0,16,0V48h80v8a8,8,0,0,0,16,0V48h24V80H48V48ZM208,208H48V96H208V208Z"/></svg> <span data-i18n="schedule-label">Schedule</span></div>
         <label class="field row">
-          <input type="checkbox" id="schedule-enabled" />
+          <input type="checkbox" id="schedule-enabled" aria-describedby="schedule-enabled-hint" />
           <span class="label" data-i18n="schedule-enabled">Enable schedule</span>
         </label>
+        <p id="schedule-enabled-hint" class="field-hint" data-i18n="schedule-enabled-hint">
+          Automatically starts and stops the engine with the schedule.
+        </p>
+        <div id="schedule-wifi-alert" class="schedule-alert" role="status" hidden>
+          <svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M236.8,188.09,149.35,36.22h0a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM222.93,203.8a8.5,8.5,0,0,1-7.48,4.2H40.55a8.5,8.5,0,0,1-7.48-4.2,7.59,7.59,0,0,1,0-7.72L120.52,44.21a8.75,8.75,0,0,1,15,0l87.45,151.87A7.59,7.59,0,0,1,222.93,203.8ZM120,144V104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,180Z"/></svg>
+          <span data-i18n="schedule-wifi-alert">In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.</span>
+        </div>
         <div class="field schedule-times">
           <label class="time-field">
             <span class="label-sm" data-i18n="schedule-start">Start time</span>
@@ -143,8 +126,32 @@
         </div>
       </section>
 
+      <section class="group">
+        <label class="field">
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M247.15,212.42l-56-112a8,8,0,0,0-14.31,0l-21.71,43.43A88,88,0,0,1,108,126.93,103.65,103.65,0,0,0,135.69,64H160a8,8,0,0,0,0-16H104V32a8,8,0,0,0-16,0V48H32a8,8,0,0,0,0,16h87.63A87.76,87.76,0,0,1,96,116.35a87.74,87.74,0,0,1-19-31,8,8,0,1,0-15.08,5.34A103.63,103.63,0,0,0,84,127a87.55,87.55,0,0,1-52,17,8,8,0,0,0,0,16,103.46,103.46,0,0,0,64-22.08,104.18,104.18,0,0,0,51.44,21.31l-26.6,53.19a8,8,0,0,0,14.31,7.16L148.94,192h70.11l13.79,27.58A8,8,0,0,0,240,224a8,8,0,0,0,7.15-11.58ZM156.94,176,184,121.89,211.05,176Z"/></svg> <span data-i18n="settings-language-label">Language</span></span>
+          <select id="language">
+            <option value="en">English</option>
+            <option value="es">Espanol</option>
+            <option value="fr">Francais</option>
+            <option value="de">Deutsch</option>
+            <option value="pt-BR">Portugues (BR)</option>
+            <option value="ja">Japanese</option>
+            <option value="zh-Hans">Chinese (Simplified)</option>
+            <option value="ko">Korean</option>
+          </select>
+        </label>
+
+        <div class="field">
+          <span class="label"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M224,48H32A16,16,0,0,0,16,64V192a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V64A16,16,0,0,0,224,48Zm0,144H32V64H224V192Zm-16-64a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,128Zm0-32a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,96ZM72,160a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16h8A8,8,0,0,1,72,160Zm96,0a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,160Zm40,0a8,8,0,0,1-8,8h-8a8,8,0,0,1,0-16h8A8,8,0,0,1,208,160Z"/></svg> <span data-i18n="settings-hotkey-label">Global Hotkey</span></span>
+          <button id="hotkey-recorder" class="hotkey-btn">
+            <kbd id="hotkey">CmdOrCtrl+Shift+J</kbd>
+            <span class="hotkey-hint" data-i18n="settings-hotkey-hint">Click to record</span>
+          </button>
+        </div>
+      </section>
+
       <section class="group" id="profile-section">
-        <div class="group-header"><i class="ph ph-user-circle"></i> <span data-i18n="profile-label">Profile</span></div>
+        <div class="group-header"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24ZM74.08,197.5a64,64,0,0,1,107.84,0,87.83,87.83,0,0,1-107.84,0ZM96,120a32,32,0,1,1,32,32A32,32,0,0,1,96,120Zm97.76,66.41a79.66,79.66,0,0,0-36.06-28.75,48,48,0,1,0-59.4,0,79.66,79.66,0,0,0-36.06,28.75,88,88,0,1,1,131.52,0Z"/></svg> <span data-i18n="profile-label">Profile</span></div>
         <div class="field profile-row">
           <select id="profile-select">
             <option value="Default" data-i18n="profile-default">Default</option>

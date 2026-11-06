@@ -13,6 +13,19 @@ tray-settings = 設定…
 tray-quit = 終了
 tray-tooltip-active = Stay Awake — アクティブ
 tray-tooltip-inactive = Stay Awake — 非アクティブ
+tray-inactive = 非アクティブ
+tray-waiting = スケジュール待機中
+tray-paused = この時間帯は一時停止中
+tray-active-override = 動作中（手動で有効化）
+tray-tooltip-waiting = Stay Awake: スケジュール待機中
+tray-tooltip-paused = Stay Awake: この時間帯は一時停止中
+tray-tooltip-override = Stay Awake: 手動で有効化して動作中
+tray-next-window = 次の時間帯: { $when }
+tray-no-next-window = 次の時間帯はありません
+tray-app-mode = モード: { $mode }
+tray-app-mode-manual = 手動
+tray-app-mode-always-on = 常時オン
+tray-app-mode-wifi = WiFi
 
 # 設定ウィンドウ
 settings-title = Stay Awake 設定
@@ -28,10 +41,13 @@ settings-save = 保存
 settings-cancel = キャンセル
 settings-accessibility-banner = マウスモードにはアクセシビリティの許可が必要です。
 settings-grant-btn = アクセスを許可
+settings-mode-info-label = マウス操作モードについて
 
 # スケジュール
 schedule-label = スケジュール
 schedule-enabled = スケジュールを有効化
+schedule-enabled-hint = スケジュールに従ってエンジンを自動的に開始・停止します。
+schedule-wifi-alert = WiFiモードでは、スケジュールはマウス操作のみを制限し、エンジンの開始・停止は行いません。
 schedule-start = 開始時刻
 schedule-end = 終了時刻
 schedule-days = 有効な曜日
@@ -66,6 +82,7 @@ settings-wifi-none = 登録されたネットワークはありません
 settings-wifi-disconnected = 未接続
 settings-wifi-hint = 有効にすると、登録されたネットワークでのみStay Awakeが動作します。
 settings-wifi-nm-required = LinuxでWiFiモードを使用するにはNetworkManagerが必要です。
+settings-wifi-remove-label = ネットワーク { $network } を削除
 
 # Linuxのxdotool
 tray-xdotool-missing = xdotoolが見つかりません — マウス揺動モードにはxdotoolをインストールしてください

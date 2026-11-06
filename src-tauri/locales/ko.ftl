@@ -13,6 +13,19 @@ tray-settings = 설정…
 tray-quit = 종료
 tray-tooltip-active = Stay Awake — 활성
 tray-tooltip-inactive = Stay Awake — 비활성
+tray-inactive = 비활성
+tray-waiting = 예약 시간 대기 중
+tray-paused = 이번 시간대 일시 중지
+tray-active-override = 실행 중(수동 활성화)
+tray-tooltip-waiting = Stay Awake: 예약 시간 대기 중
+tray-tooltip-paused = Stay Awake: 이번 시간대 일시 중지
+tray-tooltip-override = Stay Awake: 수동 활성화로 실행 중
+tray-next-window = 다음 시간대: { $when }
+tray-no-next-window = 예정된 시간대 없음
+tray-app-mode = 모드: { $mode }
+tray-app-mode-manual = 수동
+tray-app-mode-always-on = 항상 켜짐
+tray-app-mode-wifi = WiFi
 
 # 설정 창
 settings-title = Stay Awake 설정
@@ -28,10 +41,13 @@ settings-save = 저장
 settings-cancel = 취소
 settings-accessibility-banner = 마우스 모드에는 접근성 권한이 필요합니다.
 settings-grant-btn = 접근 허용
+settings-mode-info-label = 마우스 움직임 모드 정보
 
 # 일정
 schedule-label = 일정
 schedule-enabled = 일정 활성화
+schedule-enabled-hint = 일정에 따라 엔진을 자동으로 시작하고 중지합니다.
+schedule-wifi-alert = WiFi 모드에서는 일정이 마우스 움직임만 제한하며 엔진을 시작하거나 중지하지 않습니다.
 schedule-start = 시작 시간
 schedule-end = 종료 시간
 schedule-days = 활성 요일
@@ -66,6 +82,7 @@ settings-wifi-none = 등록된 네트워크 없음
 settings-wifi-disconnected = 연결되지 않음
 settings-wifi-hint = 활성화하면 등록된 네트워크에서만 Stay Awake가 작동합니다.
 settings-wifi-nm-required = Linux에서 WiFi 모드를 사용하려면 NetworkManager가 필요합니다.
+settings-wifi-remove-label = 네트워크 { $network } 제거
 
 # Linux의 xdotool
 tray-xdotool-missing = xdotool을 찾을 수 없습니다 — 마우스 흔들기 모드를 사용하려면 xdotool을 설치하세요

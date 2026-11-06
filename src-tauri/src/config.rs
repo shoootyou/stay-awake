@@ -5,7 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Mouse jiggle pattern mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,31 +166,156 @@ impl AppConfig {
     /// Uses atomic write-then-rename to prevent data loss on crash.
     pub fn save(&self) -> Result<(), String> {
         let path = Self::config_path()?;
+        self.save_to(&path)
+    }
+
+    /// Saves to a caller-supplied path so tests can avoid the user configuration directory.
+    pub(crate) fn save_to(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+            create_config_dir(parent)?;
         }
         let contents = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, contents).map_err(|e| format!("Failed to write config: {}", e))?;
-        fs::rename(&tmp, &path).map_err(|e| format!("Failed to commit config: {}", e))
+        let tmp = temp_config_path(path);
+        write_private_file(&tmp, contents.as_bytes())?;
+        fs::rename(&tmp, path).map_err(|e| format!("Failed to commit config: {}", e))
     }
+}
+
+fn create_config_dir(path: &Path) -> Result<(), String> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
+        .create(path)
+        .map_err(|error| format!("Failed to create config directory: {error}"))?;
+    #[cfg(unix)]
+    harden_config_dir(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_config_dir(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Failed to inspect config directory: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("Refusing to use a symlinked config directory".to_owned());
+    }
+    if !metadata.is_dir() {
+        return Err("Config directory path is not a directory".to_owned());
+    }
+    let current_uid = current_uid()?;
+    if metadata.uid() != current_uid {
+        return Err("Refusing to use a config directory owned by another user".to_owned());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("Failed to secure config directory: {error}"))
+}
+
+#[cfg(unix)]
+fn current_uid() -> Result<u32, String> {
+    let output = std::process::Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()
+        .map_err(|error| format!("Failed to determine current user: {error}"))?;
+    if !output.status.success() {
+        return Err("Failed to determine current user".to_owned());
+    }
+    std::str::from_utf8(&output.stdout)
+        .map_err(|error| format!("Current user ID was not UTF-8: {error}"))?
+        .trim()
+        .parse()
+        .map_err(|error| format!("Current user ID was invalid: {error}"))
+}
+
+fn temp_config_path(path: &Path) -> PathBuf {
+    let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("json.{}.{}.tmp", std::process::id(), sequence))
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("Failed to write config: {error}"))?;
+    file.write_all(contents)
+        .map_err(|error| format!("Failed to write config: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
     /*
      * @spec-handoff
-     * @interface AppConfig JSON serialization and deserialization
+     * @interface AppConfig JSON serialization and runtime::effective_mode(&AppMode)
      * @behavior
-     *   - A Linux default serializes byte-for-byte as the committed golden JSON.
+     *   - Legacy Scheduled JSON remains persisted as Scheduled and runs as Manual.
+     *   - A default config retains the established persisted key set.
      *   - Legacy JSON without `wifi` loads with the disabled empty WiFi default.
      *   - Unknown JSON fields are ignored by the current migration contract.
      * @edge-cases
-     *   - Invalid enum values remain deserialization errors.
+     *   - No runtime-only field is persisted.
      */
     use super::*;
+
+    #[test]
+    fn legacy_scheduled_json_remains_persisted_and_uses_manual_runtime_behavior() {
+        let json = r#"{
+            "mode":"Scheduled", "jiggle_mode":"MouseSubtle", "interval_secs":30,
+            "autostart":false, "language":"en", "global_hotkey":"CmdOrCtrl+Shift+J",
+            "schedule_enabled":true, "schedule_start_hour":9, "schedule_start_minute":0,
+            "schedule_end_hour":17, "schedule_end_minute":0, "schedule_days":["mon"],
+            "profiles":[], "active_profile":"Default", "wifi":{"enabled":false,"networks":[]}
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).expect("legacy shape must deserialize");
+        assert_eq!(config.mode, AppMode::Scheduled);
+        assert_eq!(
+            serde_json::to_value(&config)
+                .expect("legacy config must serialize")
+                .get("mode"),
+            Some(&serde_json::Value::String("Scheduled".to_owned()))
+        );
+        assert_eq!(
+            crate::runtime::effective_mode(&config.mode),
+            AppMode::Manual
+        );
+    }
+
+    #[test]
+    fn default_config_serializes_to_the_established_persisted_key_set() {
+        let serialized =
+            serde_json::to_value(AppConfig::default()).expect("default config serializes");
+        let mut keys = serialized
+            .as_object()
+            .expect("config serializes as an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "active_profile",
+                "autostart",
+                "global_hotkey",
+                "interval_secs",
+                "jiggle_mode",
+                "language",
+                "mode",
+                "profiles",
+                "schedule_days",
+                "schedule_enabled",
+                "schedule_end_hour",
+                "schedule_end_minute",
+                "schedule_start_hour",
+                "schedule_start_minute",
+                "wifi",
+            ]
+        );
+    }
 
     #[test]
     fn wifi_config_default_is_disabled_with_empty_networks() {
@@ -239,6 +371,119 @@ mod tests {
         let decoded: AppConfig = serde_json::from_str(&json).expect("deserialize must succeed");
         assert!(decoded.wifi.enabled);
         assert_eq!(decoded.wifi.networks, vec!["TestSSID".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_creates_private_paths_and_replaces_the_previous_config_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "stay-awake-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        let path = root.join("private").join("config.json");
+        let mut config = AppConfig {
+            language: "en".to_owned(),
+            ..AppConfig::default()
+        };
+        config.save_to(&path).expect("first private save succeeds");
+
+        assert_eq!(
+            std::fs::metadata(path.parent().expect("config parent"))
+                .expect("config directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("config file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        config.language = "es".to_owned();
+        config.save_to(&path).expect("replacement save succeeds");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("replacement config reads")
+                .contains("\"es\""),
+            "replacement makes the complete new config visible"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("replacement file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::read_dir(path.parent().expect("config parent"))
+                .expect("config directory reads")
+                .count(),
+            1,
+            "atomic replacement leaves no temporary file behind"
+        );
+        std::fs::remove_dir_all(root).expect("test directory cleanup succeeds");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_hardens_an_existing_directory_and_rejects_a_symlinked_one() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "stay-awake-existing-config-test-{}-{}",
+            std::process::id(),
+            TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let existing = root.join("existing");
+        std::fs::create_dir_all(&existing).expect("existing directory creates");
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755))
+            .expect("existing directory becomes permissive");
+        let path = existing.join("config.json");
+
+        AppConfig::default()
+            .save_to(&path)
+            .expect("existing owner directory is hardened and saved");
+        assert_eq!(
+            std::fs::metadata(&existing)
+                .expect("hardened directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("private config metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let target = root.join("target");
+        std::fs::create_dir(&target).expect("symlink target creates");
+        let linked = root.join("linked");
+        symlink(&target, &linked).expect("directory symlink creates");
+        let error = AppConfig::default()
+            .save_to(&linked.join("config.json"))
+            .expect_err("save refuses to chmod through a directory symlink");
+        assert!(error.contains("symlinked config directory"));
+        assert!(
+            !target.join("config.json").exists(),
+            "the symlink target receives no config file"
+        );
+        std::fs::remove_dir_all(root).expect("test directory cleanup succeeds");
     }
 
     #[test]

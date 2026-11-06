@@ -137,11 +137,12 @@ impl PowerInhibitor for MacPowerInhibitor {
     }
 
     fn release(&mut self) -> Result<(), String> {
-        if let Some(id) = self.assertion_id.take() {
+        if let Some(id) = self.assertion_id {
             let result = unsafe { IOPMAssertionRelease(id) };
             if result != K_IO_RETURN_SUCCESS {
                 return Err(format!("IOPMAssertionRelease failed with code: {}", result));
             }
+            self.assertion_id = None;
             log::info!("Sleep inhibition released");
         }
         Ok(())

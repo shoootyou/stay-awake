@@ -1,14 +1,23 @@
-//! Stay Awake — a cross-platform tray-only mouse jiggler / anti-inactivity tool.
-//!
-//! This is the main Tauri application entry point. It wires together the
-//! platform layer, configuration, engine, system tray, global shortcut,
-//! autostart, accessibility checks, and exposes IPC commands to the
-//! settings webview.
-
+/**
+ * @spec-handoff
+ * @interface handle_runtime_route(RuntimeRouteInput, Supervisor, EngineBackend, TraySink)
+ * @behavior
+ *   - Startup follows the checkbox lifecycle for Manual and AlwaysOn modes.
+ *   - A schedule-enabled startup starts only inside its selected window.
+ *   - Legacy Scheduled uses the Manual startup behavior without changing persisted config.
+ *
+ * @edge-cases
+ *   - Every startup publishes exactly one truthful tray status.
+ */
+// Stay Awake is the Tauri application entry point.
 mod config;
 mod engine;
 mod i18n;
+#[cfg(desktop)]
+mod owner;
 mod platform;
+mod runtime;
+mod schedule;
 mod wifi;
 
 use config::{AppConfig, AppMode, JiggleMode, Profile};
@@ -17,6 +26,905 @@ use i18n::Bundle as I18nBundle;
 use platform::PermissionChecker;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrayRoute {
+    Startup,
+    TrayToggle,
+    Hotkey,
+    IpcToggle,
+    Tick,
+    WifiChanged { active: bool },
+    ConfigChanged { policy_changed: bool },
+    ProfileLoaded { policy_changed: bool },
+    LanguageChanged,
+    Resume,
+    Quit,
+}
+
+impl TrayRoute {
+    pub(crate) fn lifecycle_event(self) -> Option<runtime::LifecycleEvent> {
+        match self {
+            Self::Startup => Some(runtime::LifecycleEvent::Startup),
+            Self::TrayToggle | Self::Hotkey | Self::IpcToggle => {
+                Some(runtime::LifecycleEvent::TrayToggle)
+            }
+            Self::Tick => Some(runtime::LifecycleEvent::Tick),
+            Self::WifiChanged { active } => Some(runtime::LifecycleEvent::WifiChanged { active }),
+            Self::ConfigChanged { policy_changed } | Self::ProfileLoaded { policy_changed } => {
+                Some(runtime::LifecycleEvent::ConfigChanged { policy_changed })
+            }
+            Self::LanguageChanged => None,
+            Self::Resume => Some(runtime::LifecycleEvent::Resume),
+            Self::Quit => Some(runtime::LifecycleEvent::Quit),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrayPresentation {
+    pub(crate) status: runtime::TrayStatus,
+    pub(crate) menu_text: String,
+    pub(crate) hint_text: String,
+    pub(crate) mode_text: String,
+    pub(crate) tooltip: String,
+    pub(crate) icon: runtime::TrayIcon,
+}
+
+pub(crate) struct PresentationInput<'a> {
+    pub(crate) snapshot: &'a runtime::RuntimeSnapshot,
+    pub(crate) mode: &'a AppMode,
+    pub(crate) bundle: &'a i18n::Bundle,
+    pub(crate) locale: &'a str,
+    pub(crate) clock: &'a dyn schedule::Clock,
+}
+
+fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String {
+    let mode_key = match mode {
+        AppMode::Manual | AppMode::Scheduled => "tray-app-mode-manual",
+        AppMode::AlwaysOn => "tray-app-mode-always-on",
+        AppMode::WiFi => "tray-app-mode-wifi",
+    };
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("mode", i18n::t(bundle, mode_key));
+    i18n::t_with_args(bundle, "tray-app-mode", Some(&args))
+}
+
+pub(crate) fn build_tray_presentation_with_schedule(
+    input: PresentationInput<'_>,
+    schedule_owned: bool,
+) -> TrayPresentation {
+    let after_click = tray_toggle_presentation(input.snapshot, schedule_owned);
+    build_tray_presentation_with_target(input, after_click)
+}
+
+fn build_tray_presentation_with_target(
+    input: PresentationInput<'_>,
+    after_click: runtime::TrayStatus,
+) -> TrayPresentation {
+    let status = input.snapshot.status;
+    let mut tooltip = i18n::t(input.bundle, status.tooltip_key());
+    if matches!(
+        status,
+        runtime::TrayStatus::Waiting
+            | runtime::TrayStatus::Paused
+            | runtime::TrayStatus::ActiveOverride
+    ) {
+        let suffix = match input.snapshot.window.next.as_ref() {
+            Some(next) => {
+                let mut args = fluent_bundle::FluentArgs::new();
+                args.set(
+                    "when",
+                    i18n::format_next_window(i18n::NextWindowInput {
+                        when: input.clock.to_local(next.start),
+                        locale: input.locale,
+                    }),
+                );
+                i18n::t_with_args(input.bundle, "tray-next-window", Some(&args))
+            }
+            None => i18n::t(input.bundle, "tray-no-next-window"),
+        };
+        tooltip.push_str(" (");
+        tooltip.push_str(&suffix);
+        tooltip.push(')');
+    }
+    let menu_lines = status_menu_lines(status, after_click, input.bundle);
+    TrayPresentation {
+        status,
+        menu_text: menu_lines.primary,
+        hint_text: menu_lines.hint,
+        mode_text: mode_menu_label(input.mode, input.bundle),
+        tooltip,
+        icon: status.icon(),
+    }
+}
+
+/**
+ * @spec-handoff
+ * @interface status_menu_lines(current: TrayStatus, after_click: TrayStatus, Bundle)
+ *   -> StatusMenuLines
+ * @interface tray_toggle_presentation(RuntimeSnapshot, schedule_owned: bool) -> TrayStatus
+ * @interface runtime::schedule_owned(mode: &AppMode, schedule_enabled: bool) -> bool
+ * @behavior
+ *     - Renders the current localized state and fixed emoji in the enabled status item.
+ *     - Renders the true click-result state as a disabled hint prefixed by U+2192 and one space.
+ * @edge-cases
+ *     - A scheduled Active click targets Paused; an unscheduled one targets Inactive.
+ *     - The target is supplied by lifecycle logic rather than guessed from the current label.
+ * @see ./runtime.rs
+ */
+#[cfg(test)]
+mod tray_status_menu_contract_tests {
+    use super::*;
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn lifecycle_result(
+        schedule_owned: bool,
+        inside: bool,
+        active: bool,
+        force_on: bool,
+    ) -> runtime::TrayStatus {
+        let at = Utc
+            .with_ymd_and_hms(2026, 11, 5, 9, 30, 0)
+            .single()
+            .expect("fixed instant exists");
+        let occurrence = schedule::Occurrence {
+            start_day: at.date_naive(),
+            start: at - Duration::minutes(30),
+            end: at + Duration::minutes(30),
+        };
+        let window = schedule::ScheduleEvaluation {
+            at,
+            current: inside.then_some(occurrence),
+            next: Some(schedule::Occurrence {
+                start_day: at.date_naive(),
+                start: at + Duration::hours(1),
+                end: at + Duration::hours(2),
+            }),
+        };
+        let override_state = if force_on {
+            runtime::OverrideState::ForceOn { until: None }
+        } else {
+            runtime::OverrideState::None
+        };
+        let normalized = runtime::normalize_override(runtime::NormalizeInput {
+            mode: &config::AppMode::Manual,
+            schedule_enabled: schedule_owned,
+            window: &window,
+            override_state: &override_state,
+            event: runtime::LifecycleEvent::TrayToggle,
+        });
+        runtime::decide_lifecycle(runtime::LifecycleInput {
+            mode: &config::AppMode::Manual,
+            schedule_enabled: schedule_owned,
+            window: &window,
+            engine_active: active,
+            override_state: &normalized,
+            event: runtime::LifecycleEvent::TrayToggle,
+            previous_policy: None,
+            wifi_active: false,
+        })
+        .presentation
+    }
+
+    #[test]
+    fn status_menu_targets_match_the_real_tray_toggle_lifecycle_results() {
+        assert_eq!(
+            lifecycle_result(false, false, true, false),
+            runtime::TrayStatus::Inactive
+        );
+        assert_eq!(
+            lifecycle_result(false, false, false, false),
+            runtime::TrayStatus::Active
+        );
+        assert_eq!(
+            lifecycle_result(true, false, false, false),
+            runtime::TrayStatus::ActiveOverride
+        );
+        assert_eq!(
+            lifecycle_result(true, true, false, false),
+            runtime::TrayStatus::Active
+        );
+        assert_eq!(
+            lifecycle_result(true, false, true, true),
+            runtime::TrayStatus::Waiting
+        );
+        assert_eq!(
+            lifecycle_result(true, true, true, false),
+            runtime::TrayStatus::Paused
+        );
+    }
+
+    #[test]
+    fn advertised_click_result_matches_lifecycle_for_every_reachable_tray_state() {
+        let at = Utc
+            .with_ymd_and_hms(2026, 11, 5, 9, 30, 0)
+            .single()
+            .expect("fixed instant exists");
+        for mode in [
+            config::AppMode::Manual,
+            config::AppMode::AlwaysOn,
+            config::AppMode::WiFi,
+            config::AppMode::Scheduled,
+        ] {
+            for schedule_enabled in [false, true] {
+                for inside in [false, true] {
+                    if !schedule_enabled && inside {
+                        continue;
+                    }
+                    let schedule_owned = runtime::schedule_owned(&mode, schedule_enabled);
+                    let current = inside.then(|| schedule::Occurrence {
+                        start_day: at.date_naive(),
+                        start: at - Duration::minutes(30),
+                        end: at + Duration::minutes(30),
+                    });
+                    let next = schedule::Occurrence {
+                        start_day: at.date_naive(),
+                        start: at + Duration::hours(1),
+                        end: at + Duration::hours(2),
+                    };
+                    let states = if schedule_owned {
+                        if inside {
+                            vec![
+                                (true, runtime::OverrideState::None),
+                                (
+                                    false,
+                                    runtime::OverrideState::SkipWindow(
+                                        current.clone().expect("inside has an occurrence"),
+                                    ),
+                                ),
+                            ]
+                        } else {
+                            vec![
+                                (false, runtime::OverrideState::None),
+                                (true, runtime::OverrideState::ForceOn { until: None }),
+                                (true, runtime::OverrideState::None),
+                                (false, runtime::OverrideState::ForceOn { until: None }),
+                            ]
+                        }
+                    } else {
+                        vec![
+                            (false, runtime::OverrideState::None),
+                            (true, runtime::OverrideState::None),
+                        ]
+                    };
+                    for (engine_active, override_state) in states {
+                        let window = schedule::ScheduleEvaluation {
+                            at,
+                            current: current.clone(),
+                            next: Some(next.clone()),
+                        };
+                        let normalized = runtime::normalize_override(runtime::NormalizeInput {
+                            mode: &mode,
+                            schedule_enabled,
+                            window: &window,
+                            override_state: &override_state,
+                            event: runtime::LifecycleEvent::Tick,
+                        });
+                        let status = runtime::derive_tray_status(runtime::TrayInput {
+                            mode: &mode,
+                            engine_active,
+                            schedule_enabled,
+                            window: &window,
+                            override_state: &normalized,
+                        });
+                        let snapshot = runtime::RuntimeSnapshot {
+                            engine_active,
+                            override_state: normalized.clone(),
+                            window,
+                            status,
+                        };
+                        let oracle = runtime::decide_lifecycle(runtime::LifecycleInput {
+                            mode: &mode,
+                            schedule_enabled,
+                            window: &snapshot.window,
+                            engine_active,
+                            override_state: &normalized,
+                            event: runtime::LifecycleEvent::TrayToggle,
+                            previous_policy: None,
+                            wifi_active: false,
+                        });
+                        let advertised = tray_toggle_presentation(&snapshot, schedule_owned);
+                        assert_eq!(
+                            advertised, oracle.presentation,
+                            "{mode:?}, enabled={schedule_enabled}, inside={inside}, {status:?}"
+                        );
+                        let bundle = i18n::create_bundle("en");
+                        assert_eq!(
+                            status_menu_lines(status, advertised, &bundle),
+                            status_menu_lines(status, oracle.presentation, &bundle)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn schedule_ownership_excludes_wifi_and_includes_legacy_scheduled() {
+        for mode in [
+            config::AppMode::Manual,
+            config::AppMode::AlwaysOn,
+            config::AppMode::WiFi,
+            config::AppMode::Scheduled,
+        ] {
+            assert!(!runtime::schedule_owned(&mode, false), "{mode:?} off");
+        }
+        assert!(runtime::schedule_owned(&config::AppMode::Manual, true));
+        assert!(runtime::schedule_owned(&config::AppMode::AlwaysOn, true));
+        assert!(!runtime::schedule_owned(&config::AppMode::WiFi, true));
+        assert!(runtime::schedule_owned(&config::AppMode::Scheduled, true));
+    }
+
+    #[test]
+    fn startup_presentation_passes_loaded_configuration_to_schedule_ownership() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("lib.rs is readable");
+        let start = source
+            .rfind("let initial_presentation")
+            .expect("startup presentation exists");
+        let end = start
+            + source[start..]
+                .find("let shared_bundle")
+                .expect("startup presentation ends before bundle storage");
+        let setup = &source[start..end];
+        let compact = setup.split_whitespace().collect::<String>();
+        assert!(compact.contains(
+            "runtime::schedule_owned(&loaded_config.mode,loaded_config.schedule_enabled)"
+        ));
+        assert!(!compact.contains("build_tray_presentation_with_schedule(true"));
+    }
+
+    #[test]
+    fn status_menu_lines_separate_fixed_emoji_current_labels_from_click_targets_in_english() {
+        let english = i18n::create_bundle("en");
+        for (current, after_click, primary, hint) in [
+            (
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Inactive,
+                "🟢 Active",
+                "→ Inactive",
+            ),
+            (
+                runtime::TrayStatus::Inactive,
+                runtime::TrayStatus::Active,
+                "⚪ Inactive",
+                "→ Active",
+            ),
+            (
+                runtime::TrayStatus::Waiting,
+                runtime::TrayStatus::ActiveOverride,
+                "📅 Waiting for schedule",
+                "→ Active (manual override)",
+            ),
+            (
+                runtime::TrayStatus::Paused,
+                runtime::TrayStatus::Active,
+                "⏸️ Paused for this window",
+                "→ Active",
+            ),
+            (
+                runtime::TrayStatus::ActiveOverride,
+                runtime::TrayStatus::Waiting,
+                "🟢 Active (manual override)",
+                "→ Waiting for schedule",
+            ),
+            (
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Paused,
+                "🟢 Active",
+                "→ Paused for this window",
+            ),
+        ] {
+            assert_eq!(
+                status_menu_lines(current, after_click, &english),
+                StatusMenuLines {
+                    primary: primary.to_owned(),
+                    hint: hint.to_owned(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn status_menu_lines_use_the_selected_locale_for_all_states() {
+        let spanish = i18n::create_bundle("es");
+        for (current, after_click, primary, hint) in [
+            (
+                runtime::TrayStatus::Active,
+                runtime::TrayStatus::Inactive,
+                "🟢 Activo",
+                "→ Inactivo",
+            ),
+            (
+                runtime::TrayStatus::Inactive,
+                runtime::TrayStatus::Active,
+                "⚪ Inactivo",
+                "→ Activo",
+            ),
+            (
+                runtime::TrayStatus::Waiting,
+                runtime::TrayStatus::ActiveOverride,
+                "📅 En espera del horario",
+                "→ Activo (activación manual)",
+            ),
+            (
+                runtime::TrayStatus::Paused,
+                runtime::TrayStatus::Active,
+                "⏸️ En pausa durante este periodo",
+                "→ Activo",
+            ),
+            (
+                runtime::TrayStatus::ActiveOverride,
+                runtime::TrayStatus::Waiting,
+                "🟢 Activo (activación manual)",
+                "→ En espera del horario",
+            ),
+        ] {
+            assert_eq!(
+                status_menu_lines(current, after_click, &spanish),
+                StatusMenuLines {
+                    primary: primary.to_owned(),
+                    hint: hint.to_owned(),
+                }
+            );
+        }
+    }
+}
+
+const TRAY_ACTIVE_EMOJI: &str = "🟢";
+const TRAY_INACTIVE_EMOJI: &str = "⚪";
+const TRAY_WAITING_EMOJI: &str = "📅";
+const TRAY_PAUSED_EMOJI: &str = "⏸️";
+
+#[derive(Debug, PartialEq, Eq)]
+struct StatusMenuLines {
+    primary: String,
+    hint: String,
+}
+
+fn status_menu_lines(
+    current: runtime::TrayStatus,
+    after_click: runtime::TrayStatus,
+    bundle: &i18n::Bundle,
+) -> StatusMenuLines {
+    let emoji = match current {
+        runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride => TRAY_ACTIVE_EMOJI,
+        runtime::TrayStatus::Inactive => TRAY_INACTIVE_EMOJI,
+        runtime::TrayStatus::Waiting => TRAY_WAITING_EMOJI,
+        runtime::TrayStatus::Paused => TRAY_PAUSED_EMOJI,
+    };
+    let key = |status| match status {
+        runtime::TrayStatus::Inactive => "tray-inactive",
+        _ => status.menu_key(),
+    };
+    StatusMenuLines {
+        primary: format!("{emoji} {}", i18n::t(bundle, key(current))),
+        hint: format!("→ {}", i18n::t(bundle, key(after_click))),
+    }
+}
+
+fn tray_toggle_presentation(
+    snapshot: &runtime::RuntimeSnapshot,
+    schedule_owned: bool,
+) -> runtime::TrayStatus {
+    if schedule_owned {
+        match (snapshot.engine_active, snapshot.window.in_window()) {
+            (true, true) => runtime::TrayStatus::Paused,
+            (true, false) => runtime::TrayStatus::Waiting,
+            (false, true) => runtime::TrayStatus::Active,
+            (false, false) => runtime::TrayStatus::ActiveOverride,
+        }
+    } else if snapshot.engine_active {
+        runtime::TrayStatus::Inactive
+    } else {
+        runtime::TrayStatus::Active
+    }
+}
+
+pub(crate) trait TraySink {
+    fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String>;
+
+    /// Reports an owner operation error when no caller is waiting for a reply.
+    fn report_error(&mut self, error: &str) {
+        log::error!("runtime operation failed: {error}");
+    }
+}
+
+#[cfg(desktop)]
+pub(crate) type PostSpawnStep<'a> = Box<dyn FnOnce() -> Result<(), String> + 'a>;
+
+/// Runs post-spawn setup steps and shuts the owner down before returning the first failure.
+#[cfg(desktop)]
+pub(crate) fn run_post_spawn_steps<'a, I, S>(
+    runtime: &owner::RuntimeHandle,
+    steps: I,
+    shutdown: S,
+) -> Result<(), String>
+where
+    I: IntoIterator<Item = PostSpawnStep<'a>>,
+    S: FnOnce(&owner::RuntimeHandle) -> Result<(), String>,
+{
+    for step in steps {
+        if let Err(error) = step() {
+            return match shutdown(runtime) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => {
+                    Err(format!("{error}; owner shutdown failed: {cleanup_error}"))
+                }
+            };
+        }
+    }
+    Ok(())
+}
+
+#[cfg(desktop)]
+pub(crate) struct TrayImages {
+    pub(crate) full: tauri::image::Image<'static>,
+    pub(crate) dimmed: tauri::image::Image<'static>,
+}
+
+#[cfg(desktop)]
+#[derive(Clone, Copy)]
+pub(crate) enum TrayTint {
+    Full,
+    Dimmed,
+}
+
+#[cfg(desktop)]
+fn tray_tint_for(icon: runtime::TrayIcon) -> TrayTint {
+    match icon {
+        runtime::TrayIcon::Active => TrayTint::Full,
+        runtime::TrayIcon::Inactive | runtime::TrayIcon::Waiting => TrayTint::Dimmed,
+    }
+}
+
+#[cfg(desktop)]
+fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
+    let mut dimmed = icon.rgba().to_vec();
+    for alpha in dimmed.iter_mut().skip(3).step_by(4) {
+        *alpha = (*alpha as f32 * 0.4) as u8;
+    }
+    tauri::image::Image::new_owned(dimmed, icon.width(), icon.height())
+}
+
+#[cfg(desktop)]
+impl TrayImages {
+    fn load() -> Result<Self, String> {
+        let full = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon@2x.png"))
+            .map_err(|error| error.to_string())?;
+        let dimmed = create_dimmed_icon(&full);
+        Ok(Self { full, dimmed })
+    }
+}
+
+#[cfg(desktop)]
+pub(crate) struct NativeTrayTargets {
+    pub(crate) tray: tauri::tray::TrayIcon<tauri::Wry>,
+    pub(crate) status_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) hint_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) mode_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub(crate) images: TrayImages,
+}
+
+#[cfg(desktop)]
+pub(crate) trait TrayPaintTargets: Send + Sync {
+    fn paint(&self, presentation: &TrayPresentation) -> Result<(), String>;
+}
+
+#[cfg(desktop)]
+struct PaintMailbox {
+    pending: Option<(TrayRoute, TrayPresentation)>,
+    last_requested: Option<TrayPresentation>,
+    scheduled: bool,
+}
+
+#[cfg(desktop)]
+pub(crate) enum PaintQueueDecision {
+    Coalesced,
+    Enqueue,
+}
+
+#[cfg(desktop)]
+pub(crate) fn queue_paint(
+    mailbox: &mut PaintMailbox,
+    route: TrayRoute,
+    presentation: TrayPresentation,
+) -> PaintQueueDecision {
+    if route == TrayRoute::Tick && mailbox.last_requested.as_ref() == Some(&presentation) {
+        return PaintQueueDecision::Coalesced;
+    }
+    mailbox.last_requested = Some(presentation.clone());
+    mailbox.pending = Some((route, presentation));
+    if mailbox.scheduled {
+        PaintQueueDecision::Coalesced
+    } else {
+        mailbox.scheduled = true;
+        PaintQueueDecision::Enqueue
+    }
+}
+
+#[cfg(desktop)]
+pub(crate) fn take_pending_paint(
+    mailbox: &mut PaintMailbox,
+) -> Option<(TrayRoute, TrayPresentation)> {
+    mailbox.scheduled = false;
+    mailbox.pending.take()
+}
+
+#[cfg(desktop)]
+pub(crate) trait UiExecutor: Send + Sync {
+    fn run_on_main_thread(&self, task: Box<dyn FnOnce() + Send>) -> Result<(), String>;
+}
+
+#[cfg(desktop)]
+struct TauriUiExecutor(tauri::AppHandle);
+
+#[cfg(desktop)]
+impl UiExecutor for TauriUiExecutor {
+    fn run_on_main_thread(&self, task: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+        self.0
+            .run_on_main_thread(task)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(desktop)]
+pub(crate) struct NativeTraySink {
+    targets: Arc<dyn TrayPaintTargets>,
+    mailbox: Arc<Mutex<PaintMailbox>>,
+    executor: Arc<dyn UiExecutor>,
+}
+
+#[cfg(desktop)]
+impl NativeTraySink {
+    pub(crate) fn new(app: tauri::AppHandle, targets: NativeTrayTargets) -> Self {
+        Self::new_with_ui(Arc::new(TauriUiExecutor(app)), Arc::new(targets))
+    }
+
+    /// Lets crate tests drive mailbox and paint failures without a native event loop.
+    pub(crate) fn new_with_ui(
+        executor: Arc<dyn UiExecutor>,
+        targets: Arc<dyn TrayPaintTargets>,
+    ) -> Self {
+        Self {
+            targets,
+            mailbox: Arc::new(Mutex::new(PaintMailbox {
+                pending: None,
+                last_requested: None,
+                scheduled: false,
+            })),
+            executor,
+        }
+    }
+
+    pub(crate) fn apply_initial(&self, presentation: &TrayPresentation) -> Result<(), String> {
+        let status_item = InitialStatusItem(&*self.targets);
+        status_item.set_text(presentation)
+    }
+}
+
+#[cfg(desktop)]
+struct InitialStatusItem<'a>(&'a dyn TrayPaintTargets);
+
+#[cfg(desktop)]
+impl InitialStatusItem<'_> {
+    fn set_text(&self, presentation: &TrayPresentation) -> Result<(), String> {
+        self.0.paint(presentation)
+    }
+}
+
+#[cfg(desktop)]
+impl TrayPaintTargets for NativeTrayTargets {
+    fn paint(&self, presentation: &TrayPresentation) -> Result<(), String> {
+        let image = match tray_tint_for(presentation.icon) {
+            TrayTint::Full => self.images.full.clone(),
+            TrayTint::Dimmed => self.images.dimmed.clone(),
+        };
+        let mut errors = Vec::new();
+        if let Err(error) = self.status_item.set_text(&presentation.menu_text) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.hint_item.set_text(&presentation.hint_text) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.mode_item.set_text(&presentation.mode_text) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.tray.set_tooltip(Some(&presentation.tooltip)) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.tray.set_icon(Some(image)) {
+            errors.push(error.to_string());
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+}
+
+#[cfg(desktop)]
+impl TraySink for NativeTraySink {
+    fn publish(&mut self, route: TrayRoute, presentation: &TrayPresentation) -> Result<(), String> {
+        let decision = {
+            let mut mailbox = self
+                .mailbox
+                .lock()
+                .map_err(|_| "paint mailbox lock poisoned".to_owned())?;
+            let _last_requested = &mailbox.last_requested;
+            queue_paint(&mut mailbox, route, presentation.clone())
+        };
+        if matches!(decision, PaintQueueDecision::Coalesced) {
+            return Ok(());
+        }
+        let mailbox = Arc::clone(&self.mailbox);
+        let targets = Arc::clone(&self.targets);
+        if let Err(error) = self.executor.run_on_main_thread(Box::new(move || {
+            let frame = match mailbox.lock() {
+                Ok(mut mailbox) => take_pending_paint(&mut mailbox),
+                Err(_) => {
+                    log::error!("paint mailbox lock poisoned");
+                    None
+                }
+            };
+            if let Some((_route, presentation)) = frame {
+                if let Err(error) = targets.paint(&presentation) {
+                    log::error!("tray paint failed: {error}");
+                }
+            }
+        })) {
+            if let Ok(mut mailbox) = self.mailbox.lock() {
+                mailbox.scheduled = false;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct InitialSnapshotInput<'a> {
+    pub(crate) config: &'a config::AppConfig,
+    pub(crate) clock: &'a dyn schedule::Clock,
+}
+
+pub(crate) fn initial_runtime_snapshot(
+    input: InitialSnapshotInput<'_>,
+) -> Result<runtime::RuntimeSnapshot, String> {
+    let schedule = schedule::Schedule::from_config(input.config)?;
+    let window = schedule::evaluate_schedule(schedule::ScheduleInput {
+        schedule: &schedule,
+        at: input.clock.now(),
+        clock: input.clock,
+    })?;
+    let override_state = runtime::normalize_override(runtime::NormalizeInput {
+        mode: &input.config.mode,
+        schedule_enabled: schedule.enabled,
+        window: &window,
+        override_state: &runtime::OverrideState::None,
+        event: runtime::LifecycleEvent::Tick,
+    });
+    let status = runtime::derive_tray_status(runtime::TrayInput {
+        mode: &input.config.mode,
+        engine_active: false,
+        schedule_enabled: schedule.enabled,
+        window: &window,
+        override_state: &override_state,
+    });
+    Ok(runtime::RuntimeSnapshot {
+        engine_active: false,
+        override_state,
+        window,
+        status,
+    })
+}
+
+#[cfg(desktop)]
+pub(crate) fn request_app_exit(app: &tauri::AppHandle, code: i32) -> Result<(), String> {
+    use owner::SHUTDOWN_TIMEOUT;
+
+    let runtime = app
+        .try_state::<owner::RuntimeHandle>()
+        .ok_or_else(|| "runtime is not initialized".to_owned())?
+        .inner()
+        .clone();
+    if !runtime.claim_exit_coordinator() {
+        return Ok(());
+    }
+    let app = app.clone();
+    let release_claim = runtime.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("stay-awake-exit".to_owned())
+        .spawn(move || {
+            let result = runtime.shutdown(SHUTDOWN_TIMEOUT);
+            runtime.release_exit_coordinator();
+            match result {
+                Ok(()) => app.exit(code),
+                Err(error) => log::error!("Runtime shutdown did not complete: {error}"),
+            }
+        })
+    {
+        release_claim.release_exit_coordinator();
+        return Err(format!("failed to start exit coordinator: {error}"));
+    }
+    Ok(())
+}
+
+pub(crate) struct TrayRefreshInput<'a> {
+    pub(crate) route: TrayRoute,
+    pub(crate) presentation: &'a TrayPresentation,
+}
+
+pub(crate) fn refresh_tray_status(
+    input: TrayRefreshInput<'_>,
+    sink: &mut dyn TraySink,
+) -> Result<(), String> {
+    sink.publish(input.route, input.presentation)
+}
+
+pub(crate) struct RuntimeRouteInput<'a> {
+    pub(crate) route: TrayRoute,
+    pub(crate) config: &'a config::AppConfig,
+    pub(crate) clock: &'a dyn schedule::Clock,
+    pub(crate) bundle: &'a i18n::Bundle,
+}
+
+pub(crate) fn handle_runtime_route(
+    input: RuntimeRouteInput<'_>,
+    supervisor: &mut runtime::Supervisor,
+    backend: &mut dyn runtime::EngineBackend,
+    sink: &mut dyn TraySink,
+) -> Result<runtime::RuntimeSnapshot, String> {
+    let lifecycle_result = match input.route.lifecycle_event() {
+        Some(event) => supervisor.reconcile(
+            runtime::ReconcileInput {
+                config: input.config,
+                clock: input.clock,
+                event,
+            },
+            backend,
+        ),
+        None => supervisor
+            .snapshot()
+            .cloned()
+            .ok_or_else(|| "tray status is not initialized".to_owned()),
+    };
+    let snapshot = match lifecycle_result.as_ref() {
+        Ok(snapshot) => snapshot.clone(),
+        Err(_) => supervisor
+            .snapshot()
+            .cloned()
+            .ok_or_else(|| "runtime reconciliation produced no snapshot".to_owned())?,
+    };
+    let presentation = build_tray_presentation_with_schedule(
+        PresentationInput {
+            snapshot: &snapshot,
+            mode: &input.config.mode,
+            bundle: input.bundle,
+            locale: &input.config.language,
+            clock: input.clock,
+        },
+        runtime::schedule_owned(&input.config.mode, input.config.schedule_enabled),
+    );
+    let publish_result = refresh_tray_status(
+        TrayRefreshInput {
+            route: input.route,
+            presentation: &presentation,
+        },
+        sink,
+    );
+    match (lifecycle_result, publish_result) {
+        (Ok(_), Ok(())) => Ok(snapshot),
+        (Err(lifecycle_error), Ok(())) => Err(lifecycle_error),
+        (Ok(_), Err(publish_error)) => Err(publish_error),
+        (Err(lifecycle_error), Err(publish_error)) => Err(format!(
+            "{lifecycle_error}; tray status publication failed: {publish_error}"
+        )),
+    }
+}
 
 /// Return the current configuration to the frontend.
 #[tauri::command]
@@ -27,109 +935,794 @@ fn get_config(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<AppConf
     Ok(cfg.clone())
 }
 
-/// Persist a new configuration from the frontend and sync autostart.
-#[tauri::command]
-fn save_config(
-    app: tauri::AppHandle,
-    new_config: AppConfig,
-    state: tauri::State<'_, Arc<Mutex<AppConfig>>>,
-    monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
-) -> Result<(), String> {
-    // Validate config fields.
-    if new_config.interval_secs == 0 {
-        return Err("Interval must be at least 1 second".to_string());
-    }
-    if new_config.schedule_start_hour > 23 || new_config.schedule_start_minute > 59 {
-        return Err("Invalid schedule start time".to_string());
-    }
-    if new_config.schedule_end_hour > 23 || new_config.schedule_end_minute > 59 {
-        return Err("Invalid schedule end time".to_string());
+#[cfg(test)]
+mod tray_refresh_contract_tests {
+    /*
+     * @spec-handoff
+     * @interface TrayRoute::lifecycle_event; build_tray_presentation; refresh_tray_status
+     * @behavior
+     *   - Every runtime route maps to its prescribed lifecycle event and publishes once.
+     *   - Presentations use the current bundle for menu text, tooltip, and state icon.
+     * @edge-cases
+     *   - WiFi has only Active or Inactive states; failed backend work publishes actual state.
+     *   - A language change redraws from the replacement bundle without a lifecycle action.
+     */
+    use super::*;
+    use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
+
+    #[derive(Default)]
+    struct RecordingSink {
+        calls: Vec<(TrayRoute, TrayPresentation)>,
     }
 
-    // Sync autostart with the new config value.
-    {
-        use tauri_plugin_autostart::ManagerExt;
-        let manager = app.autolaunch();
-        if new_config.autostart {
-            if let Err(e) = manager.enable() {
-                log::warn!("Failed to enable autostart: {}", e);
+    impl TraySink for RecordingSink {
+        fn publish(
+            &mut self,
+            route: TrayRoute,
+            presentation: &TrayPresentation,
+        ) -> Result<(), String> {
+            self.calls.push((route, presentation.clone()));
+            Ok(())
+        }
+    }
+
+    struct FixedClock(DateTime<Utc>);
+
+    impl schedule::Clock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+
+        fn to_local(&self, instant: DateTime<Utc>) -> DateTime<FixedOffset> {
+            instant.with_timezone(&FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(&self, local: NaiveDateTime) -> LocalResult<DateTime<Utc>> {
+            LocalResult::Single(local.and_utc())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        active: bool,
+        fail_start: bool,
+        start_calls: usize,
+        stop_calls: usize,
+    }
+
+    impl runtime::EngineBackend for RecordingBackend {
+        fn start(&mut self) -> Result<(), String> {
+            self.start_calls += 1;
+            if self.fail_start {
+                return Err("start failed".to_owned());
             }
-        } else {
-            if let Err(e) = manager.disable() {
-                log::warn!("Failed to disable autostart: {}", e);
+            self.active = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            self.stop_calls += 1;
+            self.active = false;
+            Ok(())
+        }
+
+        fn is_active(&self) -> bool {
+            self.active
+        }
+
+        fn set_jiggle_policy(&mut self, _: runtime::JigglePolicy) {}
+    }
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 3, 2, hour, 0, 0)
+            .single()
+            .expect("fixed instant exists")
+    }
+
+    fn snapshot(status: runtime::TrayStatus) -> runtime::RuntimeSnapshot {
+        let window = schedule::ScheduleEvaluation {
+            at: at(10),
+            current: None,
+            next: None,
+        };
+        let override_state = runtime::normalize_override(runtime::NormalizeInput {
+            mode: &AppMode::Manual,
+            schedule_enabled: false,
+            window: &window,
+            override_state: &runtime::OverrideState::None,
+            event: runtime::LifecycleEvent::Tick,
+        });
+        runtime::RuntimeSnapshot {
+            engine_active: matches!(
+                status,
+                runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride
+            ),
+            override_state,
+            window,
+            status,
+        }
+    }
+
+    fn presentation_snapshot(
+        status: runtime::TrayStatus,
+        schedule_owned: bool,
+    ) -> runtime::RuntimeSnapshot {
+        let current = (status == runtime::TrayStatus::Paused).then(|| schedule::Occurrence {
+            start_day: at(10).date_naive(),
+            start: at(9),
+            end: at(11),
+        });
+        let window = schedule::ScheduleEvaluation {
+            at: at(10),
+            current: current.clone(),
+            next: None,
+        };
+        let override_state = match status {
+            runtime::TrayStatus::Paused => runtime::OverrideState::SkipWindow(
+                current.expect("paused state has a current occurrence"),
+            ),
+            runtime::TrayStatus::ActiveOverride => runtime::OverrideState::ForceOn { until: None },
+            _ => runtime::OverrideState::None,
+        };
+        let normalized = runtime::normalize_override(runtime::NormalizeInput {
+            mode: &AppMode::Manual,
+            schedule_enabled: schedule_owned,
+            window: &window,
+            override_state: &override_state,
+            event: runtime::LifecycleEvent::Tick,
+        });
+        runtime::RuntimeSnapshot {
+            engine_active: matches!(
+                status,
+                runtime::TrayStatus::Active | runtime::TrayStatus::ActiveOverride
+            ),
+            override_state: normalized,
+            window,
+            status,
+        }
+    }
+
+    #[cfg(desktop)]
+    fn presentation(text: &str) -> TrayPresentation {
+        TrayPresentation {
+            status: runtime::TrayStatus::Active,
+            menu_text: text.to_owned(),
+            hint_text: format!("→ {text}"),
+            mode_text: text.to_owned(),
+            tooltip: text.to_owned(),
+            icon: runtime::TrayIcon::Active,
+        }
+    }
+
+    #[cfg(desktop)]
+    fn mailbox() -> PaintMailbox {
+        PaintMailbox {
+            pending: None,
+            last_requested: None,
+            scheduled: false,
+        }
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn paint_mailbox_keeps_only_the_latest_frame_and_allows_a_follow_up_paint() {
+        let mut mailbox = mailbox();
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, presentation("A")),
+            PaintQueueDecision::Enqueue
+        ));
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, presentation("B")),
+            PaintQueueDecision::Coalesced
+        ));
+        let (_, first) = take_pending_paint(&mut mailbox).expect("the newest queued frame exists");
+        assert_eq!(first.menu_text, "B");
+
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::LanguageChanged, presentation("C")),
+            PaintQueueDecision::Enqueue
+        ));
+        let (_, second) =
+            take_pending_paint(&mut mailbox).expect("a frame queued during paint remains pending");
+        assert_eq!(second.menu_text, "C");
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn paint_mailbox_coalesces_unchanged_ticks_but_repaints_explicit_routes() {
+        let mut mailbox = mailbox();
+        let frame = presentation("active");
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, frame.clone()),
+            PaintQueueDecision::Enqueue
+        ));
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Tick, frame.clone()),
+            PaintQueueDecision::Coalesced
+        ));
+        take_pending_paint(&mut mailbox).expect("initial frame is pending");
+        assert!(matches!(
+            queue_paint(&mut mailbox, TrayRoute::Resume, frame),
+            PaintQueueDecision::Enqueue
+        ));
+    }
+
+    #[test]
+    fn every_tray_route_maps_to_its_prescribed_lifecycle_event() {
+        let cases = [
+            (TrayRoute::Startup, Some(runtime::LifecycleEvent::Startup)),
+            (
+                TrayRoute::TrayToggle,
+                Some(runtime::LifecycleEvent::TrayToggle),
+            ),
+            (TrayRoute::Hotkey, Some(runtime::LifecycleEvent::TrayToggle)),
+            (
+                TrayRoute::IpcToggle,
+                Some(runtime::LifecycleEvent::TrayToggle),
+            ),
+            (TrayRoute::Tick, Some(runtime::LifecycleEvent::Tick)),
+            (
+                TrayRoute::WifiChanged { active: true },
+                Some(runtime::LifecycleEvent::WifiChanged { active: true }),
+            ),
+            (
+                TrayRoute::ConfigChanged {
+                    policy_changed: true,
+                },
+                Some(runtime::LifecycleEvent::ConfigChanged {
+                    policy_changed: true,
+                }),
+            ),
+            (
+                TrayRoute::ProfileLoaded {
+                    policy_changed: false,
+                },
+                Some(runtime::LifecycleEvent::ConfigChanged {
+                    policy_changed: false,
+                }),
+            ),
+            (TrayRoute::LanguageChanged, None),
+            (TrayRoute::Resume, Some(runtime::LifecycleEvent::Resume)),
+            (TrayRoute::Quit, Some(runtime::LifecycleEvent::Quit)),
+        ];
+        for (route, expected) in cases {
+            assert_eq!(route.lifecycle_event(), expected, "{route:?}");
+        }
+    }
+
+    #[test]
+    fn builds_and_publishes_the_english_presentation_for_every_status() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let cases = [
+            (
+                runtime::TrayStatus::Active,
+                false,
+                "🟢 Active",
+                "→ Inactive",
+                "Stay Awake — Active",
+                runtime::TrayIcon::Active,
+            ),
+            (
+                runtime::TrayStatus::Inactive,
+                false,
+                "⚪ Inactive",
+                "→ Active",
+                "Stay Awake — Inactive",
+                runtime::TrayIcon::Inactive,
+            ),
+            (
+                runtime::TrayStatus::Waiting,
+                true,
+                "📅 Waiting for schedule",
+                "→ Active (manual override)",
+                "Stay Awake: waiting for schedule (No upcoming window)",
+                runtime::TrayIcon::Waiting,
+            ),
+            (
+                runtime::TrayStatus::Paused,
+                true,
+                "⏸️ Paused for this window",
+                "→ Active",
+                "Stay Awake: paused for this window (No upcoming window)",
+                runtime::TrayIcon::Inactive,
+            ),
+            (
+                runtime::TrayStatus::ActiveOverride,
+                true,
+                "🟢 Active (manual override)",
+                "→ Waiting for schedule",
+                "Stay Awake: active by manual override (No upcoming window)",
+                runtime::TrayIcon::Active,
+            ),
+        ];
+        let mut sink = RecordingSink::default();
+        for (status, schedule_owned, menu_text, hint_text, tooltip, icon) in cases {
+            let state = presentation_snapshot(status, schedule_owned);
+            let presentation = build_tray_presentation_with_schedule(
+                PresentationInput {
+                    snapshot: &state,
+                    mode: &AppMode::Manual,
+                    bundle: &bundle,
+                    locale: "en",
+                    clock: &clock,
+                },
+                schedule_owned,
+            );
+            assert_eq!(presentation.status, status);
+            assert_eq!(presentation.menu_text, menu_text);
+            assert_eq!(presentation.hint_text, hint_text);
+            let lines = status_menu_lines(
+                status,
+                tray_toggle_presentation(&state, schedule_owned),
+                &bundle,
+            );
+            assert_eq!(presentation.menu_text, lines.primary);
+            assert_eq!(presentation.hint_text, lines.hint);
+            assert_eq!(presentation.tooltip, tooltip);
+            assert_eq!(presentation.icon, icon);
+            refresh_tray_status(
+                TrayRefreshInput {
+                    route: TrayRoute::Tick,
+                    presentation: &presentation,
+                },
+                &mut sink,
+            )
+            .expect("recording sink accepts publication");
+        }
+        assert_eq!(sink.calls.len(), cases.len());
+    }
+
+    #[test]
+    fn refresh_publishes_exactly_one_named_presentation_per_call() {
+        let presentation = TrayPresentation {
+            status: runtime::TrayStatus::Waiting,
+            menu_text: "Waiting for schedule".to_owned(),
+            hint_text: "→ Active (manual override)".to_owned(),
+            mode_text: "Mode: Manual".to_owned(),
+            tooltip: "Stay Awake: waiting for schedule (No upcoming window)".to_owned(),
+            icon: runtime::TrayIcon::Waiting,
+        };
+        let routes = [
+            TrayRoute::Startup,
+            TrayRoute::Tick,
+            TrayRoute::LanguageChanged,
+        ];
+        let mut sink = RecordingSink::default();
+        for route in routes {
+            refresh_tray_status(
+                TrayRefreshInput {
+                    route,
+                    presentation: &presentation,
+                },
+                &mut sink,
+            )
+            .expect("recording sink accepts publication");
+        }
+        assert_eq!(sink.calls.len(), routes.len());
+        assert_eq!(
+            sink.calls,
+            routes
+                .into_iter()
+                .map(|route| (route, presentation.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn runtime_routes_publish_once_and_language_refreshes_an_initialized_snapshot() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig::default();
+        let routes = [
+            (TrayRoute::Startup, 0, 0, runtime::TrayStatus::Inactive),
+            (TrayRoute::TrayToggle, 1, 0, runtime::TrayStatus::Active),
+            (TrayRoute::Hotkey, 1, 0, runtime::TrayStatus::Active),
+            (TrayRoute::IpcToggle, 1, 0, runtime::TrayStatus::Active),
+            (TrayRoute::Tick, 0, 0, runtime::TrayStatus::Inactive),
+            (
+                TrayRoute::WifiChanged { active: true },
+                0,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (
+                TrayRoute::ConfigChanged {
+                    policy_changed: false,
+                },
+                0,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (
+                TrayRoute::ProfileLoaded {
+                    policy_changed: true,
+                },
+                0,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (TrayRoute::Resume, 0, 0, runtime::TrayStatus::Inactive),
+            (TrayRoute::Quit, 0, 0, runtime::TrayStatus::Inactive),
+        ];
+        for (route, starts, stops, status) in routes {
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend::default();
+            let mut sink = RecordingSink::default();
+            let snapshot = handle_runtime_route(
+                RuntimeRouteInput {
+                    route,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &bundle,
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("the route returns a snapshot");
+            assert_eq!(sink.calls.len(), 1, "{route:?}");
+            assert_eq!(backend.start_calls, starts, "{route:?}");
+            assert_eq!(backend.stop_calls, stops, "{route:?}");
+            assert_eq!(sink.calls[0].1.status, status, "{route:?}");
+            let lines = status_menu_lines(
+                status,
+                tray_toggle_presentation(
+                    &snapshot,
+                    runtime::schedule_owned(&config.mode, config.schedule_enabled),
+                ),
+                &bundle,
+            );
+            assert_eq!(sink.calls[0].1.menu_text, lines.primary, "{route:?}");
+            assert_eq!(sink.calls[0].1.hint_text, lines.hint, "{route:?}");
+        }
+
+        let mut supervisor = runtime::Supervisor::new();
+        let mut backend = RecordingBackend::default();
+        let mut sink = RecordingSink::default();
+        let startup = handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::Startup,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        );
+        assert!(startup.is_ok());
+        let language = handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::LanguageChanged,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        );
+        assert!(language.is_ok());
+        assert_eq!(backend.start_calls, 0);
+        assert_eq!(backend.stop_calls, 0);
+        assert_eq!(sink.calls.len(), 2);
+    }
+
+    #[test]
+    fn runtime_routes_rebuild_mode_text_from_config_and_language() {
+        let clock = FixedClock(at(10));
+        let config = AppConfig {
+            mode: AppMode::WiFi,
+            ..AppConfig::default()
+        };
+        for (route, locale, expected) in [
+            (TrayRoute::Startup, "en", "Mode: WiFi"),
+            (TrayRoute::Tick, "en", "Mode: WiFi"),
+            (
+                TrayRoute::ConfigChanged {
+                    policy_changed: false,
+                },
+                "en",
+                "Mode: WiFi",
+            ),
+            (TrayRoute::LanguageChanged, "es", "Modo: WiFi"),
+        ] {
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend::default();
+            let mut sink = RecordingSink::default();
+            handle_runtime_route(
+                RuntimeRouteInput {
+                    route: TrayRoute::Startup,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &i18n::create_bundle("en"),
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("startup publishes");
+            sink.calls.clear();
+            handle_runtime_route(
+                RuntimeRouteInput {
+                    route,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &i18n::create_bundle(locale),
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("route publishes");
+            assert_eq!(sink.calls[0].1.mode_text, expected, "{route:?}");
+        }
+    }
+
+    #[test]
+    fn language_change_without_a_snapshot_returns_an_error_without_backend_or_publication() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig::default();
+        let mut supervisor = runtime::Supervisor::new();
+        let mut backend = RecordingBackend::default();
+        let mut sink = RecordingSink::default();
+        let result = handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::LanguageChanged,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        );
+        assert!(result.is_err());
+        assert_eq!(backend.start_calls, 0);
+        assert_eq!(backend.stop_calls, 0);
+        assert!(sink.calls.is_empty());
+    }
+
+    #[test]
+    fn wifi_routes_publish_only_active_or_inactive_states() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig {
+            mode: AppMode::WiFi,
+            schedule_enabled: true,
+            ..AppConfig::default()
+        };
+        for (route, initially_active, expected, menu_text, hint_text) in [
+            (
+                TrayRoute::WifiChanged { active: true },
+                false,
+                runtime::TrayStatus::Active,
+                "🟢 Active",
+                "→ Inactive",
+            ),
+            (
+                TrayRoute::WifiChanged { active: false },
+                true,
+                runtime::TrayStatus::Inactive,
+                "⚪ Inactive",
+                "→ Active",
+            ),
+        ] {
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend {
+                active: initially_active,
+                ..RecordingBackend::default()
+            };
+            let mut sink = RecordingSink::default();
+            let _ = handle_runtime_route(
+                RuntimeRouteInput {
+                    route,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &bundle,
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            );
+            assert_eq!(sink.calls.len(), 1);
+            assert_eq!(sink.calls[0].1.status, expected);
+            assert_eq!(sink.calls[0].1.menu_text, menu_text);
+            assert_eq!(sink.calls[0].1.hint_text, hint_text);
+        }
+    }
+
+    #[test]
+    fn language_change_builds_a_fresh_presentation_from_the_replacement_bundle() {
+        let clock = FixedClock(at(10));
+        let state = snapshot(runtime::TrayStatus::Active);
+        let english = build_tray_presentation_with_schedule(
+            PresentationInput {
+                snapshot: &state,
+                mode: &AppMode::Manual,
+                bundle: &i18n::create_bundle("en"),
+                locale: "en",
+                clock: &clock,
+            },
+            false,
+        );
+        let spanish = build_tray_presentation_with_schedule(
+            PresentationInput {
+                snapshot: &state,
+                mode: &AppMode::Manual,
+                bundle: &i18n::create_bundle("es"),
+                locale: "es",
+                clock: &clock,
+            },
+            false,
+        );
+        assert_eq!(english.menu_text, "🟢 Active");
+        assert_eq!(english.hint_text, "→ Inactive");
+        assert_eq!(spanish.menu_text, "🟢 Activo");
+        assert_eq!(spanish.hint_text, "→ Inactivo");
+        assert_ne!(english.menu_text, spanish.menu_text);
+        assert_ne!(english.hint_text, spanish.hint_text);
+        let lines = status_menu_lines(
+            runtime::TrayStatus::Active,
+            runtime::TrayStatus::Inactive,
+            &i18n::create_bundle("es"),
+        );
+        assert_eq!(spanish.menu_text, lines.primary);
+        assert_eq!(spanish.hint_text, lines.hint);
+        let mut sink = RecordingSink::default();
+        refresh_tray_status(
+            TrayRefreshInput {
+                route: TrayRoute::LanguageChanged,
+                presentation: &spanish,
+            },
+            &mut sink,
+        )
+        .expect("recording sink accepts publication");
+        assert_eq!(sink.calls, vec![(TrayRoute::LanguageChanged, spanish)]);
+    }
+
+    #[test]
+    fn tray_presentations_localize_each_app_mode_without_emoji() {
+        let clock = FixedClock(at(10));
+        let state = snapshot(runtime::TrayStatus::Active);
+        let cases = [
+            ("en", AppMode::Manual, "Mode: Manual"),
+            ("en", AppMode::AlwaysOn, "Mode: Always On"),
+            ("en", AppMode::WiFi, "Mode: WiFi"),
+            ("en", AppMode::Scheduled, "Mode: Manual"),
+            ("es", AppMode::Manual, "Modo: Manual"),
+            ("es", AppMode::AlwaysOn, "Modo: Siempre activo"),
+            ("es", AppMode::WiFi, "Modo: WiFi"),
+            ("es", AppMode::Scheduled, "Modo: Manual"),
+            ("ja", AppMode::Manual, "モード: 手動"),
+            ("ja", AppMode::AlwaysOn, "モード: 常時オン"),
+            ("ja", AppMode::WiFi, "モード: WiFi"),
+            ("ja", AppMode::Scheduled, "モード: 手動"),
+        ];
+        for (locale, mode, expected) in cases {
+            let presentation = build_tray_presentation_with_schedule(
+                PresentationInput {
+                    snapshot: &state,
+                    mode: &mode,
+                    bundle: &i18n::create_bundle(locale),
+                    locale,
+                    clock: &clock,
+                },
+                false,
+            );
+            assert_eq!(presentation.mode_text, expected, "{locale} {mode:?}");
+            if matches!(locale, "es" | "ja") {
+                assert!(!presentation
+                    .mode_text
+                    .chars()
+                    .any(|c| ('\u{1f300}'..='\u{1faff}').contains(&c)));
             }
         }
     }
 
-    // Detect whether WiFi-mode activation changed before overwriting.
-    let wifi_was_enabled = {
-        let cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi_enabled()
-    };
-    let networks_snapshot = new_config.wifi.networks.clone();
-
-    // Update shared config.
-    {
-        let mut cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        *cfg = new_config;
-        cfg.save()?;
+    #[test]
+    fn failed_backend_operations_publish_the_actual_inactive_state() {
+        let clock = FixedClock(at(10));
+        let bundle = i18n::create_bundle("en");
+        let config = AppConfig {
+            mode: AppMode::Manual,
+            schedule_enabled: true,
+            schedule_days: vec!["mon".to_owned()],
+            ..AppConfig::default()
+        };
+        let mut supervisor = runtime::Supervisor::new();
+        let mut backend = RecordingBackend {
+            fail_start: true,
+            ..RecordingBackend::default()
+        };
+        let mut sink = RecordingSink::default();
+        assert!(handle_runtime_route(
+            RuntimeRouteInput {
+                route: TrayRoute::Startup,
+                config: &config,
+                clock: &clock,
+                bundle: &bundle,
+            },
+            &mut supervisor,
+            &mut backend,
+            &mut sink,
+        )
+        .is_err());
+        assert_eq!(sink.calls.len(), 1);
+        assert_eq!(sink.calls[0].1.status, runtime::TrayStatus::Inactive);
+        assert_eq!(sink.calls[0].1.menu_text, "⚪ Inactive");
+        assert_eq!(sink.calls[0].1.hint_text, "→ Active");
     }
 
-    // Restart or stop the WiFi monitor if WiFi-mode activation changed or
-    // the network list changed while WiFi mode stayed active.
-    let wifi_now_enabled = {
-        let cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi_enabled()
-    };
-    let networks_changed = {
-        let cfg = state
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.wifi.networks != networks_snapshot
-    };
-    if wifi_was_enabled != wifi_now_enabled || (wifi_now_enabled && networks_changed) {
-        let mut mon = monitor
-            .lock()
-            .map_err(|e| format!("Monitor lock poisoned: {}", e))?;
-        if wifi_now_enabled {
-            log::info!("WiFi mode enabled or networks changed — restarting monitor");
-            if let Err(e) = mon.restart() {
-                log::warn!("WiFi monitor restart failed: {}", e);
-            }
-        } else {
-            log::info!("WiFi mode disabled — stopping monitor");
-            if let Err(e) = mon.stop() {
-                log::warn!("WiFi monitor stop failed: {}", e);
-            }
+    #[test]
+    fn checkbox_startup_matrix_uses_the_real_supervisor_and_truthful_publication() {
+        let bundle = i18n::create_bundle("en");
+        let cases = [
+            (AppMode::Manual, false, 10, 0, runtime::TrayStatus::Inactive),
+            (AppMode::Manual, false, 18, 0, runtime::TrayStatus::Inactive),
+            (AppMode::Manual, true, 10, 1, runtime::TrayStatus::Active),
+            (AppMode::Manual, true, 18, 0, runtime::TrayStatus::Waiting),
+            (AppMode::AlwaysOn, false, 10, 1, runtime::TrayStatus::Active),
+            (AppMode::AlwaysOn, false, 18, 1, runtime::TrayStatus::Active),
+            (AppMode::AlwaysOn, true, 10, 1, runtime::TrayStatus::Active),
+            (AppMode::AlwaysOn, true, 18, 0, runtime::TrayStatus::Waiting),
+            (
+                AppMode::Scheduled,
+                false,
+                10,
+                0,
+                runtime::TrayStatus::Inactive,
+            ),
+            (AppMode::Scheduled, true, 10, 1, runtime::TrayStatus::Active),
+            (
+                AppMode::Scheduled,
+                true,
+                18,
+                0,
+                runtime::TrayStatus::Waiting,
+            ),
+        ];
+
+        for (mode, schedule_enabled, hour, expected_starts, expected_status) in cases {
+            let config = AppConfig {
+                mode,
+                schedule_enabled,
+                schedule_days: vec!["mon".to_owned()],
+                ..AppConfig::default()
+            };
+            let clock = FixedClock(at(hour));
+            let mut supervisor = runtime::Supervisor::new();
+            let mut backend = RecordingBackend::default();
+            let mut sink = RecordingSink::default();
+
+            let snapshot = handle_runtime_route(
+                RuntimeRouteInput {
+                    route: TrayRoute::Startup,
+                    config: &config,
+                    clock: &clock,
+                    bundle: &bundle,
+                },
+                &mut supervisor,
+                &mut backend,
+                &mut sink,
+            )
+            .expect("startup reconciliation succeeds");
+
+            assert_eq!(
+                backend.start_calls, expected_starts,
+                "{config:?} at {hour}:00"
+            );
+            assert_eq!(backend.stop_calls, 0, "{config:?} at {hour}:00");
+            assert_eq!(snapshot.status, expected_status, "{config:?} at {hour}:00");
+            assert_eq!(sink.calls.len(), 1, "{config:?} at {hour}:00");
+            assert_eq!(
+                sink.calls[0].1.status, expected_status,
+                "{config:?} at {hour}:00"
+            );
         }
     }
-
-    Ok(())
-}
-
-/// Return the engine state name (`"idle"`, `"active"`, …).
-#[tauri::command]
-fn get_engine_state(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
-    let eng = engine
-        .lock()
-        .map_err(|e| format!("Engine lock poisoned: {}", e))?;
-    Ok(eng.state_name().to_string())
-}
-
-/// Toggle the engine on/off and return the new state name.
-#[tauri::command]
-fn toggle_engine(engine: tauri::State<'_, Arc<Mutex<Engine>>>) -> Result<String, String> {
-    let mut eng = engine
-        .lock()
-        .map_err(|e| format!("Engine lock poisoned: {}", e))?;
-    eng.toggle()?;
-    Ok(eng.state_name().to_string())
 }
 
 /// Check whether accessibility permission is granted (macOS-specific).
@@ -176,30 +1769,27 @@ fn close_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn format_translation(bundle: &I18nBundle, key: &str, network: Option<&str>) -> String {
+    let Some(network) = network else {
+        return i18n::t(bundle, key);
+    };
+
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("network", network);
+    i18n::t_with_args(bundle, key, Some(&args))
+}
+
 /// Return a translated string for the given message key.
 #[tauri::command]
 fn get_translation(
     key: String,
+    network: Option<String>,
     bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
 ) -> Result<String, String> {
     let b = bundle
         .lock()
         .map_err(|e| format!("I18n lock poisoned: {}", e))?;
-    Ok(i18n::t(&b, &key))
-}
-
-/// Replace the shared i18n bundle so the frontend can switch languages at runtime.
-#[tauri::command]
-fn set_language(
-    language: String,
-    bundle: tauri::State<'_, Arc<Mutex<I18nBundle>>>,
-) -> Result<(), String> {
-    let new_bundle = i18n::create_bundle(&language);
-    let mut b = bundle
-        .lock()
-        .map_err(|e| format!("I18n lock poisoned: {}", e))?;
-    *b = new_bundle;
-    Ok(())
+    Ok(format_translation(&b, &key, network.as_deref()))
 }
 
 /// Return all saved profiles.
@@ -212,125 +1802,286 @@ fn list_profiles(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<
 }
 
 /// Save the current settings as a named profile.
+#[cfg(desktop)]
 #[tauri::command]
-fn save_profile(
+async fn save_profile(
     name: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
 
-    // Reject empty or excessively long names.
-    let name = name.trim().to_string();
-    if name.is_empty() || name.len() > 64 {
-        return Err("Profile name must be 1–64 characters".to_string());
-    }
-
-    // Cap total profiles.
-    if cfg.profiles.len() >= 50 && !cfg.profiles.iter().any(|p| p.name == name) {
-        return Err("Maximum of 50 profiles reached".to_string());
-    }
-
-    let profile = Profile {
-        name: name.clone(),
-        jiggle_mode: cfg.jiggle_mode.clone(),
-        interval_secs: cfg.interval_secs,
-        schedule_enabled: cfg.schedule_enabled,
-        schedule_start_hour: cfg.schedule_start_hour,
-        schedule_start_minute: cfg.schedule_start_minute,
-        schedule_end_hour: cfg.schedule_end_hour,
-        schedule_end_minute: cfg.schedule_end_minute,
-        schedule_days: cfg.schedule_days.clone(),
-    };
-
-    // Replace if a profile with the same name exists, otherwise append.
-    if let Some(existing) = cfg.profiles.iter_mut().find(|p| p.name == name) {
-        *existing = profile;
-    } else {
-        cfg.profiles.push(profile);
-    }
-    cfg.active_profile = name;
-    cfg.save()
+        let edit = move |config: &mut AppConfig| {
+            let name = name.trim().to_string();
+            if name.is_empty() || name.len() > 64 {
+                return Err("Profile name must be 1–64 characters".to_owned());
+            }
+            if config.profiles.len() >= 50 && !config.profiles.iter().any(|p| p.name == name) {
+                return Err("Maximum of 50 profiles reached".to_owned());
+            }
+            let profile = Profile {
+                name: name.clone(),
+                jiggle_mode: config.jiggle_mode.clone(),
+                interval_secs: config.interval_secs,
+                schedule_enabled: config.schedule_enabled,
+                schedule_start_hour: config.schedule_start_hour,
+                schedule_start_minute: config.schedule_start_minute,
+                schedule_end_hour: config.schedule_end_hour,
+                schedule_end_minute: config.schedule_end_minute,
+                schedule_days: config.schedule_days.clone(),
+            };
+            if let Some(existing) = config.profiles.iter_mut().find(|p| p.name == name) {
+                *existing = profile;
+            } else {
+                config.profiles.push(profile);
+            }
+            config.active_profile = name;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Other, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("profile save task failed: {error}"))?
 }
 
-/// Load a named profile into the current settings.
+#[cfg(desktop)]
 #[tauri::command]
-fn load_profile(
-    name: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+async fn toggle_engine(runtime: tauri::State<'_, owner::RuntimeHandle>) -> Result<String, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let reply = runtime.request(TrayRoute::IpcToggle)?;
+        let reply = reply.wait(owner::REQUEST_TIMEOUT)?;
+        if let Some(error) = reply.error {
+            return Err(error);
+        }
+        state_name(reply.snapshot)
+    })
+    .await
+    .map_err(|error| format!("toggle task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn get_engine_state(
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<String, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let reply = runtime.query()?.wait(owner::REQUEST_TIMEOUT)?;
+        state_name(reply.snapshot)
+    })
+    .await
+    .map_err(|error| format!("state query task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn save_config(
+    app: tauri::AppHandle,
+    new_config: AppConfig,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+    monitor: tauri::State<'_, Arc<Mutex<wifi::WifiMonitor>>>,
 ) -> Result<(), String> {
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let runtime = runtime.inner().clone();
+    let monitor = monitor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
 
-    let profile = cfg
-        .profiles
-        .iter()
-        .find(|p| p.name == name)
-        .cloned()
-        .ok_or_else(|| format!("Profile '{}' not found", name))?;
+        let edit = move |config: &mut AppConfig| {
+            *config = new_config;
+            Ok(())
+        };
+        let effects = move |previous: &AppConfig, candidate: &AppConfig| {
+            apply_config_effects(&app, &monitor, previous, candidate);
+        };
+        let pending = runtime.update_config(ConfigOrigin::Settings, edit, effects)?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("config save task failed: {error}"))?
+}
 
-    cfg.jiggle_mode = profile.jiggle_mode;
-    cfg.interval_secs = profile.interval_secs;
-    cfg.schedule_enabled = profile.schedule_enabled;
-    cfg.schedule_start_hour = profile.schedule_start_hour;
-    cfg.schedule_start_minute = profile.schedule_start_minute;
-    cfg.schedule_end_hour = profile.schedule_end_hour;
-    cfg.schedule_end_minute = profile.schedule_end_minute;
-    cfg.schedule_days = profile.schedule_days;
-    cfg.active_profile = name;
-    cfg.save()
+#[cfg(desktop)]
+fn apply_config_effects(
+    app: &tauri::AppHandle,
+    monitor: &Arc<Mutex<wifi::WifiMonitor>>,
+    previous: &AppConfig,
+    candidate: &AppConfig,
+) {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let autostart_result = if candidate.autostart {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    if let Err(error) = autostart_result {
+        log::warn!("Failed to sync autostart: {error}");
+    }
+
+    let wifi_changed = previous.wifi_enabled() != candidate.wifi_enabled()
+        || (candidate.wifi_enabled() && previous.wifi.networks != candidate.wifi.networks);
+    if !wifi_changed {
+        return;
+    }
+    match monitor.lock() {
+        Ok(mut monitor) if candidate.wifi_enabled() => {
+            if let Err(error) = monitor.restart() {
+                log::warn!("WiFi monitor restart failed: {error}");
+            }
+        }
+        Ok(mut monitor) => {
+            if let Err(error) = monitor.stop() {
+                log::warn!("WiFi monitor stop failed: {error}");
+            }
+        }
+        Err(_) => log::error!("WiFi monitor lock poisoned"),
+    }
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn load_profile(
+    name: String,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<(), String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+
+        let edit = move |config: &mut AppConfig| {
+            let profile = config
+                .profiles
+                .iter()
+                .find(|profile| profile.name == name)
+                .cloned()
+                .ok_or_else(|| format!("Profile '{name}' not found"))?;
+            config.jiggle_mode = profile.jiggle_mode;
+            config.interval_secs = profile.interval_secs;
+            config.schedule_enabled = profile.schedule_enabled;
+            config.schedule_start_hour = profile.schedule_start_hour;
+            config.schedule_start_minute = profile.schedule_start_minute;
+            config.schedule_end_hour = profile.schedule_end_hour;
+            config.schedule_end_minute = profile.schedule_end_minute;
+            config.schedule_days = profile.schedule_days;
+            config.active_profile = name;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Profile, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("profile load task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_language(
+    language: String,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
+) -> Result<(), String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+
+        let edit = move |config: &mut AppConfig| {
+            config.language = language;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Language, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("language change task failed: {error}"))?
+}
+
+#[cfg(desktop)]
+fn state_name(snapshot: Option<runtime::RuntimeSnapshot>) -> Result<String, String> {
+    let snapshot = snapshot.ok_or_else(|| "runtime has no snapshot".to_owned())?;
+    Ok(if snapshot.engine_active {
+        "active"
+    } else {
+        "idle"
+    }
+    .to_owned())
 }
 
 /// Delete a named profile.
+#[cfg(desktop)]
 #[tauri::command]
-fn delete_profile(
+async fn delete_profile(
     name: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
 
-    cfg.profiles.retain(|p| p.name != name);
-    if cfg.active_profile == name {
-        cfg.active_profile = String::from("Default");
-    }
-    cfg.save()
+        let edit = move |config: &mut AppConfig| {
+            config.profiles.retain(|profile| profile.name != name);
+            if config.active_profile == name {
+                config.active_profile = "Default".to_owned();
+            }
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Other, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("profile deletion task failed: {error}"))?
 }
 
 /// Update the global hotkey at runtime: unregister the old shortcut, register
 /// the new one, and persist the change.
+#[cfg(desktop)]
 #[tauri::command]
-fn update_global_hotkey(
+async fn update_global_hotkey(
     app: tauri::AppHandle,
     hotkey: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    runtime: tauri::State<'_, owner::RuntimeHandle>,
 ) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use owner::ConfigOrigin;
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    // Parse the new shortcut string.
-    let new_shortcut =
-        parse_shortcut_string(&hotkey).ok_or_else(|| format!("Invalid shortcut: {}", hotkey))?;
-
-    // Unregister all existing shortcuts, then register the new one.
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-
-    gs.register(new_shortcut)
-        .map_err(|e| format!("Failed to register shortcut: {}", e))?;
-
-    // Persist to config.
-    {
-        let mut cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        cfg.global_hotkey = hotkey;
-        cfg.save()?;
-    }
-
-    Ok(())
+        let new_shortcut =
+            parse_shortcut_string(&hotkey).ok_or_else(|| format!("Invalid shortcut: {hotkey}"))?;
+        let shortcuts = app.global_shortcut();
+        let _ = shortcuts.unregister_all();
+        shortcuts
+            .register(new_shortcut)
+            .map_err(|error| format!("Failed to register shortcut: {error}"))?;
+        let edit = move |config: &mut AppConfig| {
+            config.global_hotkey = hotkey;
+            Ok(())
+        };
+        let pending = runtime.update_config(ConfigOrigin::Other, edit, |_, _| {})?;
+        pending
+            .wait(owner::REQUEST_TIMEOUT)?
+            .error
+            .map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|error| format!("hotkey update task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -495,15 +2246,19 @@ fn show_settings_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
-    } else if let Err(e) =
-        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    } else {
+        match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
             .title("Stay Awake Settings")
             .inner_size(480.0, 720.0)
             .resizable(false)
             .center()
             .build()
-    {
-        log::error!("Failed to create settings window: {}", e);
+        {
+            Ok(win) => {
+                let _ = win.set_focus();
+            }
+            Err(e) => log::error!("Failed to create settings window: {}", e),
+        }
     }
 }
 
@@ -518,15 +2273,19 @@ fn show_about_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("about") {
         let _ = win.show();
         let _ = win.set_focus();
-    } else if let Err(e) =
-        WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
+    } else {
+        match WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
             .title("About Stay Awake")
             .inner_size(360.0, 340.0)
             .resizable(false)
             .center()
             .build()
-    {
-        log::error!("Failed to create about window: {}", e);
+        {
+            Ok(win) => {
+                let _ = win.set_focus();
+            }
+            Err(e) => log::error!("Failed to create about window: {}", e),
+        }
     }
 }
 
@@ -555,6 +2314,8 @@ fn set_macos_regular_app() {
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
 
         // Set the app icon programmatically (works even in dev mode without a bundle).
         let icon_bytes = include_bytes!("../icons/icon.png");
@@ -578,24 +2339,7 @@ fn set_macos_accessory_app() {
     }
 }
 
-/// Create a dimmed version of an RGBA icon by reducing opacity.
-fn create_dimmed_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
-    let rgba = icon.rgba().to_vec();
-    let mut dimmed = rgba.clone();
-    // Reduce alpha channel to ~40% for a "greyed out" look
-    for i in (3..dimmed.len()).step_by(4) {
-        dimmed[i] = (dimmed[i] as f32 * 0.4) as u8;
-    }
-    tauri::image::Image::new_owned(dimmed, icon.width(), icon.height())
-}
-
-/// Returns true if the current wall-clock time falls within the schedule
-/// window defined in `cfg`. Used at startup to decide whether to auto-start
-/// the engine for `AppMode::Scheduled`.
-///
-/// Delegates to `engine::is_within_schedule` for the actual day/time check,
-/// but returns `false` early when `schedule_enabled` is not set — preventing
-/// an accidental auto-start when the schedule feature is off.
+#[cfg(test)]
 fn is_within_schedule(cfg: &AppConfig) -> bool {
     cfg.schedule_enabled && engine::is_within_schedule(cfg)
 }
@@ -667,8 +2411,11 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_config,
+            #[cfg(desktop)]
             save_config,
+            #[cfg(desktop)]
             get_engine_state,
+            #[cfg(desktop)]
             toggle_engine,
             check_accessibility,
             request_accessibility,
@@ -676,11 +2423,16 @@ pub fn run() {
             set_autostart_enabled,
             close_settings_window,
             get_translation,
+            #[cfg(desktop)]
             set_language,
             list_profiles,
+            #[cfg(desktop)]
             save_profile,
+            #[cfg(desktop)]
             load_profile,
+            #[cfg(desktop)]
             delete_profile,
+            #[cfg(desktop)]
             update_global_hotkey,
             get_app_version,
             get_platform_os,
@@ -704,10 +2456,23 @@ pub fn run() {
             let shared_config: Arc<Mutex<AppConfig>> = Arc::new(Mutex::new(loaded_config.clone()));
 
             let bundle = i18n::create_bundle(&loaded_config.language);
-            let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
 
-            let mouse_driver = platform::create_mouse_driver();
-            let power_inhibitor = platform::create_power_inhibitor();
+            let clock: Arc<dyn schedule::Clock> = Arc::new(schedule::SystemClock);
+            let initial_snapshot = initial_runtime_snapshot(InitialSnapshotInput {
+                config: &loaded_config,
+                clock: clock.as_ref(),
+            })?;
+            let initial_presentation = build_tray_presentation_with_schedule(
+                PresentationInput {
+                    snapshot: &initial_snapshot,
+                    mode: &loaded_config.mode,
+                    bundle: &bundle,
+                    locale: &loaded_config.language,
+                    clock: clock.as_ref(),
+                },
+                runtime::schedule_owned(&loaded_config.mode, loaded_config.schedule_enabled),
+            );
+            let shared_bundle: Arc<Mutex<I18nBundle>> = Arc::new(Mutex::new(bundle));
             let perm_checker: Arc<dyn PermissionChecker> =
                 Arc::from(platform::create_permission_checker());
 
@@ -720,42 +2485,8 @@ pub fn run() {
                 );
             }
 
-            let engine = Engine::new(mouse_driver, power_inhibitor, Arc::clone(&shared_config));
-            let shared_engine: Arc<Mutex<Engine>> = Arc::new(Mutex::new(engine));
-
-            // Auto-start the engine based on the current AppMode.
-            {
-                let cfg = shared_config.lock().map(|c| c.clone()).unwrap_or_default();
-                match cfg.mode {
-                    AppMode::AlwaysOn => {
-                        if let Ok(mut eng) = shared_engine.lock() {
-                            if let Err(e) = eng.start() {
-                                log::warn!("Engine auto-start (AlwaysOn) failed: {}", e);
-                            }
-                        }
-                    }
-                    AppMode::Scheduled => {
-                        if is_within_schedule(&cfg) {
-                            if let Ok(mut eng) = shared_engine.lock() {
-                                if let Err(e) = eng.start() {
-                                    log::warn!("Engine auto-start (Scheduled) failed: {}", e);
-                                }
-                            }
-                        } else {
-                            log::info!(
-                                "Engine auto-start: Scheduled mode, outside window — not starting"
-                            );
-                        }
-                    }
-                    AppMode::Manual | AppMode::WiFi => {
-                        log::info!("Engine auto-start: {:?} mode — not starting", cfg.mode);
-                    }
-                }
-            }
-
-            // Manage state so Tauri commands can access it.
+            // Managed mirrors are read by existing compatibility commands.
             app.manage(Arc::clone(&shared_config));
-            app.manage(Arc::clone(&shared_engine));
             app.manage(Arc::clone(&perm_checker));
             app.manage(Arc::clone(&shared_bundle));
 
@@ -763,21 +2494,6 @@ pub fn run() {
                 wifi::WifiMonitor::new(Arc::clone(&shared_config), app.handle().clone());
             let shared_wifi_monitor: Arc<Mutex<wifi::WifiMonitor>> =
                 Arc::new(Mutex::new(wifi_monitor));
-
-            // Start the monitor if WiFi feature is enabled.
-            {
-                let cfg = shared_config
-                    .lock()
-                    .map_err(|e| format!("Config lock: {}", e))?;
-                if cfg.wifi_enabled() {
-                    let mut monitor = shared_wifi_monitor
-                        .lock()
-                        .map_err(|e| format!("Monitor lock: {}", e))?;
-                    if let Err(e) = monitor.start() {
-                        log::warn!("WiFi monitor startup failed: {}", e);
-                    }
-                }
-            }
 
             app.manage(Arc::clone(&shared_wifi_monitor));
 
@@ -790,39 +2506,13 @@ pub fn run() {
 
             {
                 use tauri::Listener;
-                let engine_for_wifi = Arc::clone(&shared_engine);
-                let config_for_wifi = Arc::clone(&shared_config);
+                let app_handle = app.handle().clone();
                 app.listen("wifi-state-changed", move |event| {
                     if let Ok(payload) = serde_json::from_str::<WifiStateEvent>(event.payload()) {
-                        let mode = config_for_wifi
-                            .lock()
-                            .map(|c| c.mode.clone())
-                            .unwrap_or(AppMode::Manual);
-
-                        // Only act when WiFi Mode is active.
-                        if mode != AppMode::WiFi {
-                            return;
-                        }
-
-                        if let Ok(mut eng) = engine_for_wifi.lock() {
-                            if payload.active {
-                                if !eng.is_active() {
-                                    log::info!(
-                                        "WiFi: registered network {:?} — starting engine",
-                                        payload.ssid
-                                    );
-                                    if let Err(e) = eng.start() {
-                                        log::error!("WiFi-triggered engine start failed: {}", e);
-                                    }
-                                }
-                            } else if eng.is_active() {
-                                log::info!(
-                                    "WiFi: unregistered/disconnected {:?} — stopping engine",
-                                    payload.ssid
-                                );
-                                if let Err(e) = eng.stop() {
-                                    log::error!("WiFi-triggered engine stop failed: {}", e);
-                                }
+                        let _ = payload.active;
+                        if let Some(runtime) = app_handle.try_state::<owner::RuntimeHandle>() {
+                            if let Err(error) = runtime.post_wifi(owner::WifiObservation { ssid: payload.ssid }) {
+                                log::error!("WiFi update could not reach runtime: {error}");
                             }
                         }
                     }
@@ -838,11 +2528,18 @@ pub fn run() {
                 let tray_bundle = i18n::create_bundle(&loaded_config.language);
                 let tr = |id: &str| i18n::t(&tray_bundle, id);
 
-                let text_inactive = format!("\u{25b6}\u{fe0f} {}", tr("tray-start"));
-                let text_active = format!("\u{1f7e2} {}", tr("tray-running"));
-
                 let toggle_item =
-                    MenuItem::with_id(app, "toggle_active", &text_active, true, None::<&str>)?;
+                    MenuItem::with_id(
+                        app,
+                        "toggle_active",
+                        &initial_presentation.menu_text,
+                        true,
+                        None::<&str>,
+                    )?;
+                #[rustfmt::skip]
+                let toggle_hint = MenuItem::with_id(app, "toggle_hint", &initial_presentation.hint_text, false, None::<&str>)?;
+                #[rustfmt::skip]
+                let mode_info = MenuItem::with_id(app, "mode_info", &initial_presentation.mode_text, false, None::<&str>)?;
 
                 let mode_power = MenuItem::with_id(
                     app,
@@ -897,6 +2594,7 @@ pub fn run() {
                     None::<&str>,
                 )?;
 
+                let sep0 = PredefinedMenuItem::separator(app)?;
                 let sep1 = PredefinedMenuItem::separator(app)?;
                 let sep2 = PredefinedMenuItem::separator(app)?;
                 let sep3 = PredefinedMenuItem::separator(app)?;
@@ -912,6 +2610,9 @@ pub fn run() {
                     app,
                     &[
                         &toggle_item,
+                        &toggle_hint,
+                        &sep0,
+                        &mode_info,
                         &sep1,
                         &mode_submenu,
                         &sep2,
@@ -924,36 +2625,12 @@ pub fn run() {
                     ],
                 )?;
 
-                // Translated tooltip strings for the tray-menu event closure.
-                let tip_active = tr("tray-tooltip-active");
-                let tip_inactive = tr("tray-tooltip-inactive");
                 let acc_ok_text = format!("\u{1f7e2} {}", tr(accessibility_ok_key()));
 
-                // Clones for the tray-menu closure.
-                let engine_for_tray = Arc::clone(&shared_engine);
-                let config_for_tray = Arc::clone(&shared_config);
                 let perm_for_tray = Arc::clone(&perm_checker);
-                let toggle_clone = toggle_item.clone();
                 let accessibility_clone = accessibility_item.clone();
-                let text_active_clone = text_active.clone();
-                let text_inactive_clone = text_inactive.clone();
-                // Extra clones for the global shortcut handler.
-                let tip_active_for_sc = tip_active.clone();
-                let tip_inactive_for_sc = tip_inactive.clone();
 
-                let tray_icon_bytes = include_bytes!("../icons/tray-icon@2x.png");
-                let tray_img = tauri::image::Image::from_bytes(tray_icon_bytes).expect("tray icon");
-                let active_icon = tauri::image::Image::new_owned(
-                    tray_img.rgba().to_vec(),
-                    tray_img.width(),
-                    tray_img.height(),
-                );
-                let inactive_icon = create_dimmed_icon(&tray_img);
-                let active_icon_clone = active_icon.clone();
-                let inactive_icon_clone = inactive_icon.clone();
-                // Extra clones for the global shortcut handler closure.
-                let active_icon_for_sc = active_icon.clone();
-                let inactive_icon_for_sc = inactive_icon.clone();
+                let tray_images = TrayImages::load()?;
 
                 // Under `panic = "abort"` (release profile), a missing
                 // libayatana-appindicator3 causes an unavoidable abort inside
@@ -980,60 +2657,61 @@ pub fn run() {
                     }));
                 }
 
-                TrayIconBuilder::with_id("main")
-                    .icon(active_icon)
-                    .tooltip(&tip_active)
+                let tray = TrayIconBuilder::with_id("main")
+                    .icon(match tray_tint_for(initial_presentation.icon) {
+                        TrayTint::Full => tray_images.full.clone(),
+                        TrayTint::Dimmed => tray_images.dimmed.clone(),
+                    })
+                    .tooltip(&initial_presentation.tooltip)
                     .menu(&menu)
-                    .show_menu_on_left_click(true)
+                    .show_menu_on_left_click(true);
+                let tray = tray
                     .on_menu_event(move |app, event| {
-                        match event.id().as_ref() {
-                            "toggle_active" => {
-                                if let Ok(mut eng) = engine_for_tray.lock() {
-                                    if let Err(e) = eng.toggle() {
-                                        log::error!("Engine toggle failed: {}", e);
-                                        return;
-                                    }
-                                    let active = eng.is_active();
-                                    let label = if active {
-                                        &text_active_clone
-                                    } else {
-                                        &text_inactive_clone
-                                    };
-                                    let _ = toggle_clone.set_text(label);
-                                    if let Some(tray) = app.tray_by_id("main") {
-                                        let tip = if active { &tip_active } else { &tip_inactive };
-                                        let _ = tray.set_tooltip(Some(tip.as_str()));
-                                        let icon = if active {
-                                            active_icon_clone.clone()
-                                        } else {
-                                            inactive_icon_clone.clone()
-                                        };
-                                        let _ = tray.set_icon(Some(icon));
-                                    }
-                                }
-                            }
+                        use owner::ConfigOrigin;
+
+                        let jiggle_mode = match event.id().as_ref() {
                             "mode_power" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::PowerOnly;
-                                    let _ = cfg.save();
-                                }
+                                Some(JiggleMode::PowerOnly)
                             }
                             "mode_subtle" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::MouseSubtle;
-                                    let _ = cfg.save();
-                                }
+                                Some(JiggleMode::MouseSubtle)
                             }
                             "mode_zen" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::MouseZen;
-                                    let _ = cfg.save();
-                                }
+                                Some(JiggleMode::MouseZen)
                             }
                             "mode_circle" => {
-                                if let Ok(mut cfg) = config_for_tray.lock() {
-                                    cfg.jiggle_mode = JiggleMode::MouseCircle;
-                                    let _ = cfg.save();
+                                Some(JiggleMode::MouseCircle)
+                            }
+                            _ => None,
+                        };
+                        if let Some(jiggle_mode) = jiggle_mode {
+                            if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                let runtime = runtime.inner().clone();
+                                std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                                    let pending = runtime.update_config(ConfigOrigin::Other,
+                                        |config| {
+                                            config.jiggle_mode = jiggle_mode;
+                                            Ok(())
+                                        }, |_, _| {});
+                                    let result = pending
+                                        .and_then(|pending| pending.wait(owner::REQUEST_TIMEOUT))
+                                        .and_then(|reply| reply.error.map_or(Ok(()), Err));
+                                    if let Err(error) = result {
+                                        log::error!("Jiggle mode update failed: {error}");
+                                    }
+                                }));
+                            }
+                            return;
+                        }
+
+                        match event.id().as_ref() {
+                            "toggle_active" => {
+                                if let Some(runtime) = app.try_state::<owner::RuntimeHandle>() {
+                                    if let Err(error) = runtime.post(TrayRoute::TrayToggle) {
+                                        log::error!(
+                                            "Engine toggle could not reach runtime: {error}"
+                                        );
+                                    }
                                 }
                             }
                             "grant_accessibility" => {
@@ -1063,99 +2741,112 @@ pub fn run() {
                                 show_about_window(app);
                             }
                             "quit" => {
-                                // Ensure the engine is stopped before exiting.
-                                if let Ok(mut eng) = engine_for_tray.lock() {
-                                    let _ = eng.stop();
+                                if let Err(error) = request_app_exit(app, 0) {
+                                    log::error!("Failed to request app exit: {error}");
                                 }
-                                app.exit(0);
                             }
                             _ => {}
                         }
                     })
                     .build(app)?;
 
-                {
-                    use tauri_plugin_global_shortcut::{
-                        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-                    };
+                let sink = NativeTraySink::new(
+                    app.handle().clone(),
+                    NativeTrayTargets {
+                        tray,
+                        status_item: toggle_item.clone(),
+                        hint_item: toggle_hint.clone(),
+                        mode_item: mode_info.clone(),
+                        images: tray_images,
+                    },
+                );
+                sink.apply_initial(&initial_presentation)?;
+                let runtime = owner::RuntimeHandle::spawn(owner::OwnerStart {
+                    config: Arc::clone(&shared_config),
+                    bundle: Arc::clone(&shared_bundle),
+                    clock: Arc::clone(&clock),
+                    backend_factory: Box::new(|config, clock| {
+                        Box::new(Engine::new_with_clock(
+                            platform::create_mouse_driver(),
+                            platform::create_power_inhibitor(),
+                            Arc::new(Mutex::new(config)),
+                            clock,
+                        ))
+                    }),
+                    sink: Box::new(sink),
+                })?;
+                app.manage(runtime.clone());
+                let post_spawn_steps: Vec<PostSpawnStep<'_>> = vec![Box::new(|| {
+                        use tauri_plugin_global_shortcut::{
+                            Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                        };
 
-                    // Try parsing the user-configured hotkey; fall back to default.
-                    let shortcut = parse_shortcut_string(&loaded_config.global_hotkey)
-                        .unwrap_or_else(|| {
-                            log::warn!(
-                                "Could not parse hotkey \"{}\"; using default CmdOrCtrl+Shift+J",
-                                loaded_config.global_hotkey
-                            );
-                            #[cfg(target_os = "macos")]
-                            let modifier = Modifiers::META;
-                            #[cfg(not(target_os = "macos"))]
-                            let modifier = Modifiers::CONTROL;
+                        let shortcut = parse_shortcut_string(&loaded_config.global_hotkey)
+                            .unwrap_or_else(|| {
+                                log::warn!(
+                                    "Could not parse hotkey \"{}\"; using default CmdOrCtrl+Shift+J",
+                                    loaded_config.global_hotkey
+                                );
+                                #[cfg(target_os = "macos")]
+                                let modifier = Modifiers::META;
+                                #[cfg(not(target_os = "macos"))]
+                                let modifier = Modifiers::CONTROL;
+                                Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
+                            });
 
-                            Shortcut::new(Some(modifier | Modifiers::SHIFT), Code::KeyJ)
-                        });
-
-                    // Clones for the shortcut handler closure (tray UI feedback).
-                    let engine_for_shortcut = Arc::clone(&shared_engine);
-                    let sc_text_active = text_active;
-                    let sc_text_inactive = text_inactive;
-                    let sc_tip_active = tip_active_for_sc;
-                    let sc_tip_inactive = tip_inactive_for_sc;
-                    let sc_active_icon = active_icon_for_sc;
-                    let sc_inactive_icon = inactive_icon_for_sc;
-                    let toggle_for_shortcut = toggle_item;
-
-                    app.handle().plugin(
-                        tauri_plugin_global_shortcut::Builder::new()
-                            .with_handler(move |app, _shortcut, event| {
-                                if matches!(event.state(), ShortcutState::Pressed) {
-                                    if let Ok(mut eng) = engine_for_shortcut.lock() {
-                                        if let Err(e) = eng.toggle() {
-                                            log::error!("Engine toggle via shortcut failed: {}", e);
-                                            return;
+                        app.handle()
+                            .plugin(
+                                tauri_plugin_global_shortcut::Builder::new()
+                                    .with_handler(move |app, _shortcut, event| {
+                                        if matches!(event.state(), ShortcutState::Pressed) {
+                                            if let Some(runtime) =
+                                                app.try_state::<owner::RuntimeHandle>()
+                                            {
+                                                if let Err(error) = runtime.post(TrayRoute::Hotkey) {
+                                                    log::error!(
+                                                        "Hotkey could not reach runtime: {error}"
+                                                    );
+                                                }
+                                            }
                                         }
-                                        let active = eng.is_active();
-                                        // Update toggle menu item text.
-                                        let label = if active {
-                                            &sc_text_active
-                                        } else {
-                                            &sc_text_inactive
-                                        };
-                                        let _ = toggle_for_shortcut.set_text(label);
-                                        // Update tray icon and tooltip.
-                                        if let Some(tray) = app.tray_by_id("main") {
-                                            let tip = if active {
-                                                &sc_tip_active
-                                            } else {
-                                                &sc_tip_inactive
-                                            };
-                                            let _ = tray.set_tooltip(Some(tip.as_str()));
-                                            let icon = if active {
-                                                sc_active_icon.clone()
-                                            } else {
-                                                sc_inactive_icon.clone()
-                                            };
-                                            let _ = tray.set_icon(Some(icon));
-                                        }
-                                        log::info!(
-                                            "Global shortcut toggled engine → {}",
-                                            eng.state_name()
-                                        );
-                                    }
-                                }
-                            })
-                            .build(),
-                    )?;
+                                    })
+                                    .build(),
+                            )
+                            .map_err(|error| {
+                                format!("failed to install global shortcut plugin: {error}")
+                            })?;
+                        app.global_shortcut().register(shortcut).map_err(|error| {
+                            format!("failed to register global shortcut: {error}")
+                        })?;
+                        app.handle()
+                            .plugin(tauri_plugin_autostart::init(
+                                tauri_plugin_autostart::MacosLauncher::AppleScript,
+                                None,
+                            ))
+                            .map_err(|error| format!("failed to install autostart plugin: {error}"))?;
 
-                    app.global_shortcut().register(shortcut)?;
+                        let wifi_enabled = shared_config
+                            .lock()
+                            .map_err(|error| format!("Config lock: {error}"))?
+                            .wifi_enabled();
+                        if wifi_enabled {
+                            let mut monitor = shared_wifi_monitor
+                                .lock()
+                                .map_err(|error| format!("Monitor lock: {error}"))?;
+                            if let Err(error) = monitor.start() {
+                                log::warn!("WiFi monitor startup failed: {error}");
+                            }
+                        }
+                        Ok(())
+                    })];
+                let setup_result = run_post_spawn_steps(
+                    &runtime,
+                    post_spawn_steps,
+                    |runtime| runtime.shutdown(owner::SHUTDOWN_TIMEOUT),
+                );
+                if let Err(error) = setup_result {
+                    return Err(error.into());
                 }
-            }
-
-            #[cfg(desktop)]
-            {
-                app.handle().plugin(tauri_plugin_autostart::init(
-                    tauri_plugin_autostart::MacosLauncher::AppleScript,
-                    None,
-                ))?;
             }
 
             log::info!("Stay Awake initialised");
@@ -1167,12 +2858,35 @@ pub fn run() {
             #[allow(unused_variables)]
             |app, event| {
                 match &event {
-                    tauri::RunEvent::ExitRequested { api, code, .. }
-                        // Only prevent exit when triggered by all windows closing (code = None).
-                        // Allow explicit app.exit() calls (code = Some) so Quit works.
-                        if code.is_none() => {
+                    tauri::RunEvent::ExitRequested { api, code, .. } => {
+                        if code.is_none() {
                             api.prevent_exit();
                         }
+                        #[cfg(desktop)]
+                        if code.is_some() {
+                            match app.try_state::<owner::RuntimeHandle>() {
+                                Some(runtime) if runtime.exit_ready() => {}
+                                Some(_) => {
+                                    api.prevent_exit();
+                                    if let Err(error) = request_app_exit(app, code.unwrap_or(0)) {
+                                        log::error!("Failed to request app exit: {error}");
+                                    }
+                                }
+                                None => {
+                                    api.prevent_exit();
+                                    log::error!("Exit requested before runtime initialization");
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(desktop)]
+                    tauri::RunEvent::Exit
+                        if app
+                            .try_state::<owner::RuntimeHandle>()
+                            .is_some_and(|runtime| !runtime.exit_ready()) =>
+                    {
+                        log::error!("Application exited before runtime shutdown completed");
+                    }
                     #[cfg(target_os = "macos")]
                     tauri::RunEvent::Ready => {
                         // Set Accessory policy AFTER Tauri finishes setup,
@@ -1297,11 +3011,13 @@ mod accessibility_key_selection_tests {
 mod core_helper_tests {
     /*
      * @spec-handoff
-     * @interface parse_shortcut_string(), create_dimmed_icon(), is_within_schedule()
+     * @interface parse_shortcut_string(), is_within_schedule(), get_translation()
+     * @interface format_translation(Bundle, key, network) -> String
      * @behavior
      *   - Shortcut aliases produce the same registered shortcut and invalid parts are rejected.
-     *   - A dimmed icon preserves RGB bytes and scales each alpha byte to 40 percent.
      *   - Disabled schedules do not permit scheduled autostart.
+     *   - Network names are passed to Fluent as arguments without JavaScript-style expansion.
+     *   - get_translation forwards its optional network argument to the formatting seam.
      * @edge-cases
      *   - Empty or unknown shortcut parts are invalid.
      */
@@ -1329,18 +3045,935 @@ mod core_helper_tests {
     }
 
     #[test]
-    fn dimmed_icon_preserves_rgb_and_scales_alpha() {
-        let icon = tauri::image::Image::new_owned(vec![1, 2, 3, 255, 4, 5, 6, 100], 2, 1);
-        let dimmed = create_dimmed_icon(&icon);
-        assert_eq!(dimmed.rgba(), &[1, 2, 3, 102, 4, 5, 6, 40]);
-    }
-
-    #[test]
     fn disabled_schedule_does_not_trigger_scheduled_autostart() {
         let config = AppConfig {
             schedule_enabled: false,
             ..AppConfig::default()
         };
         assert!(!is_within_schedule(&config));
+    }
+
+    #[test]
+    fn translation_arguments_keep_network_names_literal_in_english_and_spanish() {
+        for locale in ["en", "es"] {
+            for network in ["$&", "$$", "$1", "<b>x</b>"] {
+                let rendered = format_translation(
+                    &i18n::create_bundle(locale),
+                    "settings-wifi-remove-label",
+                    Some(network),
+                );
+                assert_eq!(
+                    rendered.matches(network).count(),
+                    1,
+                    "{locale} must include {network:?} exactly once"
+                );
+                assert!(!rendered.contains("{ $network }"));
+                assert!(!rendered.contains('\u{2068}') && !rendered.contains('\u{2069}'));
+            }
+        }
+    }
+
+    #[test]
+    fn get_translation_forwards_the_optional_network_to_format_translation() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("lib.rs is readable");
+        let start = source
+            .find("fn get_translation(")
+            .expect("get_translation exists");
+        let command = source[start..]
+            .split("/// Return all saved profiles.")
+            .next()
+            .expect("get_translation ends before profile commands")
+            .replace("//", "");
+        assert!(command.contains("format_translation(&b, &key, network.as_deref())"));
+    }
+}
+
+/**
+ * @spec-handoff
+ * @interface tray_tint_for(icon: TrayIcon) -> TrayTint
+ * @behavior
+ *   - Active is full-strength and inactive or waiting tray states are alpha-dimmed.
+ *   - The original tray PNGs are loaded without template rendering.
+ *
+ * @edge-cases
+ *   - The dimmer preserves RGB and image dimensions while multiplying alpha by 0.4.
+ *
+ * @see ../icons/tray-icon@2x.png
+ */
+#[cfg(test)]
+mod tray_icon_contract_tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    const RETIRED_SILHOUETTES: [&str; 9] = [
+        "tray-active.png",
+        "tray-active@2x.png",
+        "tray-inactive.png",
+        "tray-inactive@2x.png",
+        "tray-waiting.png",
+        "tray-waiting@2x.png",
+        "tray-linux-active.png",
+        "tray-linux-inactive.png",
+        "tray-linux-waiting.png",
+    ];
+
+    fn icons_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("icons")
+    }
+
+    fn production_source() -> String {
+        let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
+            .expect("lib.rs is readable");
+        source
+            .split("#[cfg(test)]\nmod tray_icon_contract_tests")
+            .next()
+            .expect("production source precedes this contract")
+            .to_owned()
+    }
+
+    #[test]
+    fn requires_original_tray_png_assets_and_removes_silhouettes() {
+        for name in ["tray-icon.png", "tray-icon@2x.png", "tray-icon-dark.png"] {
+            assert!(
+                icons_dir().join(name).is_file(),
+                "missing original tray asset {name}"
+            );
+        }
+        for name in RETIRED_SILHOUETTES {
+            assert!(
+                !icons_dir().join(name).exists(),
+                "superseded silhouette {name} must be removed"
+            );
+        }
+    }
+
+    #[test]
+    fn selects_full_or_dimmed_original_icon_without_template_calls() {
+        let source = production_source();
+        assert!(source.contains("fn tray_tint_for(icon: runtime::TrayIcon) -> TrayTint"));
+        for icon in ["Active", "Inactive", "Waiting"] {
+            assert!(source.contains(&format!("runtime::TrayIcon::{icon}")));
+        }
+        assert!(!source.contains("icon_as_template"));
+        assert!(!source.contains("set_icon_with_as_template"));
+        assert!(source.contains("self.tray.set_icon(Some(image))"));
+    }
+
+    #[test]
+    fn dims_alpha_without_changing_rgb_or_image_dimensions() {
+        let icon = tauri::image::Image::new_owned(vec![1, 2, 3, 255, 4, 5, 6, 100], 2, 1);
+        let dimmed = create_dimmed_icon(&icon);
+        assert_eq!(dimmed.rgba(), &[1, 2, 3, 102, 4, 5, 6, 40]);
+        assert_eq!((dimmed.width(), dimmed.height()), (2, 1));
+    }
+}
+
+/*
+ * @spec-handoff
+ * @interface NativeTraySink::{apply_initial,publish}; request_app_exit
+ * @interface async fn {toggle_engine,get_engine_state,save_config,load_profile,set_language}
+ * @interface fn {save_profile,delete_profile,update_global_hotkey}; tray jiggle-mode setters
+ * @behavior
+ *   - Native publication keeps only the latest pending frame and schedules UI work once.
+ *   - Tauri callbacks submit owner work without directly controlling Engine or waiting on UI.
+ *   - Config writers submit update_config through the owner instead of directly locking config.
+ *   - Setup paints actual pre-start state, installs Wi-Fi forwarding before monitoring, and
+ *     allows process exit only after owner shutdown confirms completion.
+ * @edge-cases
+ *   - Unchanged ticks coalesce; explicit frames retry; enqueue failure clears scheduling state.
+ *   - code=None remains close-to-tray and tray clicks do not toggle activity.
+ */
+#[cfg(test)]
+mod native_wiring_contract_tests {
+    use super::*;
+    use chrono::{FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    struct SetupClock;
+
+    impl schedule::Clock for SetupClock {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 3, 2, 8, 0, 0)
+                .single()
+                .expect("fixed setup time exists")
+        }
+
+        fn to_local(&self, instant: chrono::DateTime<Utc>) -> chrono::DateTime<FixedOffset> {
+            instant.with_timezone(&FixedOffset::east_opt(0).expect("UTC offset exists"))
+        }
+
+        fn resolve_local(&self, local: NaiveDateTime) -> LocalResult<chrono::DateTime<Utc>> {
+            LocalResult::Single(local.and_utc())
+        }
+    }
+
+    struct ActiveSetupBackend {
+        active: Arc<AtomicBool>,
+        released: mpsc::Sender<()>,
+    }
+
+    impl runtime::EngineBackend for ActiveSetupBackend {
+        fn start(&mut self) -> Result<(), String> {
+            self.active.store(true, Ordering::Release);
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            self.active.store(false, Ordering::Release);
+            self.released
+                .send(())
+                .map_err(|_| "release observer disconnected".to_owned())
+        }
+
+        fn is_active(&self) -> bool {
+            self.active.load(Ordering::Acquire)
+        }
+
+        fn set_jiggle_policy(&mut self, _: runtime::JigglePolicy) {}
+    }
+
+    struct SetupSink;
+
+    impl TraySink for SetupSink {
+        fn publish(&mut self, _: TrayRoute, _: &TrayPresentation) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn active_setup_runtime(released: mpsc::Sender<()>) -> (owner::RuntimeHandle, Arc<AtomicBool>) {
+        let active = Arc::new(AtomicBool::new(false));
+        let backend_active = active.clone();
+        let runtime = owner::RuntimeHandle::spawn(owner::OwnerStart {
+            config: Arc::new(Mutex::new(AppConfig {
+                mode: config::AppMode::AlwaysOn,
+                ..AppConfig::default()
+            })),
+            bundle: Arc::new(Mutex::new(i18n::create_bundle("en"))),
+            clock: Arc::new(SetupClock),
+            backend_factory: Box::new(move |_, _| {
+                Box::new(ActiveSetupBackend {
+                    active: backend_active,
+                    released,
+                })
+            }),
+            sink: Box::new(SetupSink),
+        })
+        .expect("active setup owner spawns");
+        assert!(
+            runtime
+                .query()
+                .expect("startup query sends")
+                .wait(owner::REQUEST_TIMEOUT)
+                .expect("startup query replies")
+                .snapshot
+                .expect("startup snapshot exists")
+                .engine_active,
+            "the fake backend is active before setup failure"
+        );
+        (runtime, active)
+    }
+
+    #[test]
+    fn post_spawn_failure_releases_an_active_owner_after_dropping_each_setup_guard() {
+        for label in ["config", "monitor"] {
+            let (released, release_receiver) = mpsc::channel();
+            let (runtime, active) = active_setup_runtime(released);
+            let guard = Arc::new(Mutex::new(()));
+            let step_guard = guard.clone();
+            let shutdown_guard = guard.clone();
+            let error = format!("{label} lock failed");
+            let expected = error.clone();
+            let steps: Vec<PostSpawnStep<'_>> = vec![Box::new(move || {
+                let held = step_guard.lock().expect("setup guard locks");
+                drop(held);
+                Err(error)
+            })];
+            let result = run_post_spawn_steps(&runtime, steps, move |runtime| {
+                drop(
+                    shutdown_guard
+                        .try_lock()
+                        .expect("setup guard drops before shutdown"),
+                );
+                runtime.shutdown(owner::SHUTDOWN_TIMEOUT)?;
+                release_receiver
+                    .recv_timeout(owner::REQUEST_TIMEOUT)
+                    .expect("active backend releases before setup returns");
+                Ok(())
+            });
+            assert_eq!(result, Err(expected), "{label} failure remains primary");
+            assert!(
+                !active.load(Ordering::Acquire),
+                "{label} failure returns only after releasing the active backend"
+            );
+        }
+    }
+
+    #[test]
+    fn post_spawn_success_runs_all_steps_without_shutdown() {
+        let (released, _release_receiver) = mpsc::channel();
+        let (runtime, _) = active_setup_runtime(released);
+        let ran = Arc::new(AtomicBool::new(false));
+        let step_ran = ran.clone();
+        let steps: Vec<PostSpawnStep<'_>> = vec![Box::new(move || {
+            step_ran.store(true, Ordering::Release);
+            Ok(())
+        })];
+        let result = run_post_spawn_steps(&runtime, steps, |_| {
+            panic!("successful post-spawn steps must not shut down the owner")
+        });
+        assert_eq!(result, Ok(()));
+        assert!(ran.load(Ordering::Acquire));
+        runtime
+            .shutdown(owner::SHUTDOWN_TIMEOUT)
+            .expect("test owner cleanup succeeds");
+    }
+
+    #[test]
+    fn post_spawn_returns_the_step_error_before_a_shutdown_error() {
+        let (released, _release_receiver) = mpsc::channel();
+        let (runtime, _) = active_setup_runtime(released);
+        let steps: Vec<PostSpawnStep<'_>> = vec![Box::new(|| Err("config lock failed".to_owned()))];
+        let result =
+            run_post_spawn_steps(&runtime, steps, |_| Err("monitor lock failed".to_owned()));
+        assert_eq!(
+            result,
+            Err("config lock failed; owner shutdown failed: monitor lock failed".to_owned())
+        );
+        runtime
+            .shutdown(owner::SHUTDOWN_TIMEOUT)
+            .expect("test owner cleanup succeeds");
+    }
+
+    struct FakeUiExecutor {
+        tasks: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+        fail_next_enqueue: AtomicBool,
+    }
+
+    impl FakeUiExecutor {
+        fn run_next(&self) {
+            self.tasks
+                .lock()
+                .expect("fake UI task lock")
+                .pop_front()
+                .expect("a UI task is queued")();
+        }
+
+        fn queued(&self) -> usize {
+            self.tasks.lock().expect("fake UI task lock").len()
+        }
+    }
+
+    impl UiExecutor for FakeUiExecutor {
+        fn run_on_main_thread(&self, task: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+            if self.fail_next_enqueue.swap(false, Ordering::AcqRel) {
+                return Err("enqueue failed".to_owned());
+            }
+            self.tasks
+                .lock()
+                .expect("fake UI task lock")
+                .push_back(task);
+            Ok(())
+        }
+    }
+
+    struct FakePaintTargets {
+        frames: Mutex<Vec<TrayPresentation>>,
+        fail_next_paint: AtomicBool,
+    }
+
+    impl TrayPaintTargets for FakePaintTargets {
+        fn paint(&self, presentation: &TrayPresentation) -> Result<(), String> {
+            self.frames
+                .lock()
+                .expect("fake paint lock")
+                .push(presentation.clone());
+            if self.fail_next_paint.swap(false, Ordering::AcqRel) {
+                Err("paint failed".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn fake_presentation(text: &str) -> TrayPresentation {
+        TrayPresentation {
+            status: runtime::TrayStatus::Inactive,
+            menu_text: text.to_owned(),
+            hint_text: format!("→ {text}"),
+            mode_text: text.to_owned(),
+            tooltip: text.to_owned(),
+            icon: runtime::TrayIcon::Inactive,
+        }
+    }
+
+    #[test]
+    fn native_sink_recovers_from_enqueue_failure_and_coalesces_deferred_paints() {
+        let executor = Arc::new(FakeUiExecutor {
+            tasks: Mutex::new(VecDeque::new()),
+            fail_next_enqueue: AtomicBool::new(true),
+        });
+        let targets = Arc::new(FakePaintTargets {
+            frames: Mutex::new(Vec::new()),
+            fail_next_paint: AtomicBool::new(true),
+        });
+        let mut sink = NativeTraySink::new_with_ui(executor.clone(), targets.clone());
+        let a = fake_presentation("A");
+        let b = fake_presentation("B");
+        let c = fake_presentation("C");
+
+        assert_eq!(
+            sink.publish(TrayRoute::Tick, &a),
+            Err("enqueue failed".to_owned())
+        );
+        assert_eq!(
+            executor.queued(),
+            0,
+            "a failed enqueue leaves no stale callback"
+        );
+        sink.publish(TrayRoute::Tick, &a)
+            .expect("a later frame reschedules after enqueue failure");
+        sink.publish(TrayRoute::Tick, &a)
+            .expect("an unchanged tick is coalesced");
+        sink.publish(TrayRoute::TrayToggle, &b)
+            .expect("an explicit frame supersedes the pending tick");
+        assert_eq!(
+            executor.queued(),
+            1,
+            "publish returns without waiting for UI completion"
+        );
+
+        executor.run_next();
+        assert_eq!(
+            targets.frames.lock().expect("fake paint lock").as_slice(),
+            std::slice::from_ref(&b),
+            "only the latest queued frame is painted; setter failures do not reject it"
+        );
+
+        sink.publish(TrayRoute::Tick, &c)
+            .expect("a publication after painting queues another callback");
+        assert_eq!(
+            executor.queued(),
+            1,
+            "a frame published after paint is not lost"
+        );
+        executor.run_next();
+        assert_eq!(
+            targets.frames.lock().expect("fake paint lock").as_slice(),
+            &[b, c],
+            "the later frame is painted after the earlier callback"
+        );
+    }
+
+    fn without_comments(source: &str) -> String {
+        let bytes = source.as_bytes();
+        let mut output = String::with_capacity(source.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index..].starts_with(b"//") {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            } else if bytes[index..].starts_with(b"/*") {
+                index += 2;
+                while index + 1 < bytes.len() && !bytes[index..].starts_with(b"*/") {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            } else {
+                output.push(bytes[index] as char);
+                index += 1;
+            }
+        }
+        output
+    }
+
+    fn scoped_block<'a>(source: &'a str, anchor: &str) -> &'a str {
+        let start = source
+            .find(anchor)
+            .unwrap_or_else(|| panic!("missing scope anchor: {anchor}"));
+        let open = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("missing opening brace for: {anchor}"));
+        let mut depth = 0usize;
+        for (offset, byte) in source[open..].bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &source[start..=open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unclosed scope: {anchor}");
+    }
+
+    fn handler_table(source: &str) -> &str {
+        let start = source
+            .find("tauri::generate_handler![")
+            .expect("generate_handler macro exists");
+        let open = source[start..]
+            .find('[')
+            .map(|offset| start + offset)
+            .expect("generate_handler opens its entries");
+        let close = source[open..]
+            .find("])")
+            .map(|offset| open + offset)
+            .expect("generate_handler closes its entries");
+        &source[open..=close]
+    }
+
+    fn source() -> String {
+        without_comments(include_str!("lib.rs"))
+    }
+
+    fn production_source() -> String {
+        let source = source();
+        let test_module = source
+            .find("#[cfg(test)]\nmod native_wiring_contract_tests")
+            .expect("native wiring tests remain separate from production source");
+        source[..test_module].to_owned()
+    }
+
+    #[test]
+    fn native_sink_publishes_latest_frames_on_the_main_thread_without_waiting() {
+        let source = source();
+        let native_impl = scoped_block(&source, "impl NativeTraySink {");
+        let publish_impl = scoped_block(&source, "impl TraySink for NativeTraySink {");
+
+        assert!(
+            native_impl.contains("fn apply_initial(&self, presentation: &TrayPresentation)"),
+            "initial paint accepts the production presentation"
+        );
+        assert!(
+            native_impl.contains("status_item.set_text"),
+            "initial paint updates the status item from its presentation"
+        );
+        assert!(
+            publish_impl.contains("last_requested"),
+            "unchanged Tick frames are coalesced against the requested frame"
+        );
+        assert!(
+            publish_impl.contains("run_on_main_thread"),
+            "publication schedules native setters on the UI thread"
+        );
+        assert!(
+            publish_impl.contains("scheduled = false"),
+            "an enqueue failure makes a later publication schedulable"
+        );
+        assert!(
+            publish_impl.contains("log::error!"),
+            "setter failures are logged after the owner has accepted the frame"
+        );
+        assert!(
+            !publish_impl.contains("recv_timeout") && !publish_impl.contains(".wait("),
+            "owner publication never waits for native UI completion"
+        );
+    }
+
+    #[test]
+    fn tray_menu_places_a_disabled_hint_after_the_enabled_status_and_paints_both_lines() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+        let paint = scoped_block(&source, "impl TrayPaintTargets for NativeTrayTargets {");
+        let compact_setup = setup.split_whitespace().collect::<String>();
+
+        assert!(
+            setup.contains(
+                r#"MenuItem::with_id(app, "toggle_hint", &initial_presentation.hint_text, false"#
+            ),
+            "the hint has its own disabled menu item"
+        );
+        assert!(
+            compact_setup.contains("&toggle_item,&toggle_hint,"),
+            "the hint is immediately after the enabled status item"
+        );
+        assert!(
+            !menu.contains(r#""toggle_hint""#),
+            "the disabled hint has no menu-event branch"
+        );
+        assert!(
+            paint.contains("self.status_item.set_text(&presentation.menu_text)")
+                && paint.contains("self.hint_item.set_text(&presentation.hint_text)"),
+            "every platform paints current and click-target lines through the shared target"
+        );
+    }
+
+    #[test]
+    fn tray_menu_places_a_disabled_localized_app_mode_line_before_its_first_separator() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+        let paint = scoped_block(&source, "impl TrayPaintTargets for NativeTrayTargets {");
+        let compact_setup = setup.split_whitespace().collect::<String>();
+
+        assert!(
+            source.contains("fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String"),
+            "the app-mode line needs a pure localized label function"
+        );
+        assert!(
+            source.contains("mode_text: String"),
+            "tray presentations retain the localized app-mode text"
+        );
+        assert!(
+            setup.contains(
+                r#"MenuItem::with_id(app, "mode_info", &initial_presentation.mode_text, false"#
+            ),
+            "the app-mode line has its own disabled menu item"
+        );
+        assert!(
+            setup.contains("let sep0 = PredefinedMenuItem::separator(app)?;"),
+            "the app-mode line has its own preceding separator"
+        );
+        assert!(
+            compact_setup.contains("&toggle_item,&toggle_hint,&sep0,&mode_info,&sep1,"),
+            "the app-mode line follows its separator and precedes the mode submenu"
+        );
+        assert!(
+            !menu.contains(r#""mode_info""#),
+            "the disabled app-mode line has no menu-event branch"
+        );
+        assert!(
+            paint.contains("self.mode_item.set_text(&presentation.mode_text)"),
+            "every paint updates the app-mode line"
+        );
+        let label = scoped_block(
+            &source,
+            "fn mode_menu_label(mode: &AppMode, bundle: &i18n::Bundle) -> String {",
+        );
+        assert!(
+            !label.contains(".replace("),
+            "mode labels use Fluent arguments, not token replacement"
+        );
+        for locale in ["en", "es", "fr", "de", "pt-BR", "ja", "zh-Hans", "ko"] {
+            let ftl =
+                std::fs::read_to_string(format!("locales/{locale}.ftl")).expect("locale exists");
+            assert!(
+                !ftl.contains(r#"{ "{" }"#),
+                "{locale} must not escape Fluent braces"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_window_openers_activate_and_focus_new_windows() {
+        let source = source();
+        let regular = scoped_block(&source, "fn set_macos_regular_app() {");
+        let settings = scoped_block(&source, "fn show_settings_window(app: &tauri::AppHandle) {");
+        let about = scoped_block(&source, "fn show_about_window(app: &tauri::AppHandle) {");
+
+        let regular_policy = regular
+            .find("setActivationPolicy(")
+            .expect("Regular policy is set");
+        assert!(
+            regular.contains("#[allow(deprecated)]"),
+            "legacy activation is explicitly scoped"
+        );
+        assert!(
+            !regular.contains(".activate()"),
+            "bare macOS 14 activation is forbidden"
+        );
+        let activate = regular
+            .find("activateIgnoringOtherApps(true)")
+            .expect("Regular app activates on macOS 12+");
+        assert!(
+            regular_policy < activate,
+            "activation follows the Regular policy change"
+        );
+        for (name, opener) in [("Settings", settings), ("About", about)] {
+            assert!(opener.starts_with("fn"));
+            assert!(
+                opener.contains("set_macos_regular_app();"),
+                "{name} activates before window work"
+            );
+            let existing = scoped_block(opener, "if let Some(win)");
+            assert!(
+                existing.contains(".show();")
+                    && existing.find(".show()") < existing.find("set_focus()"),
+                "existing {name} window shows before focus"
+            );
+            assert!(
+                opener.contains(".build()")
+                    && opener.contains("Ok(win)")
+                    && opener.contains("win.set_focus()"),
+                "new {name} window focuses after build"
+            );
+            assert!(
+                opener.contains("Err(e)") && opener.contains("log::error!"),
+                "{name} build failures remain logged"
+            );
+            assert!(
+                !opener.to_ascii_lowercase().contains("accessory"),
+                "{name} never resets macOS to Accessory"
+            );
+        }
+    }
+
+    #[test]
+    fn setup_uses_actual_initial_presentation_and_installs_wifi_listener_before_monitor_start() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let initial = scoped_block(&source, "pub(crate) fn initial_runtime_snapshot(");
+
+        assert!(
+            initial.contains("engine_active: false"),
+            "first presentation derives from confirmed pre-start inactivity"
+        );
+        assert!(
+            setup.contains("initial_runtime_snapshot"),
+            "setup builds a presentation from actual initial inputs"
+        );
+        assert!(
+            !setup.contains(".icon(active_icon)") && !setup.contains(".tooltip(&tip_active)"),
+            "tray creation does not hard-code an active presentation"
+        );
+        let listener = setup
+            .find("app.listen(\"wifi-state-changed\"")
+            .expect("Wi-Fi listener exists");
+        let monitor_start = setup
+            .find("monitor.start()")
+            .expect("Wi-Fi monitor startup exists");
+        assert!(
+            listener < monitor_start,
+            "the Wi-Fi listener is installed before the monitor can emit"
+        );
+    }
+
+    #[test]
+    fn setup_shuts_down_the_owner_before_propagating_a_post_spawn_setup_error() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let spawn = setup
+            .find("owner::RuntimeHandle::spawn")
+            .expect("setup starts the owner");
+        let post_spawn = &setup[spawn..];
+
+        assert!(
+            post_spawn.contains("shutdown(owner::SHUTDOWN_TIMEOUT)"),
+            "every fallible setup step after owner spawn must use bounded owner cleanup"
+        );
+    }
+
+    #[test]
+    fn ipc_commands_are_desktop_async_owner_requests_with_bounded_blocking_waits() {
+        let source = source();
+        let handlers = handler_table(&source);
+
+        for command in [
+            "toggle_engine",
+            "get_engine_state",
+            "save_config",
+            "load_profile",
+            "set_language",
+        ] {
+            assert!(
+                handlers.contains(&format!("#[cfg(desktop)]\n            {command},")),
+                "generate_handler registers {command} rather than its legacy handler"
+            );
+        }
+        for legacy in [
+            "legacy_toggle_engine",
+            "legacy_get_engine_state",
+            "legacy_save_config",
+            "legacy_load_profile",
+            "legacy_set_language",
+        ] {
+            assert!(
+                !handlers.contains(&format!("            {legacy},")),
+                "generate_handler no longer exposes {legacy}"
+            );
+        }
+        let toggle = scoped_block(&source, "async fn toggle_engine(");
+        let query = scoped_block(&source, "async fn get_engine_state(");
+        let save = scoped_block(&source, "async fn save_config(");
+        let profile = scoped_block(&source, "async fn load_profile(");
+        let language = scoped_block(&source, "async fn set_language(");
+        for body in [toggle, query, save, profile, language] {
+            assert!(
+                body.contains("spawn_blocking"),
+                "owner IPC waits run on Tauri's blocking-task helper"
+            );
+            assert!(
+                body.contains("REQUEST_TIMEOUT"),
+                "owner IPC waits use the documented timeout"
+            );
+            assert!(
+                !body.contains("Engine") && !body.contains(".start(") && !body.contains(".stop("),
+                "IPC handlers do not directly control the engine"
+            );
+        }
+        assert!(toggle.contains("runtime.request(TrayRoute::IpcToggle)"));
+        assert!(query.contains("runtime.query()"));
+        assert!(save.contains("runtime.update_config(ConfigOrigin::Settings"));
+        assert!(profile.contains("runtime.update_config(ConfigOrigin::Profile"));
+        assert!(language.contains("runtime.update_config(ConfigOrigin::Language"));
+    }
+
+    #[test]
+    fn callbacks_forward_to_the_owner_without_direct_engine_control_or_extra_click_toggle() {
+        let source = source();
+        let setup = scoped_block(&source, ".setup(|app| {");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+        let shortcut = scoped_block(&source, ".with_handler(move |app, _shortcut, event| {");
+        let wifi = scoped_block(&source, "app.listen(\"wifi-state-changed\"");
+        let production = production_source();
+
+        assert!(
+            menu.contains("runtime.post(TrayRoute::TrayToggle)"),
+            "tray menu toggle submits its named owner route"
+        );
+        assert!(
+            shortcut.contains("runtime.post(TrayRoute::Hotkey)"),
+            "pressed hotkey submits its named owner route"
+        );
+        assert!(
+            wifi.contains("runtime.post_wifi(owner::WifiObservation { ssid: payload.ssid })"),
+            "Wi-Fi listener forwards SSID rather than a stale active flag"
+        );
+        for body in [menu, shortcut, wifi] {
+            assert!(
+                !body.contains(".start(") && !body.contains(".stop(") && !body.contains(".toggle("),
+                "callbacks do not bypass the runtime owner"
+            );
+        }
+        assert!(
+            !setup.contains("on_tray_icon_event"),
+            "left click opens the menu without an additional activity toggle"
+        );
+        assert!(
+            !production.contains("eng.start(")
+                && !production.contains("eng.stop(")
+                && !production.contains("eng.toggle("),
+            "lib.rs leaves engine lifecycle operations to the owner path"
+        );
+    }
+
+    #[test]
+    fn save_profile_updates_config_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, "fn save_profile(");
+
+        assert!(
+            handler.contains("runtime.update_config(ConfigOrigin::Other"),
+            "saving a profile commits its config metadata through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "saving a profile does not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn delete_profile_updates_config_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, "fn delete_profile(");
+
+        assert!(
+            handler.contains("runtime.update_config(ConfigOrigin::Other"),
+            "deleting a profile commits its config metadata through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "deleting a profile does not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn update_global_hotkey_commits_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, "fn update_global_hotkey(");
+
+        assert!(
+            handler.contains("runtime.update_config(ConfigOrigin::Other"),
+            "updating the hotkey commits config through the runtime owner"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "updating the hotkey does not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn tray_jiggle_mode_setters_update_config_through_the_owner_transaction() {
+        let source = source();
+        let handler = scoped_block(&source, ".on_menu_event(move |app, event| {");
+
+        for (setter, mode) in [
+            ("mode_power", "JiggleMode::PowerOnly"),
+            ("mode_subtle", "JiggleMode::MouseSubtle"),
+            ("mode_zen", "JiggleMode::MouseZen"),
+            ("mode_circle", "JiggleMode::MouseCircle"),
+        ] {
+            let setter = scoped_block(handler, &format!("\"{setter}\" => {{"));
+            assert!(
+                setter.contains(mode),
+                "tray jiggle-mode setter maps its menu id to {mode}"
+            );
+        }
+        assert!(
+            handler
+                .matches("runtime.update_config(ConfigOrigin::Other")
+                .count()
+                >= 1,
+            "tray jiggle-mode setters commit through the shared owner transaction"
+        );
+        assert!(
+            !handler.contains("config.lock()")
+                && !handler.contains("*cfg =")
+                && !handler.contains("cfg.save()"),
+            "tray jiggle-mode setters do not mutate the shared config directly"
+        );
+    }
+
+    #[test]
+    fn exit_is_coordinated_after_owner_completion_and_window_close_stays_in_tray() {
+        let source = source();
+        let request_exit = scoped_block(&source, "pub(crate) fn request_app_exit(");
+        let run_events = scoped_block(&source, ".run(");
+        let menu = scoped_block(&source, ".on_menu_event(move |app, event| {");
+
+        assert!(
+            menu.contains("request_app_exit(app, 0)"),
+            "Quit delegates shutdown to the exit coordinator"
+        );
+        assert!(
+            request_exit.contains("claim_exit_coordinator")
+                && request_exit.contains("runtime.shutdown(SHUTDOWN_TIMEOUT)")
+                && request_exit.contains("app.exit(code)"),
+            "only a claimed coordinator shuts down the owner before app exit"
+        );
+        assert!(
+            run_events.contains("if code.is_none()") && run_events.contains("api.prevent_exit()"),
+            "window close remains a close-to-tray event"
+        );
+        assert!(
+            run_events.contains("runtime.exit_ready()") && run_events.contains("request_app_exit"),
+            "ExitRequested prevents early process exit until owner completion"
+        );
+        assert!(
+            run_events.contains("Some(runtime) if runtime.exit_ready() => {}"),
+            "only an exit-ready owner permits the requested process exit"
+        );
+        assert!(
+            run_events.contains("tauri::RunEvent::Exit") && run_events.contains("exit_ready"),
+            "final Exit checks/logs unexpected shutdown before process teardown"
+        );
     }
 }

@@ -147,13 +147,22 @@ impl PowerInhibitor for LinuxPowerInhibitor {
     }
 
     fn release(&mut self) -> Result<(), String> {
-        if let Some(mut child) = self.child.take() {
+        if let Some(child) = self.child.as_mut() {
+            if child
+                .try_wait()
+                .map_err(|e| format!("Failed to inspect systemd-inhibit process: {}", e))?
+                .is_some()
+            {
+                self.child = None;
+                return Ok(());
+            }
             child
                 .kill()
                 .map_err(|e| format!("Failed to kill systemd-inhibit process: {}", e))?;
             child
                 .wait()
                 .map_err(|e| format!("Failed to wait on systemd-inhibit process: {}", e))?;
+            self.child = None;
             log::info!("Sleep inhibition released");
         }
         Ok(())

@@ -13,6 +13,19 @@ tray-settings = Einstellungen…
 tray-quit = Beenden
 tray-tooltip-active = Stay Awake — Aktiv
 tray-tooltip-inactive = Stay Awake — Inaktiv
+tray-inactive = Inaktiv
+tray-waiting = Wartet auf das Zeitfenster
+tray-paused = Für dieses Zeitfenster pausiert
+tray-active-override = Aktiv (manuell eingeschaltet)
+tray-tooltip-waiting = Stay Awake: wartet auf das Zeitfenster
+tray-tooltip-paused = Stay Awake: für dieses Zeitfenster pausiert
+tray-tooltip-override = Stay Awake: durch manuelles Einschalten aktiv
+tray-next-window = Nächstes Zeitfenster: { $when }
+tray-no-next-window = Kein kommendes Zeitfenster
+tray-app-mode = Modus: { $mode }
+tray-app-mode-manual = Manuell
+tray-app-mode-always-on = Immer aktiv
+tray-app-mode-wifi = WLAN
 
 # Einstellungsfenster
 settings-title = Stay Awake Einstellungen
@@ -28,10 +41,13 @@ settings-save = Speichern
 settings-cancel = Abbrechen
 settings-accessibility-banner = Mausmodi erfordern eine Barrierefreiheit-Berechtigung.
 settings-grant-btn = Zugang gewahren
+settings-mode-info-label = Über Mausbewegungsmodi
 
 # Zeitplan
 schedule-label = Zeitplan
 schedule-enabled = Zeitplan aktivieren
+schedule-enabled-hint = Startet und stoppt die Engine automatisch nach dem Zeitplan.
+schedule-wifi-alert = Im WLAN-Modus filtert der Zeitplan nur Mausbewegungen; er startet oder stoppt die Engine nicht.
 schedule-start = Startzeit
 schedule-end = Endzeit
 schedule-days = Aktive Tage
@@ -66,6 +82,7 @@ settings-wifi-none = Keine Netzwerke registriert
 settings-wifi-disconnected = Nicht verbunden
 settings-wifi-hint = Wenn aktiviert, wird Stay Awake nur in registrierten Netzwerken aktiv.
 settings-wifi-nm-required = NetworkManager ist für den WLAN-Modus unter Linux erforderlich.
+settings-wifi-remove-label = Netzwerk { $network } entfernen
 
 # xdotool unter Linux
 tray-xdotool-missing = xdotool nicht gefunden — installiere xdotool für den Maus-Modus

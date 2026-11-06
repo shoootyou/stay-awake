@@ -13,6 +13,19 @@ tray-settings = 设置…
 tray-quit = 退出
 tray-tooltip-active = Stay Awake — 已激活
 tray-tooltip-inactive = Stay Awake — 未激活
+tray-inactive = 未激活
+tray-waiting = 等待计划时段
+tray-paused = 此时段已暂停
+tray-active-override = 运行中（手动启用）
+tray-tooltip-waiting = Stay Awake: 等待计划时段
+tray-tooltip-paused = Stay Awake: 此时段已暂停
+tray-tooltip-override = Stay Awake: 因手动启用而运行
+tray-next-window = 下个时段：{ $when }
+tray-no-next-window = 没有即将到来的时段
+tray-app-mode = 模式：{ $mode }
+tray-app-mode-manual = 手动
+tray-app-mode-always-on = 始终开启
+tray-app-mode-wifi = WiFi
 
 # 设置窗口
 settings-title = Stay Awake 设置
@@ -28,10 +41,13 @@ settings-save = 保存
 settings-cancel = 取消
 settings-accessibility-banner = 鼠标模式需要辅助功能权限。
 settings-grant-btn = 授予访问
+settings-mode-info-label = 关于鼠标移动模式
 
 # 定时计划
 schedule-label = 定时计划
 schedule-enabled = 启用定时计划
+schedule-enabled-hint = 按计划自动启动和停止引擎。
+schedule-wifi-alert = 在 WiFi 模式下，计划仅限制鼠标移动；不会启动或停止引擎。
 schedule-start = 开始时间
 schedule-end = 结束时间
 schedule-days = 活动日
@@ -66,6 +82,7 @@ settings-wifi-none = 暂无已注册网络
 settings-wifi-disconnected = 未连接
 settings-wifi-hint = 启用后，Stay Awake仅在已注册的网络上激活。
 settings-wifi-nm-required = 在Linux上使用WiFi模式需要NetworkManager。
+settings-wifi-remove-label = 移除网络 { $network }
 
 # Linux上的xdotool
 tray-xdotool-missing = 未找到xdotool — 安装xdotool以使用鼠标晃动模式

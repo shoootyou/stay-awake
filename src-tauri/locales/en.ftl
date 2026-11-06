@@ -13,6 +13,19 @@ tray-settings = Settings…
 tray-quit = Quit
 tray-tooltip-active = Stay Awake — Active
 tray-tooltip-inactive = Stay Awake — Inactive
+tray-inactive = Inactive
+tray-waiting = Waiting for schedule
+tray-paused = Paused for this window
+tray-active-override = Active (manual override)
+tray-tooltip-waiting = Stay Awake: waiting for schedule
+tray-tooltip-paused = Stay Awake: paused for this window
+tray-tooltip-override = Stay Awake: active by manual override
+tray-next-window = Next window: { $when }
+tray-no-next-window = No upcoming window
+tray-app-mode = Mode: { $mode }
+tray-app-mode-manual = Manual
+tray-app-mode-always-on = Always On
+tray-app-mode-wifi = WiFi
 
 # Settings window
 settings-title = Stay Awake Settings
@@ -28,10 +41,13 @@ settings-save = Save
 settings-cancel = Cancel
 settings-accessibility-banner = Mouse modes require Accessibility permission.
 settings-grant-btn = Grant Access
+settings-mode-info-label = About jiggle modes
 
 # Scheduling
 schedule-label = Schedule
 schedule-enabled = Enable schedule
+schedule-enabled-hint = Automatically starts and stops the engine with the schedule.
+schedule-wifi-alert = In WiFi mode, the schedule only filters mouse jiggles; it does not start or stop the engine.
 schedule-start = Start time
 schedule-end = End time
 schedule-days = Active days
@@ -66,6 +82,7 @@ settings-wifi-none = No networks registered
 settings-wifi-disconnected = Not connected
 settings-wifi-hint = When enabled, Stay Awake activates only on registered networks.
 settings-wifi-nm-required = NetworkManager is required for WiFi mode on Linux.
+settings-wifi-remove-label = Remove network { $network }
 
 # Linux xdotool
 tray-xdotool-missing = xdotool not found — install xdotool for mouse-jiggle mode
