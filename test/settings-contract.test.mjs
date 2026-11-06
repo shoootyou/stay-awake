@@ -156,7 +156,15 @@ const runSettings = async (config) => {
     "schedule-wifi-alert"];
   const elements = new Map(ids.map((id) => [id, new Element(id)]));
   const alert = elements.get("schedule-wifi-alert");
-  alert.hidden = true;
+  const operations = [];
+  let alertHidden = true;
+  Object.defineProperty(alert, "hidden", {
+    get: () => alertHidden,
+    set: (value) => {
+      alertHidden = value;
+      operations.push(`alert:${value ? "hidden" : "shown"}`);
+    },
+  });
   alert.setAttribute("data-i18n", "schedule-wifi-alert");
   const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((value) => new Element("", value));
   const documentListeners = new Map();
@@ -168,7 +176,10 @@ const runSettings = async (config) => {
     if (command === "check_accessibility") return true;
     if (command === "save_config") saves.push(args.newConfig);
     if (command === "get_platform_os") return "linux";
-    if (command === "get_translation") return `${activeLanguage}:${args.key}`;
+    if (command === "get_translation") {
+      if (args.key === "schedule-wifi-alert") operations.push("alert:translated");
+      return `${activeLanguage}:${args.key}`;
+    }
     if (command === "set_language") activeLanguage = args.language;
     return undefined;
   };
@@ -194,7 +205,7 @@ const runSettings = async (config) => {
   vm.runInContext(settingsJs, context, { filename: "settings.js" });
   documentListeners.get("DOMContentLoaded")();
   await waitFor(() => elements.get("jiggle-mode").value === config.jiggle_mode, "Settings did not load config");
-  return { elements, days, saves };
+  return { elements, days, saves, operations };
 };
 
 test("places Launch at Login first without CSS or tabindex ordering", () => {
@@ -249,6 +260,12 @@ test("shows the Schedule alert only for WiFi on load and live mode changes", asy
   select.value = "Manual";
   await select.dispatch("change");
   assert.equal(live.elements.get("schedule-wifi-alert").hidden, true, "leaving WiFi hides the alert");
+});
+
+test("translates the WiFi Schedule alert before showing it on initial load", async () => {
+  const state = await runSettings({ ...baseConfig(), mode: "WiFi", language: "es" });
+  assert.ok(state.operations.indexOf("alert:translated") < state.operations.indexOf("alert:shown"),
+    "initial WiFi alert must be translated before it is shown");
 });
 
 test("keeps the WiFi Schedule alert visible through re-localization", async () => {
