@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.1](https://github.com/shoootyou/stay-awake/compare/v1.2.0...v1.2.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ci:** add workflow permission and release trigger checks ([e06b344](https://github.com/shoootyou/stay-awake/commit/e06b344a53177876b6c324a0552723d48611c2f4))
+* **ci:** limit github token permissions in workflows and remove the manual release dispatch ([e06b344](https://github.com/shoootyou/stay-awake/commit/e06b344a53177876b6c324a0552723d48611c2f4))
+* **deps:** refresh compatible lockfile entries ([e06b344](https://github.com/shoootyou/stay-awake/commit/e06b344a53177876b6c324a0552723d48611c2f4))
+
 ## [1.2.0](https://github.com/shoootyou/stay-awake/compare/v1.1.0...v1.2.0) (2026-11-06)
 
 
