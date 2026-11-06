@@ -2,12 +2,12 @@
  * @spec-handoff
  * @interface assertWorkflowPermissions(workflows: Map<string, object>): void
  * @behavior
- *   - Requires every workflow and reusable-workflow caller to declare permissions.
- *   - Limits write grants to the documented release and release-please jobs.
- *   - Pins each workflow's top-level and caller-job permissions to least privilege.
+ *   - Pins the effective permission map and declaration mode for every workflow job.
+ *   - Requires CI and distribution jobs to inherit only their documented top-level grant.
+ *   - Rejects unknown workflows and jobs, including jobs with extra read scopes.
  * @edge-cases
  *   - Rejects read-all and write-all permission shorthands.
- *   - Reports the workflow path and job for every job-level violation.
+ *   - Reports the workflow path and job for every missing table entry.
  * @see ../.github/workflows/release-please.yml
  */
 
@@ -27,15 +27,22 @@ const expectedTopLevelPermissions = new Map([
   ["release.yml", { contents: "read" }],
 ]);
 const expectedJobPermissions = new Map([
+  ["ci.yml:commitlint", { declaration: "inherit", permissions: { contents: "read" } }],
+  ["ci.yml:contract-tests", { declaration: "inherit", permissions: { contents: "read" } }],
+  ["ci.yml:lint-and-check", { declaration: "inherit", permissions: { contents: "read" } }],
+  ["ci.yml:cargo-audit", { declaration: "inherit", permissions: { contents: "read" } }],
+  ["ci.yml:build", { declaration: "inherit", permissions: { contents: "read" } }],
+  ["distribute.yml:update-homebrew", { declaration: "inherit", permissions: { contents: "read" } }],
   ["release-please.yml:release-please", {
-    contents: "write", "pull-requests": "write", issues: "write",
+    declaration: "explicit",
+    permissions: { contents: "write", "pull-requests": "write", issues: "write" },
   }],
-  ["release-please.yml:build", { contents: "write" }],
-  ["release-please.yml:distribute", { contents: "read" }],
-  ["release.yml:create-release", { contents: "write" }],
-  ["release.yml:build-macos", { contents: "write" }],
-  ["release.yml:build-linux", { contents: "write" }],
-  ["release.yml:report-linux", {}],
+  ["release-please.yml:build", { declaration: "explicit", permissions: { contents: "write" } }],
+  ["release-please.yml:distribute", { declaration: "explicit", permissions: { contents: "read" } }],
+  ["release.yml:create-release", { declaration: "explicit", permissions: { contents: "write" } }],
+  ["release.yml:build-macos", { declaration: "explicit", permissions: { contents: "write" } }],
+  ["release.yml:build-linux", { declaration: "explicit", permissions: { contents: "write" } }],
+  ["release.yml:report-linux", { declaration: "explicit", permissions: {} }],
 ]);
 
 const readWorkflows = () => new Map(readdirSync(workflowsDirectory)
@@ -49,11 +56,6 @@ const readWorkflows = () => new Map(readdirSync(workflowsDirectory)
   }));
 
 const label = (workflow, job) => `.github/workflows/${workflow} job ${job}`;
-const isContentsRead = (permissions) => permissions.contents === "read"
-  && Object.keys(permissions).length === 1;
-const isReusableCaller = (job) => typeof job.uses === "string"
-  && job.uses.startsWith("./.github/workflows/");
-
 const assertWorkflowPermissions = (workflows) => {
   assert.deepEqual(
     [...workflows.keys()],
@@ -80,32 +82,24 @@ const assertWorkflowPermissions = (workflows) => {
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
       const jobLabel = label(name, jobName);
       const hasOwnPermissions = Object.hasOwn(job, "permissions");
-      const inheritsLeastPrivilege = isContentsRead(workflow.permissions)
-        || Object.keys(workflow.permissions).length === 0;
-      assert.ok(
-        hasOwnPermissions || inheritsLeastPrivilege,
-        `${jobLabel} must declare permissions or inherit an empty/read-only top level`,
-      );
-      if (isReusableCaller(job)) {
-        assert.ok(hasOwnPermissions, `${jobLabel} reusable caller must declare permissions`);
-      }
-
-      if (hasOwnPermissions) {
-        assert.notEqual(job.permissions, "read-all", `${jobLabel} must not use read-all`);
-        assert.notEqual(job.permissions, "write-all", `${jobLabel} must not use write-all`);
-        assert.ok(
-          job.permissions && typeof job.permissions === "object",
-          `${jobLabel} permissions must be a mapping`,
-        );
-        for (const [scope, access] of Object.entries(job.permissions)) {
-          if (access !== "write") continue;
-          const expected = expectedJobPermissions.get(`${name}:${jobName}`);
-          assert.equal(expected?.[scope], "write", `${jobLabel} must not grant ${scope}: write`);
-        }
-      }
-
       const expected = expectedJobPermissions.get(`${name}:${jobName}`);
-      if (expected) assert.deepEqual(job.permissions, expected, `${jobLabel} permissions`);
+      assert.ok(
+        expected,
+        `${jobLabel} is not in the exact permission table`,
+      );
+      if (expected.declaration === "inherit") {
+        assert.equal(hasOwnPermissions, false, `${jobLabel} must inherit top-level permissions`);
+        assert.deepEqual(
+          workflow.permissions,
+          expected.permissions,
+          `${jobLabel} inherited permissions`,
+        );
+        continue;
+      }
+      assert.equal(hasOwnPermissions, true, `${jobLabel} must declare permissions`);
+      assert.notEqual(job.permissions, "read-all", `${jobLabel} must not use read-all`);
+      assert.notEqual(job.permissions, "write-all", `${jobLabel} must not use write-all`);
+      assert.deepEqual(job.permissions, expected.permissions, `${jobLabel} permissions`);
     }
   }
 };
