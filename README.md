@@ -6,6 +6,8 @@
 
 Stay Awake is a tray utility that prevents your computer from sleeping on macOS and Linux. It lives in the menu bar or system tray and stays out of your way. Built with Rust and Tauri v2.
 
+[Website](https://shoootyou.dev/projects/stay-awake/)
+
 ## Screenshots
 
 ### Menu bar
