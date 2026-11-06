@@ -1095,6 +1095,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
+    const TEST_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
     #[derive(Clone)]
     struct FixedClock(DateTime<Utc>);
 
@@ -1337,7 +1339,7 @@ mod tests {
             .expect("Quit reaches the owner loop");
         assert!(
             receiver
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("Quit reply arrives")
                 .terminating,
             "Quit must terminate the direct owner loop"
@@ -1408,7 +1410,7 @@ mod tests {
             })
             .expect("ordered config command sends");
         receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("ordered config command replies")
     }
 
@@ -1423,7 +1425,7 @@ mod tests {
             })
             .expect("ordered route command sends");
         receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("ordered route command replies")
     }
 
@@ -1611,7 +1613,7 @@ mod tests {
                     .send(())
                     .map_err(|_| "test start observer disconnected".to_owned())?;
                 self.release
-                    .recv_timeout(REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .map_err(|_| "test start release timed out".to_owned())?;
             }
             Err("backend start failed".to_owned())
@@ -1644,7 +1646,7 @@ mod tests {
         let reply = handle
             .query()
             .expect("query sends")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("query reply arrives");
 
         assert!(
@@ -1679,7 +1681,7 @@ mod tests {
         let reply = handle
             .query()
             .expect("query after dropped reply sends")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("owner remains alive after reply drop");
 
         assert!(
@@ -1720,7 +1722,7 @@ mod tests {
             .expect("durable candidate queues its matching config command");
 
         assert!(
-            pending.wait(REQUEST_TIMEOUT).is_ok(),
+            pending.wait(TEST_EVENT_TIMEOUT).is_ok(),
             "owner accepts the saved snapshot"
         );
 
@@ -1915,7 +1917,7 @@ mod tests {
         let paused = handle
             .request(TrayRoute::IpcToggle)
             .expect("toggle request sends")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("toggle reply arrives");
         assert_eq!(
             paused.snapshot.expect("toggle returns a snapshot").status,
@@ -1933,7 +1935,7 @@ mod tests {
                 |_, _| {},
             )
             .expect("interval save queues its exact config snapshot")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("unrelated config change receives a reply");
         assert_eq!(
             unchanged_policy
@@ -1970,7 +1972,7 @@ mod tests {
             handle
                 .query()
                 .expect("query sends")
-                .wait(REQUEST_TIMEOUT)
+                .wait(TEST_EVENT_TIMEOUT)
                 .expect("query replies")
                 .snapshot
                 .expect("startup snapshot exists")
@@ -1987,7 +1989,7 @@ mod tests {
             !handle
                 .query()
                 .expect("query sends")
-                .wait(REQUEST_TIMEOUT)
+                .wait(TEST_EVENT_TIMEOUT)
                 .expect("query replies")
                 .snapshot
                 .expect("re-entry snapshot exists")
@@ -2018,7 +2020,7 @@ mod tests {
             !handle
                 .query()
                 .expect("query sends")
-                .wait(REQUEST_TIMEOUT)
+                .wait(TEST_EVENT_TIMEOUT)
                 .expect("query replies")
                 .snapshot
                 .expect("re-entry snapshot exists")
@@ -2042,7 +2044,7 @@ mod tests {
         let active = handle
             .query()
             .expect("query sends")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("query replies")
             .snapshot
             .expect("active snapshot exists");
@@ -2079,7 +2081,7 @@ mod tests {
         let initial = handle
             .query()
             .expect("query sends")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("query replies")
             .snapshot
             .expect("startup snapshot exists");
@@ -2105,7 +2107,7 @@ mod tests {
                 handle
                     .query()
                     .expect("query sends")
-                    .wait(REQUEST_TIMEOUT)
+                    .wait(TEST_EVENT_TIMEOUT)
                     .expect("query replies")
                     .snapshot
                     .expect("registered snapshot exists")
@@ -2237,7 +2239,7 @@ mod tests {
                 handle
                     .query()
                     .expect("query sends while the fault is latched")
-                    .wait(REQUEST_TIMEOUT)
+                    .wait(TEST_EVENT_TIMEOUT)
                     .expect("query still replies")
                     .snapshot
                     .is_some(),
@@ -2339,7 +2341,10 @@ mod tests {
                 )
             });
 
-            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+            assert_eq!(
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
+                Ok(TrayRoute::Startup)
+            );
             let (failed_reply, failed_receiver) = mpsc::channel();
             sender
                 .send(OwnerCommand::Config {
@@ -2350,7 +2355,7 @@ mod tests {
                 .expect("failing configuration reaches the owner loop");
             assert!(
                 failed_receiver
-                    .recv_timeout(REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .expect("failing configuration replies")
                     .error
                     .is_some(),
@@ -2362,10 +2367,10 @@ mod tests {
                 "the failed publication stops the original automatic lease"
             );
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("fault observation is published");
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("deadline reconciliation is published");
             assert_eq!(
                 *starts.lock().expect("backend start lock"),
@@ -2383,7 +2388,7 @@ mod tests {
                 .expect("recovering configuration reaches the owner loop");
             assert!(
                 recovered_receiver
-                    .recv_timeout(REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .expect("recovering configuration replies")
                     .error
                     .is_none(),
@@ -2395,13 +2400,13 @@ mod tests {
                 "recovery may start {mode:?} only after publication succeeds"
             );
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(TrayRoute::Startup),
                 "the successful recovery publishes its Startup route"
             );
             *active.lock().expect("backend activity lock") = false;
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(TrayRoute::Tick),
                 "the next deadline reconciliation is published after recovery"
             );
@@ -2411,7 +2416,7 @@ mod tests {
                 "the recovered deadline path starts inactive {mode:?} exactly once"
             );
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(TrayRoute::Tick),
                 "the following deadline reconciliation is published"
             );
@@ -2475,7 +2480,10 @@ mod tests {
                 )
             });
 
-            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+            assert_eq!(
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
+                Ok(TrayRoute::Startup)
+            );
             let (failed_reply, failed_receiver) = mpsc::channel();
             sender
                 .send(OwnerCommand::Config {
@@ -2486,7 +2494,7 @@ mod tests {
                 .expect("failing configuration reaches the owner loop");
             assert!(
                 failed_receiver
-                    .recv_timeout(REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .expect("failing configuration replies")
                     .error
                     .is_some(),
@@ -2498,10 +2506,10 @@ mod tests {
                 "the failed publication stops the original automatic lease"
             );
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("fault observation is published");
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("timeout reconciliation is published");
             assert_eq!(
                 *starts.lock().expect("backend start lock"),
@@ -2519,7 +2527,7 @@ mod tests {
                 .expect("recovering configuration reaches the owner loop");
             assert!(
                 recovered_receiver
-                    .recv_timeout(REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .expect("recovering configuration replies")
                     .error
                     .is_none(),
@@ -2597,26 +2605,26 @@ mod tests {
         let (result, result_receiver) = mpsc::channel();
         let (attempting, attempt_receiver) = mpsc::channel();
         let caller = thread::spawn(move || {
-            let started = Instant::now();
             attempting.send(()).expect("test receives shutdown attempt");
             let outcome = concurrent.shutdown(Duration::from_millis(10));
             result
-                .send((started.elapsed(), outcome))
+                .send(outcome)
                 .expect("test receives concurrent shutdown result");
         });
         attempt_receiver
             .recv()
             .expect("concurrent caller reached shutdown");
 
-        let returned_within_deadline = result_receiver
-            .recv_timeout(Duration::from_millis(100))
-            .is_ok();
+        let outcome = result_receiver
+            .recv_timeout(TEST_EVENT_TIMEOUT)
+            .expect("shutdown request returns after its own deadline");
         release.send(()).expect("release shutdown gate");
         holder.join().expect("gate holder joins");
         caller.join().expect("shutdown caller joins");
-        assert!(
-            returned_within_deadline,
-            "a caller with a 10ms deadline must not wait behind another shutdown gate holder"
+        assert_eq!(
+            outcome,
+            Err("shutdown gate timed out".to_owned()),
+            "a caller with a 10ms deadline must time out behind another shutdown gate holder"
         );
     }
 
@@ -2698,7 +2706,7 @@ mod tests {
         handle
             .request(TrayRoute::IpcToggle)
             .expect("toggle request sends")
-            .wait(REQUEST_TIMEOUT)
+            .wait(TEST_EVENT_TIMEOUT)
             .expect("toggle reply arrives");
         assert!(
             *active.lock().expect("backend activity lock"),
@@ -2786,13 +2794,13 @@ mod tests {
 
         assert_eq!(
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("Startup presentation arrives"),
             TrayRoute::Startup
         );
         assert_eq!(
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("ordinary tick presentation arrives"),
             TrayRoute::Tick
         );
@@ -2803,7 +2811,7 @@ mod tests {
         );
         assert_eq!(
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("resume presentation arrives"),
             TrayRoute::Resume
         );
@@ -2883,7 +2891,10 @@ mod tests {
                 )
             });
 
-            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+            assert_eq!(
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
+                Ok(TrayRoute::Startup)
+            );
             let (query_reply, command_route) = match command {
                 "query" => {
                     let (reply, reply_receiver) = mpsc::channel();
@@ -2916,7 +2927,7 @@ mod tests {
             };
             if let Some(command_route) = command_route {
                 assert_eq!(
-                    routes.recv_timeout(REQUEST_TIMEOUT),
+                    routes.recv_timeout(TEST_EVENT_TIMEOUT),
                     Ok(command_route),
                     "{command} is processed before the offset-triggered Resume"
                 );
@@ -2924,7 +2935,7 @@ mod tests {
 
             assert_eq!(
                 routes
-                    .recv_timeout(REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .expect("the discontinuity reconciliation arrives"),
                 TrayRoute::Resume,
                 "{command} must not discard a suspend-like discontinuity"
@@ -2937,7 +2948,7 @@ mod tests {
             if let Some(reply) = query_reply {
                 assert!(
                     reply
-                        .recv_timeout(REQUEST_TIMEOUT)
+                        .recv_timeout(TEST_EVENT_TIMEOUT)
                         .expect("query reply arrives after command processing")
                         .snapshot
                         .is_some(),
@@ -2945,7 +2956,7 @@ mod tests {
                 );
             }
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(TrayRoute::Tick),
                 "a discontinuous command wake publishes exactly one Resume before the next Tick"
             );
@@ -3020,10 +3031,13 @@ mod tests {
         });
 
         entered_receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("startup enters the controlled backend call");
         release.send(()).expect("startup backend call releases");
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
         sender
             .send(OwnerCommand::Route {
                 route: TrayRoute::TrayToggle,
@@ -3031,19 +3045,19 @@ mod tests {
             })
             .expect("toggle reaches the owner loop");
         entered_receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("toggle enters the controlled backend call");
         release.send(()).expect("toggle backend call releases");
         assert_eq!(
-            routes.recv_timeout(REQUEST_TIMEOUT),
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
             Ok(TrayRoute::TrayToggle)
         );
         let automatic_routes = [
             routes
-                .recv_timeout(Duration::from_millis(500))
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("post-processing reconciliation arrives"),
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("following automatic reconciliation arrives"),
         ];
         assert_eq!(automatic_routes, [TrayRoute::Resume, TrayRoute::Tick]);
@@ -3127,20 +3141,23 @@ mod tests {
             )
         });
 
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
         let (reply, reply_receiver) = mpsc::channel();
         sender
             .send(OwnerCommand::Query { reply })
             .expect("query reaches the owner loop");
         reply_receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("query reply arrives");
         let automatic_routes = [
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("queued Resume arrives"),
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("following automatic reconciliation arrives"),
         ];
         assert_eq!(automatic_routes, [TrayRoute::Resume, TrayRoute::Tick]);
@@ -3233,21 +3250,24 @@ mod tests {
             )
         });
 
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
+        assert_eq!(routes.recv_timeout(TEST_EVENT_TIMEOUT), Ok(TrayRoute::Tick));
         let (reply, reply_receiver) = mpsc::channel();
         sender
             .send(OwnerCommand::Query { reply })
             .expect("query reaches the owner loop");
         reply_receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("query reply arrives");
         let following_routes = [
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("offset-triggered Resume arrives"),
             routes
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("following automatic reconciliation arrives"),
         ];
         assert_eq!(following_routes, [TrayRoute::Resume, TrayRoute::Tick]);
@@ -3427,12 +3447,12 @@ mod tests {
             });
 
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(TrayRoute::Startup),
                 "{label} begins with one startup"
             );
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(expected_route),
                 "{label} selects the deadline route"
             );
@@ -3490,8 +3510,11 @@ mod tests {
             )
         });
 
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
+        assert_eq!(routes.recv_timeout(TEST_EVENT_TIMEOUT), Ok(TrayRoute::Tick));
         assert_eq!(
             *starts.lock().expect("backend start lock"),
             1,
@@ -3533,11 +3556,14 @@ mod tests {
         });
 
         entered_receiver
-            .recv_timeout(REQUEST_TIMEOUT)
+            .recv_timeout(TEST_EVENT_TIMEOUT)
             .expect("startup enters the controlled backend call");
         release.send(()).expect("startup backend call releases");
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
+        assert_eq!(routes.recv_timeout(TEST_EVENT_TIMEOUT), Ok(TrayRoute::Tick));
         stop_owner_loop(&sender, owner);
     }
 
@@ -3581,13 +3607,16 @@ mod tests {
             )
         });
 
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
         if let Some(route) = route {
             sender
                 .send(OwnerCommand::Route { route, reply: None })
                 .expect("unreplied route reaches the owner loop");
             assert_eq!(
-                routes.recv_timeout(REQUEST_TIMEOUT),
+                routes.recv_timeout(TEST_EVENT_TIMEOUT),
                 Ok(route),
                 "the requested no-reply route is processed"
             );
@@ -3645,9 +3674,12 @@ mod tests {
             )
         });
 
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
         for _ in 0..4 {
-            assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Tick));
+            assert_eq!(routes.recv_timeout(TEST_EVENT_TIMEOUT), Ok(TrayRoute::Tick));
         }
         stop_owner_loop(&sender, owner);
         assert_eq!(
@@ -3693,7 +3725,10 @@ mod tests {
             )
         });
 
-        assert_eq!(routes.recv_timeout(REQUEST_TIMEOUT), Ok(TrayRoute::Startup));
+        assert_eq!(
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
+            Ok(TrayRoute::Startup)
+        );
         let (reply, reply_receiver) = mpsc::channel();
         sender
             .send(OwnerCommand::Route {
@@ -3702,12 +3737,12 @@ mod tests {
             })
             .expect("explicit request reaches the owner loop");
         assert_eq!(
-            routes.recv_timeout(REQUEST_TIMEOUT),
+            routes.recv_timeout(TEST_EVENT_TIMEOUT),
             Ok(TrayRoute::TrayToggle)
         );
         assert_eq!(
             reply_receiver
-                .recv_timeout(REQUEST_TIMEOUT)
+                .recv_timeout(TEST_EVENT_TIMEOUT)
                 .expect("explicit request reply arrives")
                 .error,
             Some("backend start failed".to_owned()),

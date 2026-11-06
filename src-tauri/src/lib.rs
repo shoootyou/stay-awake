@@ -3195,6 +3195,8 @@ mod native_wiring_contract_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
 
+    const TEST_EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
     struct SetupClock;
 
     impl schedule::Clock for SetupClock {
@@ -3269,7 +3271,7 @@ mod native_wiring_contract_tests {
             runtime
                 .query()
                 .expect("startup query sends")
-                .wait(owner::REQUEST_TIMEOUT)
+                .wait(TEST_EVENT_TIMEOUT)
                 .expect("startup query replies")
                 .snapshot
                 .expect("startup snapshot exists")
@@ -3302,7 +3304,7 @@ mod native_wiring_contract_tests {
                 );
                 runtime.shutdown(owner::SHUTDOWN_TIMEOUT)?;
                 release_receiver
-                    .recv_timeout(owner::REQUEST_TIMEOUT)
+                    .recv_timeout(TEST_EVENT_TIMEOUT)
                     .expect("active backend releases before setup returns");
                 Ok(())
             });
