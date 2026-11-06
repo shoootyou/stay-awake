@@ -102,7 +102,6 @@ async function loadConfig() {
     const modeValue = supportedModes.includes(cfg.mode) ? cfg.mode : "Manual";
     document.getElementById("app-mode").value = modeValue;
     updateModeDescription();
-    updateScheduleWifiAlert(modeValue);
     document.getElementById("autostart").checked = cfg.autostart;
     document.getElementById("language").value = cfg.language;
     document.getElementById("hotkey").textContent = formatHotkeyDisplay(cfg.global_hotkey);
@@ -132,6 +131,7 @@ async function loadConfig() {
 
     await checkAccessibility();
     await applyTranslations();
+    updateScheduleWifiAlert(modeValue);
   } catch (e) {
     console.error("Failed to load config:", e);
   }
