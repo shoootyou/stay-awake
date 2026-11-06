@@ -7,6 +7,7 @@
  *   - Rejects unknown workflows and jobs, including jobs with extra read scopes.
  *   - Allows only Release Please to call the release workflow and release only by workflow_call.
  *   - Confines signing secrets to release and public-environment access to signing or cask jobs.
+ *   - Runs Release Please only for pushes to main and forwards its release tag to callers.
  * @edge-cases
  *   - Rejects read-all and write-all permission shorthands.
  *   - Reports the workflow path and job for every missing table entry.
@@ -77,6 +78,13 @@ const assertWorkflowPermissions = (workflows) => {
     [...expectedTopLevelPermissions.keys()],
     "workflow file set",
   );
+  for (const expectedJob of expectedJobPermissions.keys()) {
+    const [workflowName, jobName] = expectedJob.split(":");
+    assert.ok(
+      Object.hasOwn(workflows.get(workflowName)?.jobs ?? {}, jobName),
+      `.github/workflows/${workflowName} has stale permission-table job ${jobName}`,
+    );
+  }
 
   for (const [name, workflow] of workflows) {
     const workflowPath = `.github/workflows/${name}`;
@@ -151,10 +159,13 @@ test("confines signing secrets and the public environment to release and cask jo
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
       const jobLabel = label(workflowName, jobName);
       assert.equal(
-        hasPublicEnvironment(job),
+        Object.hasOwn(job, "environment"),
         expectedPublicEnvironmentJobs.has(`${workflowName}:${jobName}`),
         `${jobLabel} public environment access`,
       );
+      if (expectedPublicEnvironmentJobs.has(`${workflowName}:${jobName}`)) {
+        assert.equal(hasPublicEnvironment(job), true, `${jobLabel} must use environment public`);
+      }
       if (workflowName !== "release.yml") {
         for (const signingName of signingNames) {
           assert.equal(
@@ -173,4 +184,22 @@ test("confines signing secrets and the public environment to release and cask jo
       }
     }
   }
+});
+
+test("runs release please only for main pushes and forwards its created release tag", () => {
+  const releasePlease = readWorkflows().get("release-please.yml");
+  const tagName = "${{ needs.release-please.outputs.tag_name }}";
+  const releaseCreated = "needs.release-please.outputs.release_created == 'true'";
+
+  assert.deepEqual(triggerNames(releasePlease), ["push"], "release-please.yml triggers");
+  assert.deepEqual(releasePlease.on.push, { branches: ["main"] }, "release-please.yml push trigger");
+  assert.equal(releasePlease.jobs.build.if, releaseCreated, "release build release-created guard");
+  assert.equal(releasePlease.jobs.build.with.tag_name, tagName, "release build tag source");
+  assert.deepEqual(
+    releasePlease.jobs.distribute.needs,
+    ["release-please", "build"],
+    "distribution dependencies",
+  );
+  assert.equal(releasePlease.jobs.distribute.if, releaseCreated, "distribution release-created guard");
+  assert.equal(releasePlease.jobs.distribute.with.tag_name, tagName, "distribution tag source");
 });
