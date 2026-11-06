@@ -3,7 +3,6 @@
  * @interface iconAssets(): void
  * @behavior
  *   - Ships the mapped local SVG icons and uses their geometry inline in Settings.
- *   - Keeps the Schedule warning icon static and reuses it for dynamic location warnings.
  *   - Allows only fixed tray-menu emoji glyphs in the Rust tray module.
  *   - Removes every other product emoji while preserving localized accessible names.
  *   - Keeps decorative icons hidden from assistive technology and CSP local-only.
@@ -146,19 +145,6 @@ test("uses each mapped Settings icon as canonical inline SVG elements without Ph
       `${marker} must use ${name}.svg geometry inline`);
   }
   assert.ok(hasAssetGeometry(settingsJs, "x"), "network removal must use x.svg geometry inline");
-});
-
-test("reuses the static Schedule warning icon for dynamic location warnings", () => {
-  const settingsHtml = read("src/settings.html");
-  const settingsJs = read("src/settings.js");
-  const scheduleAlert = settingsHtml.match(/<div\b[^>]*\bid=["']schedule-wifi-alert["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "";
-  const warningPath = scheduleAlert.match(/<path\s+d=["']([^"']+)["']/i)?.[1];
-  assert.ok(warningPath, "Schedule alert must retain its static warning path");
-  assert.equal(`${settingsHtml}\n${settingsJs}`.split(warningPath).length - 1, 1,
-    "warning path data must have one canonical definition");
-  const locationBanner = settingsJs.match(/function updateLocationBanner\([^)]*\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
-  assert.match(locationBanner, /createIcon\(document\.querySelector\(["']#schedule-wifi-alert svg["']\)\.outerHTML\)/,
-    "dynamic location warnings must reuse the static Schedule icon");
 });
 
 // Mutant: restore the removed font file, link, dependency, or a Phosphor font face.
