@@ -6,7 +6,7 @@
  *   - Requires CI and distribution jobs to inherit only their documented top-level grant.
  *   - Rejects unknown workflows and jobs, including jobs with extra read scopes.
  *   - Allows only Release Please to call the release workflow and release only by workflow_call.
- *   - Confines signing-secret references and the public environment to release paths.
+ *   - Confines signing secrets to release and public-environment access to signing or cask jobs.
  * @edge-cases
  *   - Rejects read-all and write-all permission shorthands.
  *   - Reports the workflow path and job for every missing table entry.
@@ -66,6 +66,11 @@ const triggerNames = (workflow) => {
 };
 const hasPublicEnvironment = (job) => job.environment === "public"
   || job.environment?.name === "public";
+const expectedPublicEnvironmentJobs = new Set([
+  "release.yml:build-macos",
+  "distribute.yml:update-homebrew",
+]);
+const allowedTapReferences = new Set(["github.token", "secrets.TAP_GITHUB_TOKEN"]);
 const assertWorkflowPermissions = (workflows) => {
   assert.deepEqual(
     [...workflows.keys()],
@@ -134,7 +139,7 @@ test("allows release builds only from the release-please reusable-workflow calle
   assert.deepEqual(callers, ["release-please.yml:build"], "release workflow callers");
 });
 
-test("confines signing secrets and the public environment to release workflows", () => {
+test("confines signing secrets and the public environment to release and cask jobs", () => {
   const workflows = readWorkflows();
   const release = workflows.get("release.yml");
   const signingNames = [...new Set(
@@ -143,15 +148,27 @@ test("confines signing secrets and the public environment to release workflows",
   assert.ok(signingNames.length > 0, "release workflow must name its signing secrets");
 
   for (const [workflowName, workflow] of workflows) {
-    if (["release.yml", "release-please.yml"].includes(workflowName)) continue;
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
       const jobLabel = label(workflowName, jobName);
-      assert.equal(hasPublicEnvironment(job), false, `${jobLabel} must not use environment public`);
-      for (const signingName of signingNames) {
-        assert.equal(
-          JSON.stringify(job).includes(signingName),
-          false,
-          `${jobLabel} must not reference ${signingName}`,
+      assert.equal(
+        hasPublicEnvironment(job),
+        expectedPublicEnvironmentJobs.has(`${workflowName}:${jobName}`),
+        `${jobLabel} public environment access`,
+      );
+      if (workflowName !== "release.yml") {
+        for (const signingName of signingNames) {
+          assert.equal(
+            JSON.stringify(job).includes(signingName),
+            false,
+            `${jobLabel} must not reference ${signingName}`,
+          );
+        }
+      }
+      if (workflowName === "distribute.yml" && jobName === "update-homebrew") {
+        const references = JSON.stringify(job).match(/(?:secrets\.[A-Z0-9_]+|github\.token)/g) ?? [];
+        assert.ok(
+          references.every((reference) => allowedTapReferences.has(reference)),
+          `${jobLabel} may use only its tap secret and github.token`,
         );
       }
     }
