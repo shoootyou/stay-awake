@@ -70,7 +70,7 @@ jobs:
             url "https://github.com/${REPO}/releases/download/v#{version}/Stay.Awake_#{version}_aarch64.dmg"
             name "Stay Awake"
             desc "Keep your computer awake and active"
-            homepage "https://github.com/${REPO}"
+            homepage "https://shoootyou.dev/projects/stay-awake/"
 
             app "Stay Awake.app"
 
