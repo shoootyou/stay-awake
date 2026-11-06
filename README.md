@@ -12,7 +12,7 @@ Stay Awake is a tray utility that prevents your computer from sleeping on macOS 
 
 <table>
   <tr>
-    <td align="center"><img src="assets/screenshot-tray-wifi.png" alt="Tray menu in WiFi mode" width="260"></td>
+    <td align="center"><img src="assets/screenshot-tray-wifi.png" alt="Tray menu in WiFi mode" width="402"></td>
     <td align="center"><img src="assets/screenshot-tray-schedule.png" alt="Tray menu waiting for a schedule" width="250"></td>
   </tr>
   <tr>
