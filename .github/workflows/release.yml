@@ -7,13 +7,6 @@ on:
         description: "Git tag to build (e.g. v0.5.0)"
         required: true
         type: string
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Git tag to build (e.g. v0.5.0)"
-        required: true
-        type: string
-
 concurrency:
   group: release-${{ inputs.tag_name }}
   cancel-in-progress: false

@@ -10,13 +10,14 @@ This guide covers local setup, checks, and contribution conventions.
 
 ### Linux system dependencies
 
-On Linux, run the same prerequisite installer used by CI and release builds from the repository root:
+On Ubuntu or Debian, install the Linux build dependencies:
 
 ```sh
-scripts/install-linux-dependencies.sh
+sudo apt-get update
+sudo apt-get install -y build-essential libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 ```
 
-The script uses `sudo` when it is not run as root.
+This package list comes from `scripts/install-linux-dependencies.sh`, used by CI and release builds.
 
 Runtime notes for Linux users/contributors testing the app:
 
